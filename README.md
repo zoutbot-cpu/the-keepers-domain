@@ -2,6 +2,8 @@
 
 Mobile dig-and-build dungeon management prototype — original IP, inspired by (but not derived from) Dungeon Keeper. See [Docs/project-brief.md](Docs/project-brief.md) for the full brief.
 
+**[Dev status & roadmap](https://zoutbot-cpu.github.io/the-keepers-domain/)** — what's done, in progress, and next.
+
 ## Phase 1 status
 
 The core loop is implemented and playable: **dig → claim → build → impling appears.**
