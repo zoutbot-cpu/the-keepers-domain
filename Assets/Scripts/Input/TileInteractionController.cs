@@ -3,6 +3,8 @@ using UnityEngine.InputSystem;
 using KeepersDomain.Grid;
 using KeepersDomain.Rooms;
 using KeepersDomain.Implings;
+using KeepersDomain.Monsters;
+using KeepersDomain.Creatures;
 using KeepersDomain.UI;
 
 namespace KeepersDomain.Input
@@ -28,6 +30,9 @@ namespace KeepersDomain.Input
         PlaceTreasury,
         PlaceSlimeHatchery,
         PlaceBaconBeacon,
+        PlaceTrainingRoom,
+        PlaceLibrary,
+        PlaceJail,
         SellLair,
         SpawnImpling,
         ToggleLairClaim
@@ -90,6 +95,9 @@ namespace KeepersDomain.Input
         private TreasuryManager _treasuryManager;
         private SlimeHatcheryManager _slimeHatcheryManager;
         private BaconBeaconManager _baconBeaconManager;
+        private TrainingRoomManager _trainingRoomManager;
+        private LibraryManager _libraryManager;
+        private JailManager _jailManager;
         private ImplingSpawner _implingSpawner;
 
         // Sits alongside the Shift-key check so a future UI toggle (touch
@@ -115,6 +123,12 @@ namespace KeepersDomain.Input
         private Vector2Int _hatcheryDragCurrentCoord;
         private bool _isPlacingBeacon;
         private Vector2Int _beaconDragCurrentCoord;
+        private bool _isPlacingTrainingRoom;
+        private Vector2Int _trainingRoomDragCurrentCoord;
+        private bool _isPlacingLibrary;
+        private Vector2Int _libraryDragCurrentCoord;
+        private bool _isPlacingJail;
+        private Vector2Int _jailDragCurrentCoord;
         private PlacementAction _pendingPlacementAction;
 
         /// While a Lair placement is being dragged out, the rectangle so far
@@ -140,11 +154,26 @@ namespace KeepersDomain.Input
         public Vector2Int BeaconDragStartCoord => _dragStartCoord;
         public Vector2Int BeaconDragCurrentCoord => _beaconDragCurrentCoord;
 
+        /// Same idea again, for a Training Room placement in progress.
+        public bool IsPlacingTrainingRoom => _isPlacingTrainingRoom;
+        public Vector2Int TrainingRoomDragStartCoord => _dragStartCoord;
+        public Vector2Int TrainingRoomDragCurrentCoord => _trainingRoomDragCurrentCoord;
+
+        /// Same idea again, for a Library placement in progress.
+        public bool IsPlacingLibrary => _isPlacingLibrary;
+        public Vector2Int LibraryDragStartCoord => _dragStartCoord;
+        public Vector2Int LibraryDragCurrentCoord => _libraryDragCurrentCoord;
+
+        /// Same idea again, for a Jail placement in progress.
+        public bool IsPlacingJail => _isPlacingJail;
+        public Vector2Int JailDragStartCoord => _dragStartCoord;
+        public Vector2Int JailDragCurrentCoord => _jailDragCurrentCoord;
+
         public PlacementAction PendingPlacementAction => _pendingPlacementAction;
         public BuildMode BuildMode => _buildMode;
         public string InspectedDescription => _inspectedDescription;
 
-        public void Initialize(Camera camera, DungeonGrid grid, BuilderJobBoard jobBoard, LairManager lairManager, TreasuryManager treasuryManager, SlimeHatcheryManager slimeHatcheryManager, BaconBeaconManager baconBeaconManager, ImplingSpawner implingSpawner)
+        public void Initialize(Camera camera, DungeonGrid grid, BuilderJobBoard jobBoard, LairManager lairManager, TreasuryManager treasuryManager, SlimeHatcheryManager slimeHatcheryManager, BaconBeaconManager baconBeaconManager, TrainingRoomManager trainingRoomManager, LibraryManager libraryManager, JailManager jailManager, ImplingSpawner implingSpawner)
         {
             _camera = camera;
             _grid = grid;
@@ -153,6 +182,9 @@ namespace KeepersDomain.Input
             _treasuryManager = treasuryManager;
             _slimeHatcheryManager = slimeHatcheryManager;
             _baconBeaconManager = baconBeaconManager;
+            _trainingRoomManager = trainingRoomManager;
+            _libraryManager = libraryManager;
+            _jailManager = jailManager;
             _implingSpawner = implingSpawner;
         }
 
@@ -283,6 +315,30 @@ namespace KeepersDomain.Input
                 return;
             }
 
+            if (_pendingPlacementAction == PlacementAction.PlaceTrainingRoom)
+            {
+                _isPlacingTrainingRoom = true;
+                _trainingRoomDragCurrentCoord = coord;
+                _trainingRoomManager?.UpdatePlacementPreview(coord, coord);
+                return;
+            }
+
+            if (_pendingPlacementAction == PlacementAction.PlaceLibrary)
+            {
+                _isPlacingLibrary = true;
+                _libraryDragCurrentCoord = coord;
+                _libraryManager?.UpdatePlacementPreview(coord, coord);
+                return;
+            }
+
+            if (_pendingPlacementAction == PlacementAction.PlaceJail)
+            {
+                _isPlacingJail = true;
+                _jailDragCurrentCoord = coord;
+                _jailManager?.UpdatePlacementPreview(coord, coord);
+                return;
+            }
+
             if (_pendingPlacementAction == PlacementAction.SellLair)
             {
                 // Draggable like Mine/Reinforce/Construct queuing — sells
@@ -362,6 +418,36 @@ namespace KeepersDomain.Input
                 return;
             }
 
+            if (_isPlacingTrainingRoom)
+            {
+                if (TryGetCoordUnderScreenPos(screenPos, out var trainingRoomCoord) && trainingRoomCoord != _trainingRoomDragCurrentCoord)
+                {
+                    _trainingRoomDragCurrentCoord = trainingRoomCoord;
+                    _trainingRoomManager?.UpdatePlacementPreview(_dragStartCoord, _trainingRoomDragCurrentCoord);
+                }
+                return;
+            }
+
+            if (_isPlacingLibrary)
+            {
+                if (TryGetCoordUnderScreenPos(screenPos, out var libraryCoord) && libraryCoord != _libraryDragCurrentCoord)
+                {
+                    _libraryDragCurrentCoord = libraryCoord;
+                    _libraryManager?.UpdatePlacementPreview(_dragStartCoord, _libraryDragCurrentCoord);
+                }
+                return;
+            }
+
+            if (_isPlacingJail)
+            {
+                if (TryGetCoordUnderScreenPos(screenPos, out var jailCoord) && jailCoord != _jailDragCurrentCoord)
+                {
+                    _jailDragCurrentCoord = jailCoord;
+                    _jailManager?.UpdatePlacementPreview(_dragStartCoord, _jailDragCurrentCoord);
+                }
+                return;
+            }
+
             if (_gestureMode == GestureMode.None || !TryGetCoordUnderScreenPos(screenPos, out var currentCoord))
             {
                 return;
@@ -426,6 +512,42 @@ namespace KeepersDomain.Input
                     _baconBeaconManager?.TryPlaceBeacon(_dragStartCoord, endCoord);
                 }
                 _baconBeaconManager?.ClearPlacementPreview();
+                return;
+            }
+
+            if (_isPlacingTrainingRoom)
+            {
+                _isPlacingTrainingRoom = false;
+                _pendingPlacementAction = PlacementAction.None;
+                if (TryGetCoordUnderScreenPos(screenPos, out var endCoord))
+                {
+                    _trainingRoomManager?.TryPlaceTrainingRoom(_dragStartCoord, endCoord);
+                }
+                _trainingRoomManager?.ClearPlacementPreview();
+                return;
+            }
+
+            if (_isPlacingLibrary)
+            {
+                _isPlacingLibrary = false;
+                _pendingPlacementAction = PlacementAction.None;
+                if (TryGetCoordUnderScreenPos(screenPos, out var endCoord))
+                {
+                    _libraryManager?.TryPlaceLibrary(_dragStartCoord, endCoord);
+                }
+                _libraryManager?.ClearPlacementPreview();
+                return;
+            }
+
+            if (_isPlacingJail)
+            {
+                _isPlacingJail = false;
+                _pendingPlacementAction = PlacementAction.None;
+                if (TryGetCoordUnderScreenPos(screenPos, out var endCoord))
+                {
+                    _jailManager?.TryPlaceJail(_dragStartCoord, endCoord);
+                }
+                _jailManager?.ClearPlacementPreview();
                 return;
             }
 
@@ -502,7 +624,27 @@ namespace KeepersDomain.Input
             {
                 if (_grid.WorldToGrid(impling.Position) == coord)
                 {
-                    _inspectedDescription = $"Impling #{impling.Id}\nState: {impling.State}\nPosition: ({coord.x},{coord.y})";
+                    _inspectedDescription = $"{impling.Name}\n{impling.State} — Position: ({coord.x},{coord.y})\n"
+                        + $"{impling.Creature.DescribeStats()}\n"
+                        + $"Carrying — Gold: {impling.Inventory.Gold}  Mana Crystals: {impling.Inventory.ManaCrystals}  Slimes: {impling.Inventory.Slimes}";
+                    return;
+                }
+            }
+
+            foreach (var gremlin in GremlinAgent.All)
+            {
+                if (_grid.WorldToGrid(gremlin.Position) == coord)
+                {
+                    _inspectedDescription = DescribeMonster(gremlin.Name, gremlin.Task.ToString(), coord, gremlin.Creature, gremlin.Hunger, gremlin.Pay, gremlin.Happiness);
+                    return;
+                }
+            }
+
+            foreach (var warlock in WarlockAgent.All)
+            {
+                if (_grid.WorldToGrid(warlock.Position) == coord)
+                {
+                    _inspectedDescription = DescribeMonster(warlock.Name, warlock.Task.ToString(), coord, warlock.Creature, warlock.Hunger, warlock.Pay, warlock.Happiness);
                     return;
                 }
             }
@@ -520,6 +662,21 @@ namespace KeepersDomain.Input
                 var queued = tile.IsQueuedForBuild ? " (queued: construct wall)" : "";
                 _inspectedDescription = $"Floor ({coord.x},{coord.y}){queued}\nOwnership: {tile.Ownership}{room}";
             }
+        }
+
+        /// Shared by Gremlin/Warlock inspection — both expose the same
+        /// shape (Creature/Hunger/Pay/Happiness) despite not sharing a base
+        /// class, so this just takes them as separate arguments rather than
+        /// duplicating the formatting per creature type.
+        private static string DescribeMonster(string name, string task, Vector2Int coord, Creature creature, Hunger hunger, Pay pay, Happiness happiness)
+        {
+            var hungryTag = hunger.IsHungry ? " (hungry)" : "";
+            var unpaidTag = pay.IsUnhappy ? " (unpaid!)" : "";
+            return $"{name}\n{task} — Position: ({coord.x},{coord.y})\n"
+                + $"{creature.DescribeStats()}\n"
+                + $"Hunger: {hunger.Value:0}{hungryTag}\n"
+                + $"Wage: {Pay.WageFor(creature.Level)}g/10min{unpaidTag}\n"
+                + $"Happiness: {happiness.Value:0} ({happiness.Tier})";
         }
 
         private void ApplyLineSelectionStep(Vector2Int coord)

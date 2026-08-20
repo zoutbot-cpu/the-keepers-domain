@@ -103,7 +103,12 @@ namespace KeepersDomain.Rooms
         private TreasuryManager _treasuryManager;
         private int _nextRoomId;
         private readonly Dictionary<string, List<Vector2Int>> _roomTiles = new Dictionary<string, List<Vector2Int>>();
-        private readonly HashSet<string> _claimedRooms = new HashSet<string>();
+
+        /// Claims are per-tile, not per-room — a multi-tile Lair (e.g. a
+        /// 4x4) can house up to one creature per tile, each independently
+        /// claiming/releasing its own square, rather than one creature
+        /// claiming the whole room at once.
+        private readonly HashSet<Vector2Int> _claimedTiles = new HashSet<Vector2Int>();
         private readonly Dictionary<Vector2Int, GameObject> _tileVisuals = new Dictionary<Vector2Int, GameObject>();
         private readonly List<GameObject> _previewMarkers = new List<GameObject>();
         private TextMesh _sellPreviewLabel;
@@ -132,13 +137,27 @@ namespace KeepersDomain.Rooms
         /// nothing is placed/charged.
         public bool TryPlaceLair(Vector2Int startCoord, Vector2Int endCoord)
         {
+            return TryPlaceLairInternal(startCoord, endCoord, chargeGold: true);
+        }
+
+        /// Places a Lair exactly like TryPlaceLair but without charging
+        /// gold — for terrain generation (see GameBootstrap's starting
+        /// domain layout), not a player purchase, same as
+        /// TreasuryManager.PlaceStartingTreasury.
+        public bool PlaceStartingLair(Vector2Int startCoord, Vector2Int endCoord)
+        {
+            return TryPlaceLairInternal(startCoord, endCoord, chargeGold: false);
+        }
+
+        private bool TryPlaceLairInternal(Vector2Int startCoord, Vector2Int endCoord, bool chargeGold)
+        {
             var footprint = GetFootprint(startCoord, endCoord);
             if (!CanPlaceFootprint(footprint))
             {
                 return false;
             }
 
-            if (_treasuryManager != null && !_treasuryManager.TrySpendGold(footprint.Count * CostPerTile))
+            if (chargeGold && _treasuryManager != null && !_treasuryManager.TrySpendGold(footprint.Count * CostPerTile))
             {
                 return false;
             }
@@ -162,7 +181,13 @@ namespace KeepersDomain.Rooms
 
         /// Removes whatever room owns coord (a no-op if there isn't one).
         /// Only clears the RoomId marker on its tiles — the tiles stay
-        /// Claimed Floor, ready to build something else on.
+        /// Claimed Floor, ready to build something else on. Refunds gold
+        /// for the sold tiles at that room type's own CostPerTile (see
+        /// GetCostPerTileForRoomId) back into the Treasury — the same
+        /// generic Sell tool every room type shares (see
+        /// TileInteractionController's GestureMode.Sell), so the refund
+        /// lives here rather than duplicated in each room manager's own
+        /// OnRoomSold.
         public bool TrySellRoom(Vector2Int coord)
         {
             if (!_grid.InBounds(coord))
@@ -177,70 +202,162 @@ namespace KeepersDomain.Rooms
             }
 
             var roomId = tile.RoomId;
-            _grid.RemoveRoomTiles(roomId);
+            var clearedTileCount = _grid.RemoveRoomTiles(roomId);
 
             if (_roomTiles.TryGetValue(roomId, out var tiles))
             {
                 foreach (var t in tiles)
                 {
                     ClearTileVisual(t);
+                    _claimedTiles.Remove(t);
                 }
                 _roomTiles.Remove(roomId);
             }
-            _claimedRooms.Remove(roomId);
+
+            if (_treasuryManager != null)
+            {
+                _treasuryManager.AddGold(clearedTileCount * GetCostPerTileForRoomId(roomId));
+            }
 
             RoomSold?.Invoke(roomId);
             return true;
         }
 
-        public bool IsLairClaimed(string roomId)
+        /// Which CostPerTile a sold room refunds at — determined by roomId's
+        /// prefix, the same "{TypeName}_{index}" naming convention every
+        /// room manager already uses to recognize its own rooms in
+        /// RoomSold (see e.g. TreasuryManager.OnRoomSold's own comment).
+        /// Falls back to 0 for an unrecognized prefix rather than guessing,
+        /// so an unknown/future room type just refunds nothing until it's
+        /// added here.
+        private int GetCostPerTileForRoomId(string roomId)
         {
-            return _claimedRooms.Contains(roomId);
+            if (roomId.StartsWith("Lair_")) return CostPerTile;
+            if (roomId.StartsWith("Treasury_")) return TreasuryManager.CostPerTile;
+            if (roomId.StartsWith("SlimeHatchery_")) return SlimeHatcheryManager.CostPerTile;
+            if (roomId.StartsWith("BaconBeacon_")) return BaconBeaconManager.CostPerTile;
+            if (roomId.StartsWith("TrainingRoom_")) return TrainingRoomManager.CostPerTile;
+            if (roomId.StartsWith("Library_")) return LibraryManager.CostPerTile;
+            if (roomId.StartsWith("Jail_")) return JailManager.CostPerTile;
+            return 0;
         }
 
-        /// Marks the Lair at roomId as occupied by a resting monster and
-        /// swaps its tiles to the claimed "nest" visual. Fails if roomId
-        /// doesn't exist or is already claimed.
-        public bool TryClaimLair(string roomId)
+        public bool IsLairTileClaimed(Vector2Int coord)
         {
-            if (!_roomTiles.TryGetValue(roomId, out var tiles) || _claimedRooms.Contains(roomId))
-            {
-                return false;
-            }
-
-            _claimedRooms.Add(roomId);
-            foreach (var coord in tiles)
-            {
-                BuildClaimedVisual(coord);
-            }
-            return true;
+            return _claimedTiles.Contains(coord);
         }
 
-        /// Reverses TryClaimLair — e.g. once whatever had claimed the Lair
-        /// dies or moves on. Swaps its tiles back to the unclaimed visual.
-        public bool ReleaseLair(string roomId)
+        /// Total tile count across every placed Lair, claimed or not — read
+        /// by WarlockSpawner as one of a Warlock's join requirements ("at
+        /// least one lair tile"), same TotalTileCount convention
+        /// SlimeHatcheryManager/TrainingRoomManager/LibraryManager use.
+        /// Deliberately not filtered to unclaimed Lairs the way
+        /// HasUnclaimedLair is — see WarlockSpawner.MeetsJoinRequirements.
+        public int TotalTileCount
         {
-            if (!_claimedRooms.Remove(roomId))
+            get
             {
-                return false;
+                var total = 0;
+                foreach (var tiles in _roomTiles.Values)
+                {
+                    total += tiles.Count;
+                }
+                return total;
             }
+        }
 
-            if (_roomTiles.TryGetValue(roomId, out var tiles))
+        /// Whether at least one Lair tile (across every placed Lair) is
+        /// currently unclaimed — read by GremlinSpawner as one of a
+        /// Gremlin's join requirements ("1 free lair spot").
+        public bool HasUnclaimedLair()
+        {
+            foreach (var tiles in _roomTiles.Values)
             {
                 foreach (var coord in tiles)
                 {
-                    BuildUnclaimedVisual(coord);
+                    if (!_claimedTiles.Contains(coord))
+                    {
+                        return true;
+                    }
                 }
             }
+
+            return false;
+        }
+
+        /// Nearest (by walking distance) unclaimed Lair tile, reachable
+        /// from fromCoord — GremlinAgent/WarlockAgent check this first (see
+        /// their own TryBeginPursueLair) so a creature claims an existing
+        /// free tile — e.g. one of the starting Lair's from GameBootstrap —
+        /// instead of always building a brand-new Lair.
+        public bool TryFindNearestUnclaimedLairTile(Vector2Int fromCoord, out Vector2Int targetCoord)
+        {
+            var distances = _grid.GetReachableFloorDistances(fromCoord);
+            var bestDistance = int.MaxValue;
+            targetCoord = default;
+            var found = false;
+
+            foreach (var tiles in _roomTiles.Values)
+            {
+                foreach (var coord in tiles)
+                {
+                    if (_claimedTiles.Contains(coord))
+                    {
+                        continue;
+                    }
+
+                    if (distances.TryGetValue(coord, out var distance) && distance < bestDistance)
+                    {
+                        bestDistance = distance;
+                        targetCoord = coord;
+                        found = true;
+                    }
+                }
+            }
+
+            return found;
+        }
+
+        /// Claims a single Lair tile as occupied by a resting monster and
+        /// swaps it to the claimed "nest" visual. Fails if coord isn't part
+        /// of a Lair or is already claimed.
+        public bool TryClaimLairTile(Vector2Int coord)
+        {
+            if (!_grid.InBounds(coord))
+            {
+                return false;
+            }
+
+            var tile = _grid.GetTile(coord);
+            if (!tile.HasRoom || !_roomTiles.ContainsKey(tile.RoomId) || _claimedTiles.Contains(coord))
+            {
+                return false;
+            }
+
+            _claimedTiles.Add(coord);
+            BuildClaimedVisual(coord);
             return true;
         }
 
-        /// Manual stand-in for a monster claiming/vacating its Lair — no
-        /// monster system exists yet to drive TryClaimLair/ReleaseLair for
-        /// real, so this lets the claimed "nest" visual actually be placed
-        /// and checked (see BottomMenuBar's Toggle Claim button) in the
-        /// meantime. Toggles whichever room owns coord; a no-op if coord
-        /// isn't part of a Lair.
+        /// Reverses TryClaimLairTile for a single tile — e.g. once whatever
+        /// had claimed it dies or moves on. Swaps it back to the unclaimed
+        /// visual.
+        public bool ReleaseLairTile(Vector2Int coord)
+        {
+            if (!_claimedTiles.Remove(coord))
+            {
+                return false;
+            }
+
+            BuildUnclaimedVisual(coord);
+            return true;
+        }
+
+        /// Manual stand-in for a monster claiming/vacating a Lair tile —
+        /// mainly useful for debug/testing (see BottomMenuBar's Toggle
+        /// Claim button) since GremlinAgent/WarlockAgent drive
+        /// TryClaimLairTile themselves now. A no-op if coord isn't part of
+        /// a Lair.
         public bool ToggleLairClaim(Vector2Int coord)
         {
             if (!_grid.InBounds(coord))
@@ -254,7 +371,7 @@ namespace KeepersDomain.Rooms
                 return false;
             }
 
-            return IsLairClaimed(tile.RoomId) ? ReleaseLair(tile.RoomId) : TryClaimLair(tile.RoomId);
+            return IsLairTileClaimed(coord) ? ReleaseLairTile(coord) : TryClaimLairTile(coord);
         }
 
         /// Redraws the drag-in-progress ghost footprint between startCoord

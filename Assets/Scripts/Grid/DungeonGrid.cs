@@ -189,7 +189,45 @@ namespace KeepersDomain.Grid
 
         public bool IsWalkable(Vector2Int coord)
         {
-            return InBounds(coord) && GetTile(coord).Type == TileType.Floor;
+            return InBounds(coord) && GetTile(coord) is { Type: TileType.Floor, IsBlocked: false };
+        }
+
+        /// Marks a Floor tile as off-limits to pathfinding without changing
+        /// its type/ownership — used by ChaosCore to keep its center tile
+        /// (the raised orb pedestal) out of reach for implings while it
+        /// stays ordinary Claimed Floor for room-placement purposes.
+        public void SetBlocked(Vector2Int coord, bool isBlocked)
+        {
+            if (!InBounds(coord))
+            {
+                return;
+            }
+
+            _tiles[coord.x, coord.y].IsBlocked = isBlocked;
+        }
+
+        /// Sinks (or restores) a Floor tile's visual by `depth` world units
+        /// below the ordinary FloorSurfaceY — a render-time offset only
+        /// (see RefreshVisual); IsWalkable/CanBuildRoomOn/pathfinding never
+        /// look at this, so a sunk tile is exactly as walkable as any
+        /// other Floor tile. Used by JailManager to render its pit one
+        /// full level below the surrounding ground (depth = 1), and to
+        /// restore ordinary floor (depth = 0) once a Jail is sold.
+        public void SetPitDepth(Vector2Int coord, float depth)
+        {
+            if (!InBounds(coord))
+            {
+                return;
+            }
+
+            ref var tile = ref _tiles[coord.x, coord.y];
+            if (Mathf.Approximately(tile.PitDepth, depth))
+            {
+                return;
+            }
+
+            tile.PitDepth = depth;
+            RefreshVisual(coord);
         }
 
         public bool IsBuildable(Vector2Int coord)
@@ -469,9 +507,12 @@ namespace KeepersDomain.Grid
         /// placed room. Scans the whole grid rather than tracking footprints
         /// separately, which is fine at prototype scale and stays correct
         /// even if a future room type's footprint is bigger than the
-        /// current 1x1 Lair.
-        public void RemoveRoomTiles(string roomId)
+        /// current 1x1 Lair. Returns how many tiles it actually cleared, so
+        /// the caller (LairManager.TrySellRoom) can refund gold per tile
+        /// without needing its own separate footprint count.
+        public int RemoveRoomTiles(string roomId)
         {
+            var clearedCount = 0;
             for (int x = 0; x < _width; x++)
             {
                 for (int y = 0; y < _height; y++)
@@ -480,9 +521,12 @@ namespace KeepersDomain.Grid
                     {
                         _tiles[x, y].RoomId = null;
                         RefreshVisual(new Vector2Int(x, y));
+                        clearedCount++;
                     }
                 }
             }
+
+            return clearedCount;
         }
 
         /// Deals dig damage to a Rock tile. Returns true once the job is done —
@@ -549,6 +593,39 @@ namespace KeepersDomain.Grid
             }
         }
 
+        /// Deals damage to a room tile's HP (see TileState.RoomMaxHp) — e.g.
+        /// a hostile Gremlin/Warlock attack (see GremlinAgent/WarlockAgent).
+        /// Returns true once that tile's HP is fully depleted. This only
+        /// tracks the HP — it deliberately doesn't remove anything itself,
+        /// since actually tearing down a room correctly (cleaning up every
+        /// manager's own tile list/visuals/structures) only works through
+        /// LairManager.TrySellRoom; the caller is expected to call that once
+        /// this returns true. There's no per-tile removal — depleting one
+        /// tile's HP is a signal to destroy the whole room, not just that
+        /// tile (see design-doc.md's Happiness section for why).
+        public bool ApplyRoomDamage(Vector2Int coord, int amount)
+        {
+            if (!InBounds(coord))
+            {
+                return true;
+            }
+
+            ref var tile = ref _tiles[coord.x, coord.y];
+            if (!tile.HasRoom)
+            {
+                return true;
+            }
+
+            tile.Hp -= amount;
+            if (tile.Hp <= 0)
+            {
+                return true;
+            }
+
+            RefreshVisual(coord);
+            return false;
+        }
+
         public void CompleteDig(Vector2Int coord)
         {
             if (!InBounds(coord))
@@ -600,6 +677,7 @@ namespace KeepersDomain.Grid
             }
 
             tile.RoomId = roomId;
+            tile.Hp = TileState.RoomMaxHp;
             RefreshVisual(coord);
             return true;
         }
@@ -684,7 +762,7 @@ namespace KeepersDomain.Grid
                 color = tile.Ownership == TileOwnership.Claimed ? _floorClaimedColor : _floorUnclaimedColor;
             }
 
-            visual.transform.localPosition = GridToWorld(coord) + Vector3.down * (tile.Type == TileType.Rock ? 0f : 0.5f);
+            visual.transform.localPosition = GridToWorld(coord) + Vector3.down * (tile.Type == TileType.Rock ? 0f : (0.5f + tile.PitDepth));
             visual.transform.localScale = new Vector3(_cellSize * 0.95f, tile.Type == TileType.Rock ? 1f : 0.15f, _cellSize * 0.95f);
             visual.GetComponent<Renderer>().material.color = color;
 

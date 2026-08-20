@@ -57,6 +57,12 @@ namespace KeepersDomain.Grid
         public const int RegeneratingGoldWallRegenPerHit = 15;
         public const int ManaCrystalWallMaxHp = 100;
 
+        /// HP a Floor tile gets once a room (Lair, Treasury, ...) is
+        /// placed on it — see DungeonGrid.TryAssignRoom. For now this is
+        /// tracked data only: nothing damages it and no UI shows it, ahead
+        /// of a future room-durability mechanic.
+        public const int RoomMaxHp = 50;
+
         /// Resource yield per point of HP a hit actually removes — "drop
         /// default of 1 [resource] per hp lost" for every resource wall
         /// type. A single named constant since all three currently agree,
@@ -75,6 +81,13 @@ namespace KeepersDomain.Grid
         public string RoomId;
         public int Hp;
 
+        /// Floor that's otherwise ordinary but explicitly off-limits to
+        /// pathfinding — e.g. the Chaos Core's center tile, which stays
+        /// Floor/Claimed for room purposes but sits under the raised orb
+        /// pedestal, not something an impling should walk onto. See
+        /// DungeonGrid.IsWalkable/SetBlocked.
+        public bool IsBlocked;
+
         // Meaningless for Rock — only matters once a tile is Floor. Normal
         // dug-out floor defaults to true (see DungeonGrid.CompleteDig);
         // fixed feature rooms (Chaos Core, Portal room, Treasury, the
@@ -85,16 +98,32 @@ namespace KeepersDomain.Grid
         // own distinct visual.
         public bool IsBuildable;
 
+        /// Extra downward Y offset (world units) applied to this tile's
+        /// floor visual at render time — 0 for ordinary flush floor.
+        /// Purely cosmetic (see DungeonGrid.RefreshVisual/SetPitDepth):
+        /// IsWalkable/CanBuildRoomOn/pathfinding never look at this, so a
+        /// sunk tile is exactly as walkable as any other Floor tile.
+        /// JailManager uses this to sink its pit one full level below the
+        /// surrounding ground.
+        public float PitDepth;
+
         public bool HasRoom => !string.IsNullOrEmpty(RoomId);
 
         /// A reinforced Rock tile takes twice the hits to dig through; a
         /// resource wall has its own fixed max HP regardless of
         /// reinforcement (the two are mutually exclusive anyway — see
-        /// RequestReinforce). Meaningless once the tile is Floor.
+        /// RequestReinforce). Meaningless once the tile is Floor, unless a
+        /// room's been placed on it (HasRoom), which has its own fixed
+        /// RoomMaxHp independent of the Rock-wall cases below.
         public int MaxHp
         {
             get
             {
+                if (HasRoom)
+                {
+                    return RoomMaxHp;
+                }
+
                 switch (WallResourceType)
                 {
                     case WallResourceType.GoldWall:

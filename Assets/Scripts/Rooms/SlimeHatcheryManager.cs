@@ -84,6 +84,22 @@ namespace KeepersDomain.Rooms
             lairManager.RoomSold += OnRoomSold;
         }
 
+        /// Total tile count across every placed Slime Hatchery — read by
+        /// GremlinSpawner as one of a Gremlin's join requirements ("fewer
+        /// non-Imp creatures than Hatchery tiles").
+        public int TotalTileCount
+        {
+            get
+            {
+                var total = 0;
+                foreach (var tiles in _roomTiles.Values)
+                {
+                    total += tiles.Count;
+                }
+                return total;
+            }
+        }
+
         private void Update()
         {
             if (_roomTiles.Count == 0)
@@ -141,21 +157,62 @@ namespace KeepersDomain.Rooms
         /// Treasury which have no stated minimum.
         public bool TryPlaceHatchery(Vector2Int startCoord, Vector2Int endCoord)
         {
-            var footprint = GetFootprint(startCoord, endCoord, out var width, out var height, out var origin);
-            if (width < MinFootprintSize || height < MinFootprintSize || !CanPlaceFootprint(footprint))
+            return TryPlaceHatcheryInternal(startCoord, endCoord, chargeGold: true);
+        }
+
+        /// Places a Slime Hatchery exactly like TryPlaceHatchery but
+        /// without charging gold — for terrain generation (see
+        /// GameBootstrap's starting domain layout), not a player purchase,
+        /// same as TreasuryManager.PlaceStartingTreasury.
+        public bool PlaceStartingHatchery(Vector2Int startCoord, Vector2Int endCoord)
+        {
+            return TryPlaceHatcheryInternal(startCoord, endCoord, chargeGold: false);
+        }
+
+        private bool TryPlaceHatcheryInternal(Vector2Int startCoord, Vector2Int endCoord, bool chargeGold)
+        {
+            var footprint = GetFootprint(startCoord, endCoord, out var newWidth, out var newHeight, out var newOrigin);
+            if (newWidth < MinFootprintSize || newHeight < MinFootprintSize || !CanPlaceFootprint(footprint))
             {
                 return false;
             }
 
-            if (_treasuryManager != null && !_treasuryManager.TrySpendGold(footprint.Count * CostPerTile))
+            if (chargeGold && _treasuryManager != null && !_treasuryManager.TrySpendGold(footprint.Count * CostPerTile))
             {
                 return false;
             }
 
-            var roomId = $"SlimeHatchery_{_nextRoomId++}";
-            _roomTiles[roomId] = footprint;
-            _liveSlimes[roomId] = new List<SlimeAgent>();
-            _breedTimers[roomId] = 0f;
+            string roomId;
+            var origin = newOrigin;
+            var width = newWidth;
+            var height = newHeight;
+
+            // Extends an existing Slime Hatchery instead of starting a
+            // separate one if footprint exactly completes a rectangle
+            // together with it — see TryFindMergeableRoom. Live
+            // slimes/breed timer carry over untouched (still keyed by the
+            // same roomId, and _roomTiles[roomId] is the same List instance
+            // every live SlimeAgent already holds a reference to — growing
+            // it in place immediately widens their wander bounds too); only
+            // the coop and fence, which depend on the room's overall shape,
+            // are torn down and rebuilt below.
+            if (TryFindMergeableRoom(footprint, out var existingRoomId, out var mergedOrigin, out var mergedWidth, out var mergedHeight))
+            {
+                roomId = existingRoomId;
+                origin = mergedOrigin;
+                width = mergedWidth;
+                height = mergedHeight;
+                _roomTiles[roomId].AddRange(footprint);
+                ClearStructure(roomId);
+                ClearFence(roomId);
+            }
+            else
+            {
+                roomId = $"SlimeHatchery_{_nextRoomId++}";
+                _roomTiles[roomId] = footprint;
+                _liveSlimes[roomId] = new List<SlimeAgent>();
+                _breedTimers[roomId] = 0f;
+            }
 
             foreach (var coord in footprint)
             {
@@ -167,9 +224,94 @@ namespace KeepersDomain.Rooms
             _structureCoords[roomId] = structureCoord;
             _structureRoomByCoord[structureCoord] = roomId;
             _structureVisuals[structureCoord] = BuildCoopVisual(structureCoord);
-            _fenceVisuals[roomId] = BuildFenceVisual(footprint);
+            _fenceVisuals[roomId] = BuildFenceVisual(_roomTiles[roomId]);
 
             return true;
+        }
+
+        /// Whether footprint, combined with some single already-placed room
+        /// of this type, would exactly fill a rectangle — i.e. footprint
+        /// extends an existing room rather than starting a fresh one. Only
+        /// ever merges with one existing room at a time; if footprint
+        /// doesn't cleanly complete a rectangle with any single existing
+        /// room (including the common case of not being adjacent to one at
+        /// all), this returns false and the caller places footprint as its
+        /// own new room instead.
+        private bool TryFindMergeableRoom(List<Vector2Int> footprint, out string roomId, out Vector2Int mergedOrigin, out int mergedWidth, out int mergedHeight)
+        {
+            foreach (var entry in _roomTiles)
+            {
+                var minX = int.MaxValue;
+                var maxX = int.MinValue;
+                var minY = int.MaxValue;
+                var maxY = int.MinValue;
+
+                foreach (var coord in entry.Value)
+                {
+                    minX = Mathf.Min(minX, coord.x);
+                    maxX = Mathf.Max(maxX, coord.x);
+                    minY = Mathf.Min(minY, coord.y);
+                    maxY = Mathf.Max(maxY, coord.y);
+                }
+
+                foreach (var coord in footprint)
+                {
+                    minX = Mathf.Min(minX, coord.x);
+                    maxX = Mathf.Max(maxX, coord.x);
+                    minY = Mathf.Min(minY, coord.y);
+                    maxY = Mathf.Max(maxY, coord.y);
+                }
+
+                var width = maxX - minX + 1;
+                var height = maxY - minY + 1;
+
+                if (width * height == entry.Value.Count + footprint.Count)
+                {
+                    roomId = entry.Key;
+                    mergedOrigin = new Vector2Int(minX, minY);
+                    mergedWidth = width;
+                    mergedHeight = height;
+                    return true;
+                }
+            }
+
+            roomId = null;
+            mergedOrigin = default;
+            mergedWidth = 0;
+            mergedHeight = 0;
+            return false;
+        }
+
+        /// Tears down this room's current coop structure — used right
+        /// before rebuilding it at the recentered spot for a new (possibly
+        /// merged, larger) footprint.
+        private void ClearStructure(string roomId)
+        {
+            if (!_structureCoords.TryGetValue(roomId, out var coord))
+            {
+                return;
+            }
+
+            if (_structureVisuals.TryGetValue(coord, out var visual) && visual != null)
+            {
+                Destroy(visual);
+            }
+            _structureVisuals.Remove(coord);
+            _structureRoomByCoord.Remove(coord);
+            _structureCoords.Remove(roomId);
+        }
+
+        /// Tears down this room's current perimeter fence — used right
+        /// before rebuilding it for a new (possibly merged, larger)
+        /// footprint, since the fence traces the whole room's outer
+        /// boundary.
+        private void ClearFence(string roomId)
+        {
+            if (_fenceVisuals.TryGetValue(roomId, out var fence) && fence != null)
+            {
+                Destroy(fence);
+            }
+            _fenceVisuals.Remove(roomId);
         }
 
         /// The coop's own tile — centered when both dimensions are odd

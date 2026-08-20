@@ -2,9 +2,11 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using KeepersDomain.Creatures;
 using KeepersDomain.Grid;
 using KeepersDomain.Implings;
 using KeepersDomain.Input;
+using KeepersDomain.Monsters;
 using KeepersDomain.Rooms;
 
 namespace KeepersDomain.UI
@@ -28,8 +30,12 @@ namespace KeepersDomain.UI
         private const float PanelHeight = 260f;
         private const float TabButtonWidth = 110f;
         private const float BannerHeight = 28f;
-        private const float InspectionPanelWidth = 260f;
-        private const float InspectionPanelHeight = 110f;
+        // Wide/tall enough for a creature's full stat dump (see
+        // TileInteractionController.Inspect/DescribeMonster) — a plain
+        // tile's inspection text is much shorter and just leaves the rest
+        // of the panel blank.
+        private const float InspectionPanelWidth = 300f;
+        private const float InspectionPanelHeight = 320f;
         private const float TopBarWidth = 280f;
         private const float TopBarHeight = 28f;
 
@@ -41,16 +47,22 @@ namespace KeepersDomain.UI
         private TreasuryManager _treasuryManager;
         private ChaosCore _chaosCore;
         private BaconBeaconManager _baconBeaconManager;
+        private TrainingRoomManager _trainingRoomManager;
+        private LibraryManager _libraryManager;
+        private JailManager _jailManager;
+        private GremlinSpawner _gremlinSpawner;
+        private WarlockSpawner _warlockSpawner;
 
         private MenuTab _openTab = MenuTab.None;
         private bool _squareModeOn;
         private bool _digQueuePaused;
+        private bool _autoReinforceOn;
         private List<JobKind> _priorityOrder;
         private Vector2 _buildScrollPos;
         private Vector2 _tasksScrollPos;
         private Vector2 _creaturesScrollPos;
 
-        public void Initialize(DungeonGrid grid, BuilderJobBoard jobBoard, TileInteractionController interactionController, TreasuryManager treasuryManager, ChaosCore chaosCore, BaconBeaconManager baconBeaconManager)
+        public void Initialize(DungeonGrid grid, BuilderJobBoard jobBoard, TileInteractionController interactionController, TreasuryManager treasuryManager, ChaosCore chaosCore, BaconBeaconManager baconBeaconManager, TrainingRoomManager trainingRoomManager, LibraryManager libraryManager, JailManager jailManager, GremlinSpawner gremlinSpawner, WarlockSpawner warlockSpawner)
         {
             _grid = grid;
             _jobBoard = jobBoard;
@@ -58,6 +70,11 @@ namespace KeepersDomain.UI
             _treasuryManager = treasuryManager;
             _chaosCore = chaosCore;
             _baconBeaconManager = baconBeaconManager;
+            _trainingRoomManager = trainingRoomManager;
+            _libraryManager = libraryManager;
+            _jailManager = jailManager;
+            _gremlinSpawner = gremlinSpawner;
+            _warlockSpawner = warlockSpawner;
             // Seeded from the board's actual current order, not a second
             // hardcoded default — see BuilderJobBoard.GetJobPriorityOrder.
             _priorityOrder = new List<JobKind>(_jobBoard.GetJobPriorityOrder());
@@ -174,7 +191,8 @@ namespace KeepersDomain.UI
         {
             var pending = _interactionController.PendingPlacementAction;
             var isDraggingRoom = _interactionController.IsPlacingLair || _interactionController.IsPlacingTreasury
-                || _interactionController.IsPlacingHatchery || _interactionController.IsPlacingBeacon;
+                || _interactionController.IsPlacingHatchery || _interactionController.IsPlacingBeacon || _interactionController.IsPlacingTrainingRoom
+                || _interactionController.IsPlacingLibrary || _interactionController.IsPlacingJail;
             if (pending == PlacementAction.None && !isDraggingRoom)
             {
                 return;
@@ -202,9 +220,21 @@ namespace KeepersDomain.UI
             {
                 DrawRoomDragSize("Bacon Beacon", _interactionController.BeaconDragStartCoord, _interactionController.BeaconDragCurrentCoord, tileCount => tileCount * BaconBeaconManager.CostPerTile);
             }
+            else if (_interactionController.IsPlacingTrainingRoom)
+            {
+                DrawRoomDragSize("Training Room", _interactionController.TrainingRoomDragStartCoord, _interactionController.TrainingRoomDragCurrentCoord, tileCount => tileCount * TrainingRoomManager.CostPerTile);
+            }
+            else if (_interactionController.IsPlacingLibrary)
+            {
+                DrawRoomDragSize("Library", _interactionController.LibraryDragStartCoord, _interactionController.LibraryDragCurrentCoord, tileCount => tileCount * LibraryManager.CostPerTile);
+            }
+            else if (_interactionController.IsPlacingJail)
+            {
+                DrawRoomDragSize("Jail", _interactionController.JailDragStartCoord, _interactionController.JailDragCurrentCoord, tileCount => tileCount * JailManager.CostPerTile);
+            }
             else
             {
-                var instructionVerb = pending is PlacementAction.PlaceLair or PlacementAction.PlaceTreasury or PlacementAction.PlaceSlimeHatchery or PlacementAction.PlaceBaconBeacon ? "Drag to size, release to place" : "Tap a tile to place";
+                var instructionVerb = pending is PlacementAction.PlaceLair or PlacementAction.PlaceTreasury or PlacementAction.PlaceSlimeHatchery or PlacementAction.PlaceBaconBeacon or PlacementAction.PlaceTrainingRoom or PlacementAction.PlaceLibrary or PlacementAction.PlaceJail ? "Drag to size, release to place" : "Tap a tile to place";
                 GUILayout.Label($"{instructionVerb}: {pending}");
                 if (GUILayout.Button("Cancel", GUILayout.Width(60f)))
                 {
@@ -280,6 +310,21 @@ namespace KeepersDomain.UI
                 _interactionController.RequestPlacement(PlacementAction.PlaceBaconBeacon);
             }
 
+            if (GUILayout.Button(PlacementButtonLabel(PlacementAction.PlaceTrainingRoom, $"Training Room ({TrainingRoomManager.CostPerTile}g/tile)")))
+            {
+                _interactionController.RequestPlacement(PlacementAction.PlaceTrainingRoom);
+            }
+
+            if (GUILayout.Button(PlacementButtonLabel(PlacementAction.PlaceLibrary, $"Library ({LibraryManager.CostPerTile}g/tile)")))
+            {
+                _interactionController.RequestPlacement(PlacementAction.PlaceLibrary);
+            }
+
+            if (GUILayout.Button(PlacementButtonLabel(PlacementAction.PlaceJail, $"Jail ({JailManager.CostPerTile}g/tile)")))
+            {
+                _interactionController.RequestPlacement(PlacementAction.PlaceJail);
+            }
+
             // Sell stays armed across taps (see TileInteractionController.
             // RequestPlacement) rather than being consumed after one use, so
             // this button toggles it off on a second press instead of just
@@ -324,6 +369,14 @@ namespace KeepersDomain.UI
             GUI.enabled = true;
 
             GUILayout.Space(8f);
+            var autoReinforceOn = GUILayout.Toggle(_autoReinforceOn, "Auto-reinforce dungeon walls");
+            if (autoReinforceOn != _autoReinforceOn)
+            {
+                _autoReinforceOn = autoReinforceOn;
+                _jobBoard.SetAutoReinforceEnabled(_autoReinforceOn);
+            }
+
+            GUILayout.Space(8f);
             GUILayout.Label("Job priority (top = done first)");
             DrawPriorityList();
         }
@@ -356,14 +409,61 @@ namespace KeepersDomain.UI
 
         private void DrawCreaturesMenu()
         {
+            // Recruiting takes one Gremlin straight out of the Portal's
+            // pool and spawns it there — no tile picking, since every
+            // non-Imp creature "joins" by coming down the portal stairway
+            // rather than being placed anywhere (see Portal.TryTakeFromPool).
+            // Also gated on Gremlin's own join requirements (see
+            // GremlinSpawner.MeetsJoinRequirements) — always shown below the
+            // button so it's clear why it's greyed out, not just that it is.
+            var available = _gremlinSpawner.AvailableToRecruit;
+            GUI.enabled = _gremlinSpawner.CanRecruit;
+            if (GUILayout.Button($"Recruit Gremlin ({available} available)"))
+            {
+                _gremlinSpawner.TryRecruitGremlin();
+            }
+            GUI.enabled = true;
+            GUILayout.Label("Requires: a free Lair, fewer non-Imp creatures than Hatchery tiles, 9+ Training Room tiles");
+
+            GUILayout.Space(4f);
+
+            var warlocksAvailable = _warlockSpawner.AvailableToRecruit;
+            GUI.enabled = _warlockSpawner.CanRecruit;
+            if (GUILayout.Button($"Recruit Warlock ({warlocksAvailable} available)"))
+            {
+                _warlockSpawner.TryRecruitWarlock();
+            }
+            GUI.enabled = true;
+            GUILayout.Label("Requires: a Lair tile, a 3x3+ Library, fewer non-Imp creatures than Hatchery tiles, fewer intelligent creatures than Bacon Beacon tiles");
+
+            GUILayout.Space(8f);
+
             var implings = ImplingAgent.All;
-            GUILayout.Label($"{implings.Count} impling(s)");
+            var gremlins = GremlinAgent.All;
+            var warlocks = WarlockAgent.All;
+            GUILayout.Label($"{implings.Count} impling(s), {gremlins.Count} gremlin(s), {warlocks.Count} warlock(s)");
             _creaturesScrollPos = GUILayout.BeginScrollView(_creaturesScrollPos, GUILayout.Height(210f));
 
             foreach (var impling in implings)
             {
                 var coord = _grid.WorldToGrid(impling.Position);
                 GUILayout.Label($"#{impling.Id}  Lv{impling.Creature.Level}  {impling.State}  ({coord.x},{coord.y})  G:{impling.Inventory.Gold} M:{impling.Inventory.ManaCrystals} S:{impling.Inventory.Slimes}");
+            }
+
+            foreach (var gremlin in gremlins)
+            {
+                var coord = _grid.WorldToGrid(gremlin.Position);
+                var hungryTag = gremlin.Hunger.IsHungry ? " (hungry)" : "";
+                var unhappyTag = gremlin.Pay.IsUnhappy ? " (unpaid!)" : "";
+                GUILayout.Label($"{gremlin.Name}  Lv{gremlin.Creature.Level}  {gremlin.Task}  ({coord.x},{coord.y})  Hunger:{gremlin.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(gremlin.Creature.Level)}g{unhappyTag}  Happy:{gremlin.Happiness.Value:0} ({gremlin.Happiness.Tier})");
+            }
+
+            foreach (var warlock in warlocks)
+            {
+                var coord = _grid.WorldToGrid(warlock.Position);
+                var hungryTag = warlock.Hunger.IsHungry ? " (hungry)" : "";
+                var unhappyTag = warlock.Pay.IsUnhappy ? " (unpaid!)" : "";
+                GUILayout.Label($"{warlock.Name}  Lv{warlock.Creature.Level}  {warlock.Task}  ({coord.x},{coord.y})  Hunger:{warlock.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(warlock.Creature.Level)}g{unhappyTag}  Happy:{warlock.Happiness.Value:0} ({warlock.Happiness.Tier})");
             }
 
             GUILayout.EndScrollView();

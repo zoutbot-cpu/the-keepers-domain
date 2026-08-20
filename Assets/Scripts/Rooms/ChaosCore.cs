@@ -22,8 +22,11 @@ namespace KeepersDomain.Rooms
         // Matches Portal's SECOND staircase step height (Portal's per-step
         // formula is cellSize * 0.15f * (i + 1), so step index 1 = 0.15f * 2)
         // — keeps both "special room" landmarks reading as the same visual
-        // language rather than an arbitrary independent height.
+        // language rather than an arbitrary independent height. This is the
+        // center tile's pedestal height; the surrounding ring sits lower,
+        // at RingHeightFactor (Portal's FIRST step height).
         private const float PlatformHeightFactor = 0.15f * 2f;
+        private const float RingHeightFactor = 0.15f;
 
         // "1 mana crystal weighs 1" was the only ratio the brief pinned
         // down; this is the placeholder conversion for what a deposited
@@ -59,10 +62,13 @@ namespace KeepersDomain.Rooms
             Coord = center;
             transform.position = grid.GridToWorld(center);
             var platformHeight = grid.CellSize * PlatformHeightFactor;
+            var ringHeight = grid.CellSize * RingHeightFactor;
 
             MaxMana = StartingMaxMana;
 
-            BuildPlatform(grid.CellSize, grid.FloorSurfaceY, platformHeight);
+            grid.SetBlocked(center, true);
+
+            BuildPlatform(grid.CellSize, grid.FloorSurfaceY, platformHeight, ringHeight);
             BuildOrb(grid.CellSize, grid.FloorSurfaceY, platformHeight);
         }
 
@@ -110,18 +116,33 @@ namespace KeepersDomain.Rooms
             return amount;
         }
 
-        private void BuildPlatform(float cellSize, float floorSurfaceY, float platformHeight)
+        /// Builds the platform as two stacked pieces rather than one flat
+        /// 3x3 slab: a ring base spanning all 9 tiles at ringHeight, and a
+        /// single-tile pedestal on top of the center that rises the rest of
+        /// the way to platformHeight — so only the center tile (where the
+        /// orb sits, and which Initialize marks non-walkable) reads as the
+        /// "high" part of the Core.
+        private void BuildPlatform(float cellSize, float floorSurfaceY, float platformHeight, float ringHeight)
         {
-            var platform = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            platform.name = "ChaosCorePlatform";
-            platform.transform.SetParent(transform, false);
-            platform.transform.localPosition = new Vector3(0f, floorSurfaceY + platformHeight * 0.5f, 0f);
-            platform.transform.localScale = new Vector3(
+            var ring = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            ring.name = "ChaosCoreRing";
+            ring.transform.SetParent(transform, false);
+            ring.transform.localPosition = new Vector3(0f, floorSurfaceY + ringHeight * 0.5f, 0f);
+            ring.transform.localScale = new Vector3(
                 cellSize * PlatformTileSpan * 0.95f,
-                platformHeight,
+                ringHeight,
                 cellSize * PlatformTileSpan * 0.95f);
-            platform.GetComponent<Renderer>().material.color = _platformColor;
-            Destroy(platform.GetComponent<Collider>());
+            ring.GetComponent<Renderer>().material.color = _platformColor;
+            Destroy(ring.GetComponent<Collider>());
+
+            var pedestalHeight = platformHeight - ringHeight;
+            var pedestal = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            pedestal.name = "ChaosCorePedestal";
+            pedestal.transform.SetParent(transform, false);
+            pedestal.transform.localPosition = new Vector3(0f, floorSurfaceY + ringHeight + pedestalHeight * 0.5f, 0f);
+            pedestal.transform.localScale = new Vector3(cellSize * 0.95f, pedestalHeight, cellSize * 0.95f);
+            pedestal.GetComponent<Renderer>().material.color = _platformColor;
+            Destroy(pedestal.GetComponent<Collider>());
         }
 
         private void BuildOrb(float cellSize, float floorSurfaceY, float platformHeight)

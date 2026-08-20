@@ -16,6 +16,9 @@ namespace KeepersDomain.CameraControl
         [SerializeField] private float _maxOrthoSize = 20f;
         [SerializeField] private Vector2 _panBoundsMin = new Vector2(-5f, -5f);
         [SerializeField] private Vector2 _panBoundsMax = new Vector2(30f, 30f);
+        [SerializeField] private float _rotateSpeedDegPerSec = 90f;
+        [SerializeField] private float _minPitch = 20f;
+        [SerializeField] private float _maxPitch = 80f;
 
         private Camera _camera;
         private bool _hasPrevTouchData;
@@ -25,9 +28,14 @@ namespace KeepersDomain.CameraControl
         private Vector2 _prevMousePos;
         private bool _isMousePanning;
 
+        private float _yaw;
+        private float _pitch;
+
         private void Awake()
         {
             _camera = GetComponent<Camera>();
+            _yaw = transform.eulerAngles.y;
+            _pitch = transform.eulerAngles.x;
         }
 
         private void Update()
@@ -42,7 +50,75 @@ namespace KeepersDomain.CameraControl
                 HandleMouseFallback();
             }
 
+            HandleRotationInput();
             ClampPosition();
+        }
+
+        // Left/Right arrows and Q/D (AZERTY-friendly, same physical keys as
+        // A/D) orbit the view around the ground point currently centered on
+        // screen; Up/Down and Z/S tilt the pitch. Mirrors the orbit formula
+        // GameBootstrap uses to place the camera initially (target - rotation
+        // * forward * distance) so the look-at point stays fixed while orbiting.
+        private void HandleRotationInput()
+        {
+            if (Keyboard.current == null)
+            {
+                return;
+            }
+
+            var yawInput = 0f;
+            if (Keyboard.current.leftArrowKey.isPressed || Keyboard.current.qKey.isPressed)
+            {
+                yawInput -= 1f;
+            }
+            if (Keyboard.current.rightArrowKey.isPressed || Keyboard.current.dKey.isPressed)
+            {
+                yawInput += 1f;
+            }
+
+            var pitchInput = 0f;
+            if (Keyboard.current.upArrowKey.isPressed || Keyboard.current.zKey.isPressed)
+            {
+                pitchInput -= 1f;
+            }
+            if (Keyboard.current.downArrowKey.isPressed || Keyboard.current.sKey.isPressed)
+            {
+                pitchInput += 1f;
+            }
+
+            if (yawInput == 0f && pitchInput == 0f)
+            {
+                return;
+            }
+
+            if (!TryGetGroundPivot(out var pivot, out var distance))
+            {
+                return;
+            }
+
+            _yaw += yawInput * _rotateSpeedDegPerSec * Time.deltaTime;
+            _pitch = Mathf.Clamp(_pitch + pitchInput * _rotateSpeedDegPerSec * Time.deltaTime, _minPitch, _maxPitch);
+
+            var rotation = Quaternion.Euler(_pitch, _yaw, 0f);
+            transform.rotation = rotation;
+            transform.position = pivot - rotation * Vector3.forward * distance;
+        }
+
+        private bool TryGetGroundPivot(out Vector3 pivot, out float distance)
+        {
+            var pos = transform.position;
+            var forward = transform.forward;
+            if (Mathf.Abs(forward.y) < 0.0001f)
+            {
+                pivot = pos;
+                distance = 0f;
+                return false;
+            }
+
+            var t = -pos.y / forward.y;
+            pivot = pos + forward * t;
+            distance = Vector3.Distance(pos, pivot);
+            return true;
         }
 
         private void HandleTouchPanZoom()

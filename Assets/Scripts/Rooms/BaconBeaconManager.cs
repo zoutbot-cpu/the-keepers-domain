@@ -30,6 +30,11 @@ namespace KeepersDomain.Rooms
         private const int BaconPerSlime = 4;
         private const int BaconCapacityPerTile = 12;
 
+        /// Bacon consumed by a hungry Gremlin/Warlock eating a single meal
+        /// (see GremlinAgent/WarlockAgent's priority-80 check) — placeholder
+        /// tunable, not specified by the design brief beyond "go eat bacon."
+        public const int MealBaconAmount = 1;
+
         // Shrine visual: a raised stone dais under two "tubes" — a bright
         // one going up (slimes descend to be judged) and a dark one going
         // down (bacon rises back out) — distinct from SlimeHatchery's coop
@@ -95,25 +100,82 @@ namespace KeepersDomain.Rooms
             lairManager.RoomSold += OnRoomSold;
         }
 
+        /// Total tile count across every placed Bacon Beacon (not just its
+        /// shrine-adjacent storage tiles) — read by WarlockSpawner as one of
+        /// a Warlock's join requirements ("at least one bacon beacon tile
+        /// for each intelligent creature"), same TotalTileCount convention
+        /// SlimeHatcheryManager/TrainingRoomManager/LibraryManager use.
+        public int TotalTileCount
+        {
+            get
+            {
+                var total = 0;
+                foreach (var tiles in _roomTiles.Values)
+                {
+                    total += tiles.Count;
+                }
+                return total;
+            }
+        }
+
         /// Places a Bacon Beacon spanning the rectangle between startCoord
         /// and endCoord inclusive. Fails atomically, same as
         /// SlimeHatcheryManager.TryPlaceHatchery, with its own
         /// MinFootprintSize floor.
         public bool TryPlaceBeacon(Vector2Int startCoord, Vector2Int endCoord)
         {
-            var footprint = GetFootprint(startCoord, endCoord, out var width, out var height, out var origin);
-            if (width < MinFootprintSize || height < MinFootprintSize || !CanPlaceFootprint(footprint))
+            return TryPlaceBeaconInternal(startCoord, endCoord, chargeGold: true);
+        }
+
+        /// Places a Bacon Beacon exactly like TryPlaceBeacon but without
+        /// charging gold — for terrain generation (see GameBootstrap's
+        /// starting domain layout), not a player purchase, same as
+        /// TreasuryManager.PlaceStartingTreasury.
+        public bool PlaceStartingBeacon(Vector2Int startCoord, Vector2Int endCoord)
+        {
+            return TryPlaceBeaconInternal(startCoord, endCoord, chargeGold: false);
+        }
+
+        private bool TryPlaceBeaconInternal(Vector2Int startCoord, Vector2Int endCoord, bool chargeGold)
+        {
+            var footprint = GetFootprint(startCoord, endCoord, out var newWidth, out var newHeight, out var newOrigin);
+            if (newWidth < MinFootprintSize || newHeight < MinFootprintSize || !CanPlaceFootprint(footprint))
             {
                 return false;
             }
 
-            if (_treasuryManager != null && !_treasuryManager.TrySpendGold(footprint.Count * CostPerTile))
+            if (chargeGold && _treasuryManager != null && !_treasuryManager.TrySpendGold(footprint.Count * CostPerTile))
             {
                 return false;
             }
 
-            var roomId = $"BaconBeacon_{_nextRoomId++}";
-            _roomTiles[roomId] = footprint;
+            string roomId;
+            var origin = newOrigin;
+            var width = newWidth;
+            var height = newHeight;
+
+            // Extends an existing Bacon Beacon instead of starting a
+            // separate one if footprint exactly completes a rectangle
+            // together with it — see TryFindMergeableRoom. The shrine
+            // recenters for the room's new overall shape, which can change
+            // which tiles even count as storage (adjacent to the shrine) —
+            // see ClearShrineAndStorage — so every storage tile (old and
+            // new) is recomputed from scratch below rather than only
+            // registering the newly-dragged ones.
+            if (TryFindMergeableRoom(footprint, out var existingRoomId, out var mergedOrigin, out var mergedWidth, out var mergedHeight))
+            {
+                roomId = existingRoomId;
+                origin = mergedOrigin;
+                width = mergedWidth;
+                height = mergedHeight;
+                _roomTiles[roomId].AddRange(footprint);
+                ClearShrineAndStorage(roomId);
+            }
+            else
+            {
+                roomId = $"BaconBeacon_{_nextRoomId++}";
+                _roomTiles[roomId] = footprint;
+            }
 
             foreach (var coord in footprint)
             {
@@ -123,7 +185,7 @@ namespace KeepersDomain.Rooms
             var shrineTiles = GetShrineTiles(origin, width, height);
             _shrineVisuals[roomId] = BuildShrineVisual(shrineTiles);
 
-            foreach (var coord in footprint)
+            foreach (var coord in _roomTiles[roomId])
             {
                 if (shrineTiles.Contains(coord) || !IsAdjacentToShrine(coord, shrineTiles))
                 {
@@ -134,6 +196,106 @@ namespace KeepersDomain.Rooms
             }
 
             return true;
+        }
+
+        /// Whether footprint, combined with some single already-placed room
+        /// of this type, would exactly fill a rectangle — i.e. footprint
+        /// extends an existing room rather than starting a fresh one. Only
+        /// ever merges with one existing room at a time; if footprint
+        /// doesn't cleanly complete a rectangle with any single existing
+        /// room (including the common case of not being adjacent to one at
+        /// all), this returns false and the caller places footprint as its
+        /// own new room instead.
+        private bool TryFindMergeableRoom(List<Vector2Int> footprint, out string roomId, out Vector2Int mergedOrigin, out int mergedWidth, out int mergedHeight)
+        {
+            foreach (var entry in _roomTiles)
+            {
+                var minX = int.MaxValue;
+                var maxX = int.MinValue;
+                var minY = int.MaxValue;
+                var maxY = int.MinValue;
+
+                foreach (var coord in entry.Value)
+                {
+                    minX = Mathf.Min(minX, coord.x);
+                    maxX = Mathf.Max(maxX, coord.x);
+                    minY = Mathf.Min(minY, coord.y);
+                    maxY = Mathf.Max(maxY, coord.y);
+                }
+
+                foreach (var coord in footprint)
+                {
+                    minX = Mathf.Min(minX, coord.x);
+                    maxX = Mathf.Max(maxX, coord.x);
+                    minY = Mathf.Min(minY, coord.y);
+                    maxY = Mathf.Max(maxY, coord.y);
+                }
+
+                var width = maxX - minX + 1;
+                var height = maxY - minY + 1;
+
+                if (width * height == entry.Value.Count + footprint.Count)
+                {
+                    roomId = entry.Key;
+                    mergedOrigin = new Vector2Int(minX, minY);
+                    mergedWidth = width;
+                    mergedHeight = height;
+                    return true;
+                }
+            }
+
+            roomId = null;
+            mergedOrigin = default;
+            mergedWidth = 0;
+            mergedHeight = 0;
+            return false;
+        }
+
+        /// Tears down this room's current shrine and every one of its
+        /// storage tiles — used right before rebuilding both from scratch
+        /// for a new (possibly merged, larger) footprint, since the
+        /// shrine's recentered position can change which tiles count as
+        /// storage at all. Storage tiles are tracked per-coordinate, not
+        /// nested per-room (unlike _roomTiles), so this finds this room's
+        /// own tiles among them via _storageRoomByCoord, the same way
+        /// OnRoomSold does. Whatever bacon was stored on them is simply
+        /// lost, same as OnRoomSold's own "stored bacon is simply gone"
+        /// behavior.
+        private void ClearShrineAndStorage(string roomId)
+        {
+            if (_shrineVisuals.TryGetValue(roomId, out var shrine) && shrine != null)
+            {
+                Destroy(shrine);
+            }
+            _shrineVisuals.Remove(roomId);
+
+            var toRemove = new List<Vector2Int>();
+            foreach (var coord in _storageTiles)
+            {
+                if (_storageRoomByCoord.TryGetValue(coord, out var owner) && owner == roomId)
+                {
+                    toRemove.Add(coord);
+                }
+            }
+
+            foreach (var coord in toRemove)
+            {
+                if (_tileVisuals.TryGetValue(coord, out var visual) && visual != null)
+                {
+                    Destroy(visual);
+                }
+                _tileVisuals.Remove(coord);
+
+                if (_labels.TryGetValue(coord, out var label) && label != null)
+                {
+                    Destroy(label.gameObject);
+                }
+                _labels.Remove(coord);
+
+                _storedBacon.Remove(coord);
+                _storageRoomByCoord.Remove(coord);
+                _storageTiles.Remove(coord);
+            }
         }
 
         /// The shrine's 2x2 block — centered when both dimensions allow a
@@ -238,6 +400,53 @@ namespace KeepersDomain.Rooms
             }
 
             return found;
+        }
+
+        /// Nearest (by walking distance) storage tile that actually has
+        /// bacon on it, reachable from fromCoord — the mirror-image query to
+        /// TryFindNearestTileWithRoom (which looks for room to deposit
+        /// *more* bacon); this looks for a tile a hungry creature can eat
+        /// from.
+        public bool TryFindNearestTileWithBacon(Vector2Int fromCoord, out Vector2Int targetCoord)
+        {
+            var distances = _grid.GetReachableFloorDistances(fromCoord);
+            var bestDistance = int.MaxValue;
+            targetCoord = default;
+            var found = false;
+
+            foreach (var coord in _storageTiles)
+            {
+                if (_storedBacon[coord] < MealBaconAmount)
+                {
+                    continue;
+                }
+
+                if (distances.TryGetValue(coord, out var distance) && distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    targetCoord = coord;
+                    found = true;
+                }
+            }
+
+            return found;
+        }
+
+        /// Consumes up to amount bacon from the storage tile at coord for a
+        /// creature eating a meal — fails (no partial meal) if that tile
+        /// doesn't have enough. Mirrors ConvertSlimes' "return what
+        /// happened" shape but as a plain success bool, since a meal is
+        /// always a fixed amount rather than "however much fits."
+        public bool TryEatBacon(Vector2Int coord, int amount)
+        {
+            if (amount <= 0 || !_storedBacon.TryGetValue(coord, out var current) || current < amount)
+            {
+                return false;
+            }
+
+            _storedBacon[coord] = current - amount;
+            _labels[coord].text = _storedBacon[coord].ToString();
+            return true;
         }
 
         public void UpdatePlacementPreview(Vector2Int startCoord, Vector2Int endCoord)

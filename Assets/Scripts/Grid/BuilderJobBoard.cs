@@ -98,6 +98,19 @@ namespace KeepersDomain.Grid
         // "pause the digging queue" doesn't stop the whole board.
         private bool _areDigJobsPaused;
 
+        // Auto-reinforce: off by default (see BottomMenuBar's Impling menu
+        // toggle). While on, ScanForAutoReinforceCandidates periodically
+        // queues a reinforce job on every un-reinforced Rock tile bordering
+        // already-Claimed territory — the same "dungeon wall" candidacy
+        // TryClaimClaimJob already uses for claim jobs — so building up a
+        // perimeter doesn't require tapping every wall tile by hand. Scans
+        // on an interval rather than every frame (fine at prototype scale);
+        // RequestReinforce itself no-ops on anything already queued or
+        // ineligible, so re-scanning a mostly-settled dungeon is cheap.
+        private const float AutoReinforceScanInterval = 1f;
+        private bool _isAutoReinforceEnabled;
+        private float _nextAutoReinforceScanTime;
+
         public void Initialize(DungeonGrid grid)
         {
             _grid = grid;
@@ -130,9 +143,41 @@ namespace KeepersDomain.Grid
             _areDigJobsPaused = isPaused;
         }
 
+        public void SetAutoReinforceEnabled(bool isEnabled)
+        {
+            _isAutoReinforceEnabled = isEnabled;
+            _nextAutoReinforceScanTime = Time.time;
+        }
+
         private void Update()
         {
             PromoteReadyPendingJobs();
+
+            if (_isAutoReinforceEnabled && Time.time >= _nextAutoReinforceScanTime)
+            {
+                _nextAutoReinforceScanTime = Time.time + AutoReinforceScanInterval;
+                ScanForAutoReinforceCandidates();
+            }
+        }
+
+        /// Queues a reinforce job (via DungeonGrid.RequestReinforce, which
+        /// safely no-ops on anything not an eligible bare Rock tile) on
+        /// every Rock tile bordering already-Claimed floor — see the field
+        /// comment on _isAutoReinforceEnabled for why "borders Claimed" is
+        /// the candidacy rule.
+        private void ScanForAutoReinforceCandidates()
+        {
+            for (int x = 0; x < _grid.Width; x++)
+            {
+                for (int y = 0; y < _grid.Height; y++)
+                {
+                    var coord = new Vector2Int(x, y);
+                    if (_grid.GetTile(coord).Type == TileType.Rock && _grid.BordersClaimedTile(coord))
+                    {
+                        _grid.RequestReinforce(coord);
+                    }
+                }
+            }
         }
 
         /// Moves any pending job whose grace period has elapsed into its open

@@ -189,6 +189,44 @@ namespace KeepersDomain.Rooms
             return true;
         }
 
+        /// Adds amount gold, distributed across registered tiles (in no
+        /// particular order, same "gold is fungible" convention
+        /// TrySpendGold uses) up to each tile's GoldCapacityPerTile — used
+        /// for refunds (see LairManager.TrySellRoom) rather than depositing
+        /// into one specific tile like Deposit does. Whatever doesn't fit
+        /// because every tile is already full (only possible with no/tiny
+        /// Treasury capacity) is simply lost — same "not currently
+        /// consequential" placeholder gap as the gold a sold Treasury's own
+        /// stash loses (see OnRoomSold).
+        public void AddGold(int amount)
+        {
+            if (amount <= 0)
+            {
+                return;
+            }
+
+            var remaining = amount;
+            foreach (var coord in _tiles)
+            {
+                if (remaining <= 0)
+                {
+                    break;
+                }
+
+                var current = _storedGold[coord];
+                var room = GoldCapacityPerTile - current;
+                if (room <= 0)
+                {
+                    continue;
+                }
+
+                var add = Mathf.Min(room, remaining);
+                _storedGold[coord] = current + add;
+                _labels[coord].text = _storedGold[coord].ToString();
+                remaining -= add;
+            }
+        }
+
         private void PlaceFootprint(List<Vector2Int> footprint)
         {
             var roomId = $"Treasury_{_nextRoomId++}";

@@ -11,25 +11,28 @@ namespace KeepersDomain.Creatures
     {
         public const int MaxLevel = 10;
 
-        // Exp needed to go from Level to Level+1 is Level * ExpPerLevelStep.
-        // Placeholder curve — nothing grants exp yet (no tasks/training/
-        // combat reward it), see design-doc.md's "Exp-per-level curve: TBD".
-        private const int ExpPerLevelStep = 100;
-
         private readonly CreatureStatBlock _base;
         private readonly CreatureStatBlock _growth;
 
+        // Exp needed to go from Level to Level+1 is Level * _expPerLevelStep
+        // — set per creature type (see the constructor) rather than a shared
+        // constant, so a rare/strong unit can be tuned to level up slower
+        // than a common one just by giving it a higher step, independent of
+        // how fast any particular exp source grants exp.
+        private readonly int _expPerLevelStep;
+
         public int Level { get; private set; } = 1;
         public int Exp { get; private set; }
-        public int ExpToNextLevel => Level >= MaxLevel ? 0 : Level * ExpPerLevelStep;
+        public int ExpToNextLevel => Level >= MaxLevel ? 0 : Level * _expPerLevelStep;
 
         public CreatureStats Stats { get; } = new CreatureStats();
         public CreatureSkillSlots Skills { get; } = new CreatureSkillSlots();
 
-        public Creature(CreatureStatBlock baseStats, CreatureStatBlock growthPerLevel)
+        public Creature(CreatureStatBlock baseStats, CreatureStatBlock growthPerLevel, int expPerLevelStep)
         {
             _base = baseStats;
             _growth = growthPerLevel;
+            _expPerLevelStep = expPerLevelStep;
             RecalculateStats(initial: true);
         }
 
@@ -58,6 +61,25 @@ namespace KeepersDomain.Creatures
                 Level++;
                 RecalculateStats(initial: false);
             }
+        }
+
+        /// Every stat, formatted as one label per line — the single source
+        /// for what "inspect a creature" shows (see
+        /// TileInteractionController.Inspect), so every creature type's
+        /// full stat block reads the same way regardless of who's asking.
+        public string DescribeStats()
+        {
+            var expLabel = Level >= MaxLevel ? "MAX" : $"{Exp}/{ExpToNextLevel}";
+            return $"Level {Level} (Exp {expLabel})\n"
+                + $"HP: {Stats.HP:0}/{Stats.MaxHP:0} (regen {Stats.HPRegen:0.0}/s)\n"
+                + $"Mana: {Stats.Mana:0}/{Stats.MaxMana:0} (regen {Stats.ManaRegen:0.0}/s)\n"
+                + $"Strength: {Stats.Strength:0.0}\n"
+                + $"Movespeed: {Stats.Movespeed:0.0}\n"
+                + $"Attackspeed: {Stats.Attackspeed:0.00}\n"
+                + $"Intelligence: {Stats.Intelligence:0.0}\n"
+                + $"Craftmanship: {Stats.Craftmanship:0.0}\n"
+                + $"Armor: {Stats.Armor:0.00}\n"
+                + $"Lifesteal: {Stats.Lifesteal:0.0}";
         }
 
         /// initial: true sets HP/Mana to full (a fresh creature at spawn);

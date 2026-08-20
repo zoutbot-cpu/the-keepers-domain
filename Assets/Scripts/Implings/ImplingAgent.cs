@@ -52,7 +52,12 @@ namespace KeepersDomain.Implings
         public int Id { get; private set; }
         public ImplingState State => _state;
         public Vector3 Position => transform.position;
-        public string Name => $"Impling#{Id}";
+
+        /// A random name from CreatureNames.ImpNames, picked once at spawn
+        /// (see Awake) and kept for life — plus the numeric Id, in case two
+        /// Imps roll the same name out of the 50-name pool.
+        public string Name => _name;
+        private string _name;
 
         /// Read-only from the outside (Creatures menu / F2 debug panel) —
         /// mutated only by this agent itself via TickMining/TickDepositing.
@@ -87,15 +92,30 @@ namespace KeepersDomain.Implings
         [SerializeField]
         private CreatureStatBlock _growthPerLevel = new CreatureStatBlock
         {
-            MaxHP = 10f,
+            MaxHP = 5f,
             HPRegen = 0.2f,
             Strength = 2f,
-            Movespeed = 0.1f,
-            Attackspeed = 0.05f,
-            Craftmanship = 1f
+            Movespeed = 0.15f,
+            Attackspeed = 0.075f,
+            // 1/9 so 9 level-ups (level 1 -> 10) land Armor at exactly +1.
+            Armor = 1f / 9f
         };
 
         private Creature _creature;
+
+        // Exp granted per landed "Mine" hit (Digging or Mining), regardless
+        // of wall type or whether that hit destroys the wall — see
+        // design-doc.md's Creatures section for the worked example this
+        // number came from (5 exp/hit -> 25 exp for a solo rock wall, 50
+        // for a solo gold wall).
+        [SerializeField] private int _mineHitExp = 5;
+
+        // Exp needed per level is Level * _expPerLevelStep (see
+        // Creature.ExpToNextLevel) — this is the Imp's own value, not a
+        // shared constant, so other creature types can be tuned to level up
+        // slower/faster independent of the Imp's curve (e.g. a rare, strong
+        // unit trains slower via a higher step here).
+        [SerializeField] private int _expPerLevelStep = 100;
 
         [SerializeField] private float _claimDuration = 1.5f;
         [SerializeField] private float _reinforceDuration = 2f;
@@ -135,8 +155,9 @@ namespace KeepersDomain.Implings
         {
             Id = _nextId++;
             _all.Add(this);
+            _name = $"{CreatureNames.GetRandom(CreatureNames.ImpNames)} #{Id}";
 
-            _creature = new Creature(_baseStats, _growthPerLevel);
+            _creature = new Creature(_baseStats, _growthPerLevel, _expPerLevelStep);
             _creature.Skills.Set(CreatureSkillSlots.BasicAttackSlot, "Mine");
         }
 
@@ -290,7 +311,7 @@ namespace KeepersDomain.Implings
 
             if (_inventory.ManaCrystals > 0 && _chaosCore != null)
             {
-                coord = _chaosCore.Coord;
+                coord = GetChaosCoreDepositCoord();
                 kind = DepositKind.ChaosCore;
                 return true;
             }
@@ -305,6 +326,32 @@ namespace KeepersDomain.Implings
             coord = default;
             kind = default;
             return false;
+        }
+
+        /// The Chaos Core's center tile is blocked to pathfinding (it's the
+        /// raised orb pedestal now, not walkable Floor — see
+        /// DungeonGrid.IsWalkable and ChaosCore.Initialize's SetBlocked
+        /// call), so depositing targets the nearest walkable tile on the
+        /// Core's 3x3 platform instead of the center itself.
+        private Vector2Int GetChaosCoreDepositCoord()
+        {
+            var coreCoord = _chaosCore.Coord;
+            var implingCoord = _grid.WorldToGrid(transform.position);
+
+            var best = coreCoord + GridDirections.Cardinal[0];
+            var bestDist = int.MaxValue;
+            foreach (var offset in GridDirections.Cardinal)
+            {
+                var candidate = coreCoord + offset;
+                var dist = Mathf.Abs(candidate.x - implingCoord.x) + Mathf.Abs(candidate.y - implingCoord.y);
+                if (dist < bestDist)
+                {
+                    bestDist = dist;
+                    best = candidate;
+                }
+            }
+
+            return best;
         }
 
         /// A ready-to-collect Hatchery is only worth walking to if there's
@@ -359,14 +406,16 @@ namespace KeepersDomain.Implings
 
         private void GoToDeposit(Vector2Int coord, DepositKind kind)
         {
-            // Both deposit targets are themselves walkable Floor tiles
-            // (unlike a dig/reinforce/build job's Rock target), so the
-            // impling paths directly onto the tile rather than an adjacent
-            // approach tile. Treasury targets are reachability-checked by
-            // TreasuryManager already; the Chaos Core isn't, and neither is
-            // immune to the world changing after the target was picked
-            // (e.g. a wall built across the route) — if planning fails here,
-            // just don't move; TrySeekJob retries next frame.
+            // Treasury/BaconBeacon targets are themselves walkable Floor
+            // tiles, and the Chaos Core target is already resolved to an
+            // adjacent walkable tile by GetChaosCoreDepositCoord (its
+            // actual center is blocked — see that method) — so in every
+            // case the impling paths directly onto coord. Treasury targets
+            // are reachability-checked by TreasuryManager already; the
+            // Chaos Core isn't, and neither is immune to the world changing
+            // after the target was picked (e.g. a wall built across the
+            // route) — if planning fails here, just don't move; TrySeekJob
+            // retries next frame.
             if (!PlanPathTo(coord, _grid.GridToWorld(coord)))
             {
                 return;
@@ -583,7 +632,9 @@ namespace KeepersDomain.Implings
             }
 
             _hitTimer -= MineHitInterval;
-            if (_jobBoard.ApplyHit(_currentJobCoord, MineHitDamage, out _, out _))
+            var wasDestroyed = _jobBoard.ApplyHit(_currentJobCoord, MineHitDamage, out _, out _);
+            _creature.AddExp(_mineHitExp);
+            if (wasDestroyed)
             {
                 SetState(ImplingState.SeekingJob);
             }
@@ -668,6 +719,7 @@ namespace KeepersDomain.Implings
             _hitTimer -= MineHitInterval;
             var destroyed = _jobBoard.ApplyHit(_currentJobCoord, MineHitDamage, out var resourceType, out var resourceAmount);
             _inventory.Add(resourceType, resourceAmount);
+            _creature.AddExp(_mineHitExp);
 
             if (destroyed)
             {
