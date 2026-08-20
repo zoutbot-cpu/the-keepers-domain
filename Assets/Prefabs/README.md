@@ -1,1 +1,0 @@
-Empty for now — the Phase 1 prototype spawns everything procedurally from primitives via `GameBootstrap` (see `Assets/Scripts/Core/GameBootstrap.cs`). Once real art/prefabs exist, this is where room/minion/tile prefabs should live.
