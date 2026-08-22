@@ -21,7 +21,8 @@ namespace KeepersDomain.Grid
         Dig,
         Claim,
         Reinforce,
-        Build
+        Build,
+        RepairRoom
     }
 
     public readonly struct JobInfo
@@ -69,6 +70,13 @@ namespace KeepersDomain.Grid
         private readonly Dictionary<Vector2Int, bool> _claimJobs = new Dictionary<Vector2Int, bool>();
         private readonly List<Vector2Int> _claimScratch = new List<Vector2Int>();
 
+        // Repair jobs are shaped exactly like claim jobs — single-worker,
+        // no grace period, queued automatically (whenever a room tile takes
+        // damage and survives, see OnRoomDamaged) rather than player-tap-
+        // initiated. Value = is a worker already on their way to repair it.
+        private readonly Dictionary<Vector2Int, bool> _repairJobs = new Dictionary<Vector2Int, bool>();
+        private readonly List<Vector2Int> _repairScratch = new List<Vector2Int>();
+
         // Reinforce jobs are player-tap-initiated like dig jobs (same grace
         // period so a mis-tap can still be canceled) but single-worker like
         // claim jobs (reinforcing is a timed action, not a shared HP pool).
@@ -85,13 +93,14 @@ namespace KeepersDomain.Grid
 
         // Jobs are tried in this order — whichever kind sorts first is fully
         // depleted (nearest job within that kind) before the next kind is
-        // even searched. Defaults to Dig, then Reinforce and Build (all
-        // three player-tap-initiated, so presumably wanted sooner), then
-        // Claim (automatic background chore). Exposed as a plain setter so
-        // a future priority UI has something to call without touching the
+        // even searched. Defaults to Dig, then RepairRoom (a damaged room
+        // is presumably wanted fixed soon, but never ahead of digging),
+        // then Reinforce and Build (both player-tap-initiated), then Claim
+        // (automatic background chore). Exposed as a plain setter so a
+        // future priority UI has something to call without touching the
         // search logic itself (same placeholder pattern as
         // TileInteractionController.SetSquareModeToggle).
-        private JobKind[] _jobPriorityOrder = { JobKind.Dig, JobKind.Reinforce, JobKind.Build, JobKind.Claim };
+        private JobKind[] _jobPriorityOrder = { JobKind.Dig, JobKind.RepairRoom, JobKind.Reinforce, JobKind.Build, JobKind.Claim };
 
         // Gates only the Dig case in TryClaimFromKind — implings already
         // mid-dig keep going, and Reinforce/Build/Claim are unaffected, so
@@ -121,6 +130,7 @@ namespace KeepersDomain.Grid
             _grid.BuildRequested += OnBuildRequested;
             _grid.BuildCanceled += OnBuildCanceled;
             _grid.FloorNeedsClaim += OnFloorNeedsClaim;
+            _grid.RoomDamaged += OnRoomDamaged;
         }
 
         public void SetJobPriorityOrder(params JobKind[] order)
@@ -278,6 +288,19 @@ namespace KeepersDomain.Grid
             }
         }
 
+        /// DungeonGrid.RoomDamaged fires on every surviving hit to a room
+        /// tile, not just the first — already-tracked tiles are just left
+        /// alone (their Hp keeps dropping on the grid regardless; the next
+        /// repair job picks up wherever it ends up).
+        private void OnRoomDamaged(Vector2Int coord)
+        {
+            if (!_repairJobs.ContainsKey(coord))
+            {
+                _repairJobs[coord] = false;
+                GameplayLog.Write($"Repair job queued: {Coord(coord)}");
+            }
+        }
+
         /// Whether a tap could still cancel this tile's queue — true while it's
         /// waiting out its grace period, or open but nobody has claimed it yet.
         public bool CanCancel(Vector2Int coord)
@@ -377,7 +400,7 @@ namespace KeepersDomain.Grid
         {
             PromoteReadyPendingJobs();
 
-            var requesterDistances = _grid.GetReachableFloorDistances(_grid.WorldToGrid(requester.Position));
+            var requesterDistances = _grid.GetReachableFloorDistances(_grid.WorldToGrid(requester.Position), isImp: true);
             var otherWorkerDistances = GetOtherAvailableWorkersDistances(requester);
 
             foreach (var candidateKind in _jobPriorityOrder)
@@ -416,6 +439,8 @@ namespace KeepersDomain.Grid
                     return TryClaimReinforceJob(requester, requesterDistances, otherWorkerDistances, out coord, out slotIndex, out approachCoord);
                 case JobKind.Build:
                     return TryClaimBuildJob(requester, requesterDistances, otherWorkerDistances, out coord, out slotIndex, out approachCoord);
+                case JobKind.RepairRoom:
+                    return TryClaimRepairJob(requester, requesterDistances, otherWorkerDistances, out coord, out slotIndex, out approachCoord);
                 default:
                     return TryClaimClaimJob(requester, requesterDistances, otherWorkerDistances, out coord, out slotIndex, out approachCoord);
             }
@@ -556,6 +581,67 @@ namespace KeepersDomain.Grid
             return true;
         }
 
+        /// Same shape as TryClaimClaimJob (single-worker, automatic, no
+        /// grace period) but candidacy is IsStillRepairable rather than
+        /// BordersClaimedTile — a damaged room tile is always a valid
+        /// target regardless of what borders it, there's no "grows outward
+        /// from the frontier" rule for repair the way there is for claiming.
+        private bool TryClaimRepairJob(IJobWorker requester, Dictionary<Vector2Int, int> requesterDistances,
+            List<(IJobWorker Worker, Dictionary<Vector2Int, int> Distances)> otherWorkerDistances,
+            out Vector2Int coord, out int slotIndex, out Vector2Int approachCoord)
+        {
+            _repairScratch.Clear();
+            foreach (var entry in _repairJobs)
+            {
+                if (!entry.Value && IsStillRepairable(entry.Key))
+                {
+                    _repairScratch.Add(entry.Key);
+                }
+            }
+
+            var found = false;
+            var bestTravelDistance = int.MaxValue;
+            var bestCoord = default(Vector2Int);
+            var bestApproach = default(Vector2Int);
+
+            foreach (var candidate in _repairScratch)
+            {
+                if (!TryGetTravelDistanceToRepairTarget(candidate, requesterDistances, out var approach, out var travelDistance))
+                {
+                    continue;
+                }
+
+                if (HasEnoughCloserWorkersToFillSlots(candidate, otherWorkerDistances, travelDistance, remainingSlots: 1, isRepairTarget: true))
+                {
+                    continue;
+                }
+
+                if (travelDistance < bestTravelDistance)
+                {
+                    bestTravelDistance = travelDistance;
+                    bestCoord = candidate;
+                    bestApproach = approach;
+                    found = true;
+                }
+            }
+
+            if (!found)
+            {
+                coord = default;
+                slotIndex = -1;
+                approachCoord = default;
+                return false;
+            }
+
+            coord = bestCoord;
+            approachCoord = bestApproach;
+            slotIndex = 0;
+            _repairJobs[coord] = true;
+
+            GameplayLog.Write($"Repair job claimed: {Coord(coord)} by {requester.Name} (travel dist {bestTravelDistance}, approach {Coord(approachCoord)})");
+            return true;
+        }
+
         /// Same nearest-by-travel-distance idea as TryClaimDigJob (a Rock
         /// tile, approached from an adjacent floor tile) but single-worker
         /// like TryClaimClaimJob — reinforcing is a timed action, not a
@@ -682,7 +768,7 @@ namespace KeepersDomain.Grid
                     continue;
                 }
 
-                result.Add((worker, _grid.GetReachableFloorDistances(_grid.WorldToGrid(worker.Position))));
+                result.Add((worker, _grid.GetReachableFloorDistances(_grid.WorldToGrid(worker.Position), isImp: true)));
             }
 
             return result;
@@ -694,7 +780,13 @@ namespace KeepersDomain.Grid
         /// slot first. Without this, "nearest imp wins" degenerated into
         /// "only the single nearest imp may ever take this job," starving
         /// the second slot the two-workers-per-tile feature relies on.
-        private bool HasEnoughCloserWorkersToFillSlots(Vector2Int jobCoord, List<(IJobWorker Worker, Dictionary<Vector2Int, int> Distances)> otherWorkerDistances, int requesterTravelDistance, int remainingSlots)
+        /// isRepairTarget picks the same stand-on-tile-aware distance rule
+        /// TryClaimRepairJob used for requesterTravelDistance itself — using
+        /// the plain neighbor-only rule here instead would systematically
+        /// (by exactly 1, the standing-on-it-vs-beside-it difference) make
+        /// other workers look closer than they really are relative to the
+        /// requester, biasing the slot check unfairly against it.
+        private bool HasEnoughCloserWorkersToFillSlots(Vector2Int jobCoord, List<(IJobWorker Worker, Dictionary<Vector2Int, int> Distances)> otherWorkerDistances, int requesterTravelDistance, int remainingSlots, bool isRepairTarget = false)
         {
             if (remainingSlots <= 0)
             {
@@ -705,7 +797,11 @@ namespace KeepersDomain.Grid
 
             foreach (var entry in otherWorkerDistances)
             {
-                if (TryGetTravelDistanceToJob(jobCoord, entry.Distances, out _, out var otherDistance) && otherDistance < requesterTravelDistance)
+                var hasDistance = isRepairTarget
+                    ? TryGetTravelDistanceToRepairTarget(jobCoord, entry.Distances, out _, out var otherDistance)
+                    : TryGetTravelDistanceToJob(jobCoord, entry.Distances, out _, out otherDistance);
+
+                if (hasDistance && otherDistance < requesterTravelDistance)
                 {
                     closerWorkerCount++;
                     if (closerWorkerCount >= remainingSlots)
@@ -716,6 +812,27 @@ namespace KeepersDomain.Grid
             }
 
             return false;
+        }
+
+        /// Unlike every other job's target (Rock, or about-to-be-walled
+        /// Floor), a room tile is normally walkable Floor itself — an
+        /// impling repairing it should stand right on it and jump in place
+        /// ("implings will jump on a tile"), not off to one side the way
+        /// Dig/Reinforce/Build/Claim approach their targets. Prefers
+        /// jobCoord itself when it's directly reachable, only falling back
+        /// to TryGetTravelDistanceToJob's neighbor-approach search for the
+        /// rare case where the room tile itself is blocked to pathfinding
+        /// (e.g. one of Library's bookcase tiles — see LibraryManager).
+        private static bool TryGetTravelDistanceToRepairTarget(Vector2Int jobCoord, Dictionary<Vector2Int, int> distances, out Vector2Int approach, out int travelDistance)
+        {
+            if (distances.TryGetValue(jobCoord, out var directDistance))
+            {
+                approach = jobCoord;
+                travelDistance = directDistance;
+                return true;
+            }
+
+            return TryGetTravelDistanceToJob(jobCoord, distances, out approach, out travelDistance);
         }
 
         private static bool TryGetTravelDistanceToJob(Vector2Int jobCoord, Dictionary<Vector2Int, int> distances, out Vector2Int approach, out int travelDistance)
@@ -799,6 +916,50 @@ namespace KeepersDomain.Grid
         public bool IsClaimJobAssigned(Vector2Int coord)
         {
             return _claimJobs.TryGetValue(coord, out var isAssigned) && isAssigned;
+        }
+
+        /// Whether coord is still a room tile actually worth repairing —
+        /// mirrors IsStillReinforceable's role for reinforce jobs. A tile
+        /// that's since been fully repaired some other way, or lost its
+        /// room entirely (sold, or destroyed by further damage), is no
+        /// longer a valid target.
+        public bool IsStillRepairable(Vector2Int coord)
+        {
+            var tile = _grid.GetTile(coord);
+            return tile.HasRoom && tile.Hp < TileState.RoomMaxHp;
+        }
+
+        /// Applies one repair "jump" — DungeonGrid.ApplyRoomRepair does the
+        /// actual HP math; this just also drops the job from tracking once
+        /// the tile is back to full HP, mirroring ApplyReinforce/ApplyBuild's
+        /// role for their own job kinds. Returns whether the tile is now
+        /// fully repaired, same as ApplyRoomRepair itself, so the caller
+        /// (ImplingAgent) knows whether to keep jumping.
+        public bool ApplyRepairJump(Vector2Int coord, int amount)
+        {
+            var isFullyRepaired = _grid.ApplyRoomRepair(coord, amount);
+            if (isFullyRepaired)
+            {
+                _repairJobs.Remove(coord);
+                GameplayLog.Write($"Repair job completed: {Coord(coord)}");
+            }
+
+            return isFullyRepaired;
+        }
+
+        /// Snapshot of every tracked repair job (open or already assigned),
+        /// sorted by coordinate — for debug/inspection UI only, same shape
+        /// as GetClaimJobs.
+        public List<Vector2Int> GetRepairJobs()
+        {
+            var coords = new List<Vector2Int>(_repairJobs.Keys);
+            coords.Sort((a, b) => a.x != b.x ? a.x.CompareTo(b.x) : a.y.CompareTo(b.y));
+            return coords;
+        }
+
+        public bool IsRepairJobAssigned(Vector2Int coord)
+        {
+            return _repairJobs.TryGetValue(coord, out var isAssigned) && isAssigned;
         }
 
         /// Whether coord is still an un-reinforced Rock tile with its

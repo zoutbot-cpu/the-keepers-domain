@@ -159,6 +159,14 @@ namespace KeepersDomain.Monsters
         private readonly List<Vector3> _waypoints = new List<Vector3>();
         private int _waypointIndex;
 
+        // The goal last handed to PlanPathTo — cached so
+        // ReplanPathFromCurrentPosition can re-run the exact same call
+        // after this Gremlin's position changes out from under it (see
+        // MinionGrabController), without needing to know which task kind
+        // that goal belonged to.
+        private Vector2Int _lastGoalCoord;
+        private Vector3 _lastGoalWorldPos;
+
         private void Awake()
         {
             Id = _nextId++;
@@ -183,7 +191,7 @@ namespace KeepersDomain.Monsters
         {
             _creature.Tick(Time.deltaTime);
             _hunger.Tick(Time.deltaTime);
-            _happiness.Tick(Time.deltaTime, _hunger.IsHungry);
+            _happiness.Tick(Time.deltaTime, _hunger.IsHungry, _task == GremlinTask.Training);
             if (_pay.Tick(Time.deltaTime))
             {
                 TryGetPaid();
@@ -199,15 +207,17 @@ namespace KeepersDomain.Monsters
 
         /// Payday — draws this Gremlin's wage (see Pay.WageFor) straight
         /// out of the Treasury, no walking/task involved (unlike eating,
-        /// which needs a Bacon Beacon trip). Going unpaid marks it unhappy
-        /// (Pay.IsUnhappy) and now also actually dents Happiness (see
-        /// Happiness.ApplyUnpaidPenalty), unlike before.
+        /// which needs a Bacon Beacon trip). A successful payment now also
+        /// bumps Happiness (Happiness.ApplyPaidBonus); going unpaid marks it
+        /// unhappy (Pay.IsUnhappy) and dents Happiness instead
+        /// (Happiness.ApplyUnpaidPenalty).
         private void TryGetPaid()
         {
             var wage = Pay.WageFor(_creature.Level);
             if (_treasuryManager != null && _treasuryManager.TrySpendGold(wage))
             {
                 _pay.MarkPaid();
+                _happiness.ApplyPaidBonus();
                 GameplayLog.Write($"{Name} was paid {wage} gold (Lv{_creature.Level})");
             }
             else
@@ -826,12 +836,47 @@ namespace KeepersDomain.Monsters
             _task = newTask;
         }
 
+        /// Re-plans this Gremlin's route to whatever it was last walking
+        /// toward, from wherever it is right now — called by
+        /// MinionGrabController after the player's Grab hand drops it
+        /// somewhere else mid-walk, so it heads straight for its actual
+        /// objective instead of resuming stale waypoints computed from the
+        /// tile it used to stand on (which could path straight through a
+        /// wall placed/discovered in the meantime). No-ops if it wasn't
+        /// actually walking anywhere when grabbed. Falls back to Idle if
+        /// the objective just isn't reachable any more from the new spot —
+        /// EvaluateAndAct re-derives a fresh objective from there next
+        /// frame the same way it already does after any other task finishes.
+        public void ReplanPathFromCurrentPosition()
+        {
+            if (!IsMovingTask(_task))
+            {
+                return;
+            }
+
+            if (PlanPathTo(_lastGoalCoord, _lastGoalWorldPos))
+            {
+                return;
+            }
+
+            SetTask(GremlinTask.Idle);
+        }
+
+        private static bool IsMovingTask(GremlinTask task)
+        {
+            return task is GremlinTask.MovingToLairSpot or GremlinTask.MovingToFood or GremlinTask.MovingToTraining
+                or GremlinTask.MovingToRoam or GremlinTask.MovingToAttackTarget or GremlinTask.MovingToPortal;
+        }
+
         // Same A*-planned-route movement ImplingAgent uses (see its own
         // PlanPathTo/MoveAlongPathThen for the full rationale) — duplicated
         // here rather than shared, matching how GremlinSpawner/WarlockSpawner
         // are already duplicated rather than sharing a base.
         private bool PlanPathTo(Vector2Int goalCoord, Vector3 finalWorldPos)
         {
+            _lastGoalCoord = goalCoord;
+            _lastGoalWorldPos = finalWorldPos;
+
             var startCoord = _grid.WorldToGrid(transform.position);
             var found = AStarPathfinder.TryFindPath(_grid, startCoord, goalCoord, _gridPathBuffer);
 

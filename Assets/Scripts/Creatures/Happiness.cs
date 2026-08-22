@@ -1,13 +1,14 @@
 namespace KeepersDomain.Creatures
 {
-    /// Non-Imp minions only — Imps don't have moods. Driven entirely by
-    /// Hunger and Pay (the two "problem" states that already exist) rather
-    /// than its own independent source: decays while hungry, recovers
-    /// (capped at StartingValue — nothing currently pushes it higher, so
-    /// Enjoying/Ecstatic aren't reachable yet) while not, and takes a
-    /// one-time hit every payday it goes unpaid. See
-    /// GremlinAgent/WarlockAgent's own Tick/TryGetPaid for where those get
-    /// wired in.
+    /// Non-Imp minions only — Imps don't have moods. Driven by Hunger, Pay,
+    /// and productive work: decays while hungry, recovers (capped at
+    /// StartingValue) while not, gains a flat bonus on a successful payday,
+    /// takes a one-time hit on a missed one, and trickles up further (past
+    /// StartingValue, capped at PreferredRoomHappinessCap) while doing a
+    /// job in the creature's preferred room — Training Room for Gremlin,
+    /// Library for Warlock (its actual first-choice room; Training Room is
+    /// only Warlock's fallback and doesn't count). See GremlinAgent/
+    /// WarlockAgent's own Tick/TryGetPaid for where those get wired in.
     public enum HappinessTier
     {
         Ecstatic,
@@ -24,28 +25,53 @@ namespace KeepersDomain.Creatures
         public const float Max = 100f;
         public const float StartingValue = 60f;
 
+        /// Ceiling for the preferred-room-job trickle (see Tick) — separate
+        /// from StartingValue since that's still the ceiling for plain
+        /// not-hungry recovery. Ecstatic (90+) stays unreachable; Enjoying
+        /// Themselves (75+) is now reachable through sustained productive
+        /// work.
+        public const float PreferredRoomHappinessCap = 85f;
+
         // All placeholder tuning, not balanced — see design-doc.md's
         // Happiness section.
-        private const float HungryDecayPerSecond = 30f / 600f; // -30 over 10 min while hungry
-        private const float RecoveryPerSecond = 20f / 600f;    // +20 over 10 min while not hungry, capped at StartingValue
-        private const float UnpaidPenalty = 15f;               // one-time hit per missed payday
+        private const float HungryDecayPerSecond = 5f / 60f;         // -5 per minute while hungry
+        private const float RecoveryPerSecond = 20f / 600f;          // +20 over 10 min while not hungry, capped at StartingValue
+        private const float PreferredRoomRecoveryPerSecond = 1f / 60f; // +1 per minute doing a job in the preferred room, capped at PreferredRoomHappinessCap
+        private const float UnpaidPenalty = 15f;                     // one-time hit per missed payday
+        private const float PaidBonus = 5f;                          // one-time bump per successful payday
 
         public float Value { get; private set; } = StartingValue;
         public HappinessTier Tier => GetTier(Value);
 
-        /// isHungry drives the direction (decay vs. recovery); Pay's own
-        /// missed-payday hit is applied separately via ApplyUnpaidPenalty,
-        /// since payday is a discrete event, not a per-frame state.
-        public void Tick(float deltaTime, bool isHungry)
+        /// isHungry drives the base decay/recovery direction; isDoingPreferredRoomJob
+        /// layers an additional trickle on top (only when raising, and only past
+        /// wherever the base recovery already capped out, since it's stacked as
+        /// its own step below) whenever a job is actively bringing the creature
+        /// into its preferred room's productive state (Training for Gremlin,
+        /// Researching for Warlock — not Warlock's Training fallback). Pay's own
+        /// paid/missed-payday hits are applied separately via
+        /// ApplyPaidBonus/ApplyUnpaidPenalty, since payday is a discrete event,
+        /// not a per-frame state.
+        public void Tick(float deltaTime, bool isHungry, bool isDoingPreferredRoomJob)
         {
             Value = isHungry
                 ? UnityEngine.Mathf.Max(0f, Value - HungryDecayPerSecond * deltaTime)
                 : UnityEngine.Mathf.Min(StartingValue, Value + RecoveryPerSecond * deltaTime);
+
+            if (isDoingPreferredRoomJob)
+            {
+                Value = UnityEngine.Mathf.Min(PreferredRoomHappinessCap, Value + PreferredRoomRecoveryPerSecond * deltaTime);
+            }
         }
 
         public void ApplyUnpaidPenalty()
         {
             Value = UnityEngine.Mathf.Max(0f, Value - UnpaidPenalty);
+        }
+
+        public void ApplyPaidBonus()
+        {
+            Value = UnityEngine.Mathf.Min(Max, Value + PaidBonus);
         }
 
         public static HappinessTier GetTier(float value)

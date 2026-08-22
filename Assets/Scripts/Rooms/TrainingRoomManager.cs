@@ -474,6 +474,17 @@ namespace KeepersDomain.Rooms
             return true;
         }
 
+        /// Whether coord belongs to any placed Training Room — read by
+        /// MinionGrabController to detect a "throw a creature onto the
+        /// Training Room" drop (see its own DropAt), scoping
+        /// DungeonGrid's generic per-tile HasRoom/RoomId down to this one
+        /// room type specifically.
+        public bool IsTrainingRoomTile(Vector2Int coord)
+        {
+            var tile = _grid.GetTile(coord);
+            return tile.HasRoom && _roomTiles.ContainsKey(tile.RoomId);
+        }
+
         public void UpdatePlacementPreview(Vector2Int startCoord, Vector2Int endCoord)
         {
             ClearPlacementPreview();

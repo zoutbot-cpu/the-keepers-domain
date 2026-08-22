@@ -17,6 +17,7 @@ namespace KeepersDomain.Implings
         Reinforcing,
         Building,
         Mining,
+        RepairingRoom,
         MovingToDeposit,
         Depositing,
         MovingToSlimePickup,
@@ -124,6 +125,19 @@ namespace KeepersDomain.Implings
         [SerializeField] private float _slimePickupDuration = 1f;
         [SerializeField] private float _sameTileStandOffset = 0.18f;
 
+        // Room tile repair: "implings will jump on a tile, leaving magical
+        // impling sweat that fixes the tile" — each landed jump restores
+        // _roomRepairPerJump HP (see TickRepairingRoom/BuilderJobBoard.
+        // ApplyRepairJump). Jump cadence is stat-driven (JumpInterval =
+        // 1/Movespeed), the same "1/stat" shape MineHitInterval uses for
+        // Attackspeed, rather than a flat timer — a faster impling jumps
+        // (and so repairs) faster.
+        [SerializeField] private int _roomRepairPerJump = 5;
+        [SerializeField] private float _jumpBounceHeight = 0.25f;
+        [SerializeField] private Color _sweatColor = new Color(0.55f, 0.85f, 0.95f);
+        [SerializeField] private float _sweatDropLifetime = 0.35f;
+        [SerializeField] private float _sweatDropScale = 0.12f;
+
         private BuilderJobBoard _jobBoard;
         private DungeonGrid _grid;
         private TreasuryManager _treasuryManager;
@@ -146,10 +160,20 @@ namespace KeepersDomain.Implings
         private float _buildTimer;
         private float _depositTimer;
         private float _slimePickupTimer;
+        private float _jumpTimer;
+        private float _repairStandY;
 
         private readonly List<Vector2Int> _gridPathBuffer = new List<Vector2Int>();
         private readonly List<Vector3> _waypoints = new List<Vector3>();
         private int _waypointIndex;
+
+        // The goal last handed to PlanPathTo — cached so
+        // ReplanPathFromCurrentPosition can re-run the exact same call
+        // after this impling's position changes out from under it (see
+        // MinionGrabController), without needing to know which task kind
+        // that goal belonged to.
+        private Vector2Int _lastGoalCoord;
+        private Vector3 _lastGoalWorldPos;
 
         private void Awake()
         {
@@ -186,8 +210,58 @@ namespace KeepersDomain.Implings
             _lairPosition = lairPosition;
         }
 
+        /// Re-plans this impling's route to whatever it was last walking
+        /// toward, from wherever it is right now — called by
+        /// MinionGrabController after the player's Grab hand drops it
+        /// somewhere else mid-walk, so it heads straight for its actual
+        /// objective instead of resuming stale waypoints computed from the
+        /// tile it used to stand on (which could path straight through a
+        /// wall placed/discovered in the meantime). No-ops if it wasn't
+        /// actually walking anywhere when grabbed. Falls back to
+        /// SeekingJob — releasing the claimed job first, for
+        /// MovingToJob — if the objective just isn't reachable any more
+        /// from the new spot, same "give up and let TrySeekJob figure out
+        /// what's next" fallback every other failed-plan call site in this
+        /// class already uses.
+        public void ReplanPathFromCurrentPosition()
+        {
+            if (!IsMovingState(_state))
+            {
+                return;
+            }
+
+            if (PlanPathTo(_lastGoalCoord, _lastGoalWorldPos))
+            {
+                return;
+            }
+
+            if (_state == ImplingState.MovingToJob)
+            {
+                _jobBoard.ReleaseJob(_currentJobCoord);
+            }
+
+            SetState(ImplingState.SeekingJob);
+        }
+
+        private static bool IsMovingState(ImplingState state)
+        {
+            return state is ImplingState.MovingToJob or ImplingState.MovingToDeposit
+                or ImplingState.MovingToSlimePickup or ImplingState.ReturningToLair;
+        }
+
         private void Update()
         {
+            // _creature is always set in Awake, which Unity guarantees
+            // runs before this — null here means this instance somehow
+            // never got a clean Awake/Initialize (e.g. a leftover from a
+            // scene teardown mid-transition). Rather than throwing every
+            // frame forever, just clean it up.
+            if (_creature == null)
+            {
+                Destroy(gameObject);
+                return;
+            }
+
             _creature.Tick(Time.deltaTime);
 
             switch (_state)
@@ -212,6 +286,9 @@ namespace KeepersDomain.Implings
                     break;
                 case ImplingState.Mining:
                     TickMining();
+                    break;
+                case ImplingState.RepairingRoom:
+                    TickRepairingRoom();
                     break;
                 case ImplingState.MovingToDeposit:
                     MoveAlongPathThen(StartDepositing);
@@ -498,8 +575,11 @@ namespace KeepersDomain.Implings
         /// destination and getting there.
         private bool PlanPathTo(Vector2Int goalCoord, Vector3 finalWorldPos)
         {
+            _lastGoalCoord = goalCoord;
+            _lastGoalWorldPos = finalWorldPos;
+
             var startCoord = _grid.WorldToGrid(transform.position);
-            var found = AStarPathfinder.TryFindPath(_grid, startCoord, goalCoord, _gridPathBuffer);
+            var found = AStarPathfinder.TryFindPath(_grid, startCoord, goalCoord, _gridPathBuffer, isImp: true);
 
             _waypoints.Clear();
             _waypointIndex = 0;
@@ -566,6 +646,9 @@ namespace KeepersDomain.Implings
                 case JobKind.Build:
                     StartBuilding();
                     break;
+                case JobKind.RepairRoom:
+                    StartRepairingRoom();
+                    break;
                 default:
                     StartClaiming();
                     break;
@@ -602,6 +685,13 @@ namespace KeepersDomain.Implings
             _hitTimer = 0f;
         }
 
+        private void StartRepairingRoom()
+        {
+            SetState(ImplingState.RepairingRoom);
+            _jumpTimer = 0f;
+            _repairStandY = transform.position.y;
+        }
+
         private void StartDepositing()
         {
             SetState(ImplingState.Depositing);
@@ -612,6 +702,11 @@ namespace KeepersDomain.Implings
         /// Attackspeed/Strength stats. See design-doc.md's Creatures section.
         private float MineHitInterval => 1f / _creature.Stats.Attackspeed;
         private int MineHitDamage => Mathf.RoundToInt(_creature.Stats.Strength);
+
+        /// Seconds per repair jump — "jump speed is based on movementspeed,"
+        /// same 1/stat shape MineHitInterval uses for Attackspeed. A faster
+        /// impling bounces (and so repairs) faster.
+        private float JumpInterval => 1f / _creature.Stats.Movespeed;
 
         private void TickDigging()
         {
@@ -732,6 +827,83 @@ namespace KeepersDomain.Implings
                 _jobBoard.ReleaseJob(_currentJobCoord);
                 SetState(ImplingState.SeekingJob);
             }
+        }
+
+        /// "Implings will jump on a tile, leaving magical impling sweat
+        /// that fixes the tile" — every landed jump (cadence: JumpInterval,
+        /// stat-driven) restores _roomRepairPerJump HP via
+        /// BuilderJobBoard.ApplyRepairJump and leaves a brief sweat-drop
+        /// visual, repeating until the tile's back to full HP or the job
+        /// stops being valid (e.g. the room was sold out from under it).
+        /// The bounce itself is purely cosmetic — see UpdateJumpBounce —
+        /// applied every frame, not just on the landing tick.
+        private void TickRepairingRoom()
+        {
+            UpdateJumpBounce();
+
+            if (!_jobBoard.IsStillRepairable(_currentJobCoord))
+            {
+                EndRepairingRoom();
+                return;
+            }
+
+            _jumpTimer += Time.deltaTime;
+            if (_jumpTimer < JumpInterval)
+            {
+                return;
+            }
+
+            _jumpTimer -= JumpInterval;
+            SpawnSweatDrop(_currentJobCoord);
+            var fullyRepaired = _jobBoard.ApplyRepairJump(_currentJobCoord, _roomRepairPerJump);
+            if (fullyRepaired)
+            {
+                EndRepairingRoom();
+            }
+        }
+
+        /// Leaves RepairingRoom and snaps back to _repairStandY explicitly
+        /// — UpdateJumpBounce's own arc naturally returns near zero at a
+        /// completed jump, but stopping mid-arc (e.g. IsStillRepairable
+        /// turning false between landings) could otherwise leave the
+        /// impling visibly floating at whatever offset it was interrupted at.
+        private void EndRepairingRoom()
+        {
+            transform.position = new Vector3(transform.position.x, _repairStandY, transform.position.z);
+            SetState(ImplingState.SeekingJob);
+        }
+
+        /// Bounces the impling's own visual up and down in place, one hop
+        /// per JumpInterval — _jumpTimer counts 0 up to JumpInterval each
+        /// cycle, so sin(pi * t/interval) traces a smooth 0->1->0 arc that
+        /// lands exactly on the beat TickRepairingRoom applies the actual
+        /// repair on. Offsets from _repairStandY (captured once in
+        /// StartRepairingRoom) rather than the live transform.position.y,
+        /// since that already includes last frame's own bounce offset —
+        /// reading it back would compound instead of oscillate.
+        private void UpdateJumpBounce()
+        {
+            var phase = Mathf.PI * (_jumpTimer / JumpInterval);
+            var bounce = _jumpBounceHeight * Mathf.Abs(Mathf.Sin(phase));
+            transform.position = new Vector3(transform.position.x, _repairStandY + bounce, transform.position.z);
+        }
+
+        /// One small glowing droplet at floor level on coord, gone again
+        /// almost immediately — "magical impling sweat that fixes the
+        /// tile," a cheap placeholder visual same as every other primitive-
+        /// built effect in this prototype, not parented to the impling
+        /// since it's meant to be left behind on the tile rather than
+        /// carried along.
+        private void SpawnSweatDrop(Vector2Int coord)
+        {
+            var worldPos = _grid.GridToWorld(coord);
+            var drop = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            drop.name = $"ImplingSweat_{coord.x}_{coord.y}";
+            drop.transform.position = new Vector3(worldPos.x, _grid.FloorSurfaceY, worldPos.z);
+            drop.transform.localScale = Vector3.one * _sweatDropScale;
+            drop.GetComponent<Renderer>().material.color = _sweatColor;
+            Destroy(drop.GetComponent<Collider>());
+            Destroy(drop, _sweatDropLifetime);
         }
 
         private void TickDepositing()

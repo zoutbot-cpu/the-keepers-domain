@@ -334,7 +334,9 @@ namespace KeepersDomain.Rooms
         /// fromCoord — same shape as TreasuryManager.TryFindNearestTileWithRoom.
         public bool TryFindReadyHatchery(Vector2Int fromCoord, out Vector2Int structureCoord)
         {
-            var distances = _grid.GetReachableFloorDistances(fromCoord);
+            // Impling-only (hauling) — Imps need a Bridge to cross
+            // Water/Lava, see DungeonGrid.IsWalkable.
+            var distances = _grid.GetReachableFloorDistances(fromCoord, isImp: true);
             var bestDistance = int.MaxValue;
             structureCoord = default;
             var found = false;

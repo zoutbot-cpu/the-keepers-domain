@@ -17,17 +17,52 @@ namespace KeepersDomain.Grid
         [SerializeField] private Color _rockQueuedColor = new Color(0.55f, 0.5f, 0.2f);
         [SerializeField] private Color _rockQueuedReinforceColor = new Color(0.2f, 0.35f, 0.55f);
         [SerializeField] private Color _rockReinforcedColor = new Color(0.16f, 0.14f, 0.13f);
+
+        /// Bedrock — darker than a reinforced wall, per the brief.
+        [SerializeField] private Color _bedrockColor = new Color(0.07f, 0.06f, 0.055f);
+
         [SerializeField] private Color _rockDamagedColor = new Color(0.25f, 0.12f, 0.1f);
         [SerializeField] private Color _rockUnreachableColor = new Color(0.2f, 0.28f, 0.38f);
         [SerializeField] private Color _floorUnclaimedColor = new Color(0.2f, 0.18f, 0.15f);
         [SerializeField] private Color _floorClaimedColor = new Color(0.25f, 0.4f, 0.25f);
         [SerializeField] private Color _floorQueuedBuildColor = new Color(0.45f, 0.32f, 0.18f);
         [SerializeField] private Color _roomColor = new Color(0.55f, 0.15f, 0.5f);
+        [SerializeField] private Color _roomDamagedColor = new Color(0.2f, 0.05f, 0.18f);
         [SerializeField] private Color _goldWallColor = new Color(0.5f, 0.42f, 0.2f);
         [SerializeField] private Color _regeneratingGoldWallColor = new Color(0.55f, 0.45f, 0.15f);
         [SerializeField] private Color _manaCrystalWallColor = new Color(0.15f, 0.5f, 0.55f);
         [SerializeField] private Color _goldNuggetColor = new Color(0.85f, 0.7f, 0.15f);
         [SerializeField] private Color _regeneratingGoldNuggetColor = new Color(0.95f, 0.8f, 0.2f);
+
+        // New terrain tiles (see TileType/SetTerrainFeature) — placed today
+        // by a dev-only Build-menu tool pending a real map generator.
+        [SerializeField] private Color _waterColor = new Color(0.15f, 0.35f, 0.75f);
+        [SerializeField] private Color _lavaColor = new Color(0.8f, 0.3f, 0.1f);
+        [SerializeField] private Color _chasmColor = new Color(0.03f, 0.03f, 0.04f);
+        [SerializeField] private Color _chasmSpikeColor = new Color(0.25f, 0.23f, 0.22f);
+        [SerializeField] private Color _holyGroundColor = new Color(0.92f, 0.92f, 0.88f);
+        [SerializeField] private Color _holyGroundStarColor = new Color(0.85f, 0.7f, 0.15f);
+
+        // "Make it as deep as the Jail" — same one-full-grid-level sink
+        // JailManager's own PitDepth constant uses (DungeonGrid.SetPitDepth
+        // is a render-only offset either way, see its own header).
+        private const float ChasmPitDepth = 1f;
+        private const int ChasmSpikeCount = 4;
+        private const float ChasmSpikeHeight = 0.5f;
+        private const float ChasmSpikeRadius = 0.06f;
+
+        // An 8-pointed star — 4 bars through the tile's center, each
+        // already double-ended (0°/180°, 45°/225°, ...), so 4 bars at
+        // 0/45/90/135 degrees give all 8 points. Same cheap primitives-only
+        // placeholder convention every other decoration in this class uses
+        // (see RebuildWallDecoration's gold nuggets, BuildChasmSpikes).
+        private static readonly float[] HolyGroundStarAngles = { 0f, 45f, 90f, 135f };
+        private const float HolyGroundStarLength = 0.75f;
+        private const float HolyGroundStarThickness = 0.06f;
+
+        // Sits proud of the floor tile beneath it (like Jail's grate
+        // cross), so it never coplanar-z-fights with it.
+        private const float HolyGroundStarReliefOffset = 0.02f;
 
         // "add some gold in a random pattern" — RegeneratingGoldWall gets
         // more nuggets than plain GoldWall so it visually reads as the
@@ -36,7 +71,35 @@ namespace KeepersDomain.Grid
         private const int RegeneratingGoldNuggetCount = 10;
 
         private TileState[,] _tiles;
+
+        // Stable per-tile anchor, positioned once via GridToWorld and never
+        // moved again — decorations (RebuildWallDecoration, below) parent
+        // under this. The tile's actual geometry (flat colored cube for
+        // Floor/Water/..., or an autotiled KayKit wall prefab for Rock —
+        // see WallAutotiler/WallMeshCatalog) lives in _visualChildren as a
+        // single swappable child, so geometry can change (dug out, wall
+        // shape changes as neighbors change) without disturbing decorations
+        // parented alongside it.
         private GameObject[,] _visuals;
+        private GameObject[,] _visualChildren;
+
+        // Parallel to _visualChildren — null means that tile's current
+        // child is the plain flat-colored cube; a value means it's an
+        // instantiated wall prefab of that shape. Lets RefreshVisual tell
+        // whether it needs to destroy/recreate the child (shape actually
+        // changed) or just re-tint the existing one (e.g. a damage tick),
+        // since RefreshVisual fires on every single dig-damage hit.
+        private WallShape?[,] _cachedWallShape;
+
+        // Loaded once from Resources (DungeonGrid is built entirely
+        // procedurally by GameBootstrap — there's no scene object to
+        // hand-wire this reference onto). Null is a valid, supported state:
+        // Rock tiles just fall back to the plain colored cube every other
+        // tile type already uses, rather than throwing.
+        private WallMeshCatalog _wallCatalog;
+
+        private static MaterialPropertyBlock _sharedPropertyBlock;
+        private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
 
         // Parallel to _visuals — small decorative child objects (currently
         // just gold nuggets) parented to a tile's cube, built once when a
@@ -48,6 +111,13 @@ namespace KeepersDomain.Grid
         public int Width => _width;
         public int Height => _height;
         public float CellSize => _cellSize;
+
+        /// Per-player colors used to tint a Claimed tile's visual by its
+        /// owner (see RefreshVisual/TileState.OwnerId) — set once by the
+        /// level designer's session (LevelDesignerSession.
+        /// RefreshGridOwnerColors) and left null during ordinary gameplay,
+        /// so BuildWorld's tiles render exactly as before.
+        public Color[] EditorOwnerColors { get; set; }
 
         /// World-space Y of a dug (Floor) tile's top surface. Floor tiles sit
         /// with their center at y=-0.5 and a height of 0.15 (see RefreshVisual)
@@ -70,6 +140,13 @@ namespace KeepersDomain.Grid
         /// the portal. BuilderJobBoard listens for this to queue a claim job.
         public event Action<Vector2Int> FloorNeedsClaim;
 
+        /// Fired whenever a room tile takes damage and survives (see
+        /// ApplyRoomDamage) — not fired on the hit that destroys it, since
+        /// at that point the whole room is about to be torn down rather
+        /// than needing a repair job. BuilderJobBoard listens for this to
+        /// queue a repair job, the same way it listens to FloorNeedsClaim.
+        public event Action<Vector2Int> RoomDamaged;
+
         public void Initialize(int width, int height, float cellSize)
         {
             _width = width;
@@ -78,7 +155,10 @@ namespace KeepersDomain.Grid
 
             _tiles = new TileState[_width, _height];
             _visuals = new GameObject[_width, _height];
+            _visualChildren = new GameObject[_width, _height];
+            _cachedWallShape = new WallShape?[_width, _height];
             _wallDecorations = new GameObject[_width, _height];
+            _wallCatalog = Resources.Load<WallMeshCatalog>("Dungeon/WallMeshCatalog");
 
             for (int x = 0; x < _width; x++)
             {
@@ -113,7 +193,7 @@ namespace KeepersDomain.Grid
                     _tiles[coord.x, coord.y].Type = TileType.Floor;
                     _tiles[coord.x, coord.y].Ownership = TileOwnership.Claimed;
                     _tiles[coord.x, coord.y].IsBuildable = isBuildable;
-                    RefreshVisual(coord);
+                    RefreshVisualAndWallNeighbors(coord);
                 }
             }
         }
@@ -138,7 +218,7 @@ namespace KeepersDomain.Grid
                     _tiles[coord.x, coord.y].Type = TileType.Floor;
                     _tiles[coord.x, coord.y].Ownership = TileOwnership.Claimed;
                     _tiles[coord.x, coord.y].IsBuildable = isBuildable;
-                    RefreshVisual(coord);
+                    RefreshVisualAndWallNeighbors(coord);
                 }
             }
         }
@@ -167,13 +247,93 @@ namespace KeepersDomain.Grid
             RebuildWallDecoration(coord, wallResourceType);
         }
 
+        /// Dev-only placement (see TileInteractionController's
+        /// PlaceBedrock BuildMode) — marks an as-yet-undug, otherwise plain
+        /// Rock tile as permanently unminable (RequestDig/RequestReinforce
+        /// both refuse a Bedrock tile outright). No-ops on anything that
+        /// isn't a plain, unqueued Rock tile — same guard shape as every
+        /// other "assign a wall variant" method here, so a tile can never
+        /// end up Bedrock and reinforced/resource-veined/queued at once.
+        public void SetBedrock(Vector2Int coord)
+        {
+            if (!InBounds(coord))
+            {
+                return;
+            }
+
+            ref var tile = ref _tiles[coord.x, coord.y];
+            if (tile.Type != TileType.Rock || tile.IsQueuedForDig || tile.IsQueuedForReinforce
+                || tile.IsReinforced || tile.WallResourceType != WallResourceType.None)
+            {
+                return;
+            }
+
+            tile.IsBedrock = true;
+            tile.Hp = tile.MaxHp;
+            ClearWallDecoration(coord);
+            RefreshVisual(coord);
+        }
+
+        /// Dev-only terrain placement (see TileInteractionController's
+        /// PlaceWater/PlaceLava/PlaceChasm BuildModes) — converts a bare
+        /// Rock tile directly into Water/Lava/Chasm, standing in for the
+        /// real map generator that doesn't exist yet. No-ops on anything
+        /// that isn't currently Rock, same guard SetWallResourceType uses.
+        /// Chasm additionally sinks its floor exactly like a Jail's pit
+        /// (see ChasmPitDepth) and grows a few spike decorations.
+        public void SetTerrainFeature(Vector2Int coord, TileType terrainType)
+        {
+            if (!InBounds(coord))
+            {
+                return;
+            }
+
+            ref var tile = ref _tiles[coord.x, coord.y];
+            if (tile.Type != TileType.Rock)
+            {
+                return;
+            }
+
+            tile.Type = terrainType;
+            tile.Ownership = TileOwnership.Unclaimed;
+            tile.IsBuildable = false;
+            tile.WallResourceType = WallResourceType.None;
+            tile.Hp = 0;
+            ClearWallDecoration(coord);
+
+            RefreshVisualAndWallNeighbors(coord);
+
+            if (terrainType == TileType.Chasm)
+            {
+                SetPitDepth(coord, ChasmPitDepth);
+                BuildChasmSpikes(coord);
+            }
+            else if (terrainType == TileType.HolyGround)
+            {
+                BuildHolyGroundStar(coord);
+            }
+        }
+
         public bool InBounds(Vector2Int coord)
         {
             return coord.x >= 0 && coord.x < _width && coord.y >= 0 && coord.y < _height;
         }
 
+        /// Unlike every other accessor in this class, callers of GetTile
+        /// span both this component's own tools and every creature agent's
+        /// own Update loop (SlimeAgent, ImplingAgent, ...) — a single bad
+        /// coord or a grid that's mid-teardown (Object.Destroy is deferred
+        /// to end of frame, so an agent can still tick once against a
+        /// grid that's pending destruction) would otherwise throw and
+        /// break that agent's Update permanently. Falls back to plain Rock
+        /// (the same value every tile starts as) rather than crashing.
         public TileState GetTile(Vector2Int coord)
         {
+            if (_tiles == null || !InBounds(coord))
+            {
+                return TileState.Rock;
+            }
+
             return _tiles[coord.x, coord.y];
         }
 
@@ -187,9 +347,41 @@ namespace KeepersDomain.Grid
             return new Vector2Int(Mathf.FloorToInt(world.x / _cellSize), Mathf.FloorToInt(world.z / _cellSize));
         }
 
-        public bool IsWalkable(Vector2Int coord)
+        /// isImp narrows this for Imps specifically (see ImplingAgent/
+        /// BuilderJobBoard's own callers) — everyone else gets the default
+        /// false. Floor is walkable by all; Water is walkable by anyone but
+        /// an Imp unless it's been Bridged (TryAssignBridgeRoom); Lava is
+        /// walkable by nobody at all — Imp included — unless Bridged, since
+        /// no creature is fire-resistant yet; Chasm is never walkable, by
+        /// anyone. HolyGround is walkable by everyone, same as Floor — it's
+        /// just never Claimable (see TileType.HolyGround). Rock is never
+        /// walkable either way.
+        public bool IsWalkable(Vector2Int coord, bool isImp = false)
         {
-            return InBounds(coord) && GetTile(coord) is { Type: TileType.Floor, IsBlocked: false };
+            if (!InBounds(coord))
+            {
+                return false;
+            }
+
+            var tile = GetTile(coord);
+            if (tile.IsBlocked)
+            {
+                return false;
+            }
+
+            switch (tile.Type)
+            {
+                case TileType.Floor:
+                case TileType.HolyGround:
+                    return true;
+                case TileType.Water:
+                    return !isImp || tile.HasRoom;
+                case TileType.Lava:
+                    return tile.HasRoom;
+                default:
+                    // Rock, Chasm.
+                    return false;
+            }
         }
 
         /// Marks a Floor tile as off-limits to pathfinding without changing
@@ -247,16 +439,31 @@ namespace KeepersDomain.Grid
         }
 
         /// Whether coord has at least one cardinal neighbor that's already
-        /// Claimed floor. Gates claim jobs so territory only ever grows
-        /// outward from what's already claimed, one ring at a time, instead
-        /// of an impling being able to claim any reachable dug-out tile
-        /// regardless of whether it actually borders the claimed frontier.
+        /// Claimed floor — or a Claimed bridge tile (see TryAssignBridgeRoom;
+        /// a bridged Water/Lava tile is Claimed too, even though it can
+        /// never host an ordinary room — see CanBuildRoomOn's own Floor-only
+        /// type check). Gates claim jobs so territory only ever grows
+        /// outward from what's already claimed, one ring at a time — now
+        /// including outward across a bridge — instead of an impling being
+        /// able to claim any reachable dug-out tile regardless of whether it
+        /// actually borders the claimed frontier.
         public bool BordersClaimedTile(Vector2Int coord)
         {
             foreach (var offset in GridDirections.Cardinal)
             {
                 var neighbor = coord + offset;
-                if (InBounds(neighbor) && GetTile(neighbor) is { Type: TileType.Floor, Ownership: TileOwnership.Claimed })
+                if (!InBounds(neighbor))
+                {
+                    continue;
+                }
+
+                var neighborTile = GetTile(neighbor);
+                if (neighborTile.Ownership != TileOwnership.Claimed)
+                {
+                    continue;
+                }
+
+                if (neighborTile.Type is TileType.Floor or TileType.Water or TileType.Lava)
                 {
                     return true;
                 }
@@ -272,7 +479,7 @@ namespace KeepersDomain.Grid
         /// travel distance instead of misleading-around-walls straight-line
         /// distance). Used both to check whether a dig job has a walkable tile
         /// next to it at all, and how far away that tile actually is to walk to.
-        public Dictionary<Vector2Int, int> GetReachableFloorDistances(Vector2Int fromCoord)
+        public Dictionary<Vector2Int, int> GetReachableFloorDistances(Vector2Int fromCoord, bool isImp = false)
         {
             var distances = new Dictionary<Vector2Int, int>();
             if (!InBounds(fromCoord))
@@ -292,7 +499,7 @@ namespace KeepersDomain.Grid
                 foreach (var offset in GridDirections.Cardinal)
                 {
                     var neighbor = current + offset;
-                    if (distances.ContainsKey(neighbor) || !IsWalkable(neighbor))
+                    if (distances.ContainsKey(neighbor) || !IsWalkable(neighbor, isImp))
                     {
                         continue;
                     }
@@ -328,7 +535,8 @@ namespace KeepersDomain.Grid
         /// Queuing a tile for digging and queuing it for reinforcement are
         /// mutually exclusive — rejects if the other is already queued (or
         /// the tile is already reinforced/not Rock), same no-op-on-invalid
-        /// pattern as the rest of these request methods.
+        /// pattern as the rest of these request methods. Also rejects
+        /// Bedrock outright — "unminable" — see SetBedrock.
         public void RequestDig(Vector2Int coord)
         {
             if (!InBounds(coord))
@@ -337,7 +545,7 @@ namespace KeepersDomain.Grid
             }
 
             ref var tile = ref _tiles[coord.x, coord.y];
-            if (tile.Type != TileType.Rock || tile.IsQueuedForDig || tile.IsQueuedForReinforce)
+            if (tile.Type != TileType.Rock || tile.IsQueuedForDig || tile.IsQueuedForReinforce || tile.IsBedrock)
             {
                 return;
             }
@@ -374,7 +582,8 @@ namespace KeepersDomain.Grid
         /// and a no-op on a tile that's already reinforced, since there's no
         /// repair mechanic yet to make re-reinforcing meaningful. Also
         /// rejects resource walls (WallResourceType != None) — reinforcing
-        /// a gold seam isn't a thing implings do.
+        /// a gold seam isn't a thing implings do — and Bedrock, which is
+        /// already permanently unminable and has nothing to gain from it.
         public void RequestReinforce(Vector2Int coord)
         {
             if (!InBounds(coord))
@@ -383,7 +592,7 @@ namespace KeepersDomain.Grid
             }
 
             ref var tile = ref _tiles[coord.x, coord.y];
-            if (tile.Type != TileType.Rock || tile.IsQueuedForDig || tile.IsQueuedForReinforce || tile.IsReinforced || tile.WallResourceType != WallResourceType.None)
+            if (tile.Type != TileType.Rock || tile.IsQueuedForDig || tile.IsQueuedForReinforce || tile.IsReinforced || tile.WallResourceType != WallResourceType.None || tile.IsBedrock)
             {
                 return;
             }
@@ -548,8 +757,13 @@ namespace KeepersDomain.Grid
             }
 
             ref var tile = ref _tiles[coord.x, coord.y];
-            if (tile.Type != TileType.Rock)
+            if (tile.Type != TileType.Rock || tile.IsBedrock)
             {
+                // Bedrock is never actually queueable (see RequestDig), so
+                // this should never fire in practice — guarded defensively
+                // anyway, same "treat as already done" no-op every other
+                // invalid-target case here follows, rather than silently
+                // applying damage to something meant to be permanent.
                 return true;
             }
 
@@ -623,7 +837,33 @@ namespace KeepersDomain.Grid
             }
 
             RefreshVisual(coord);
+            RoomDamaged?.Invoke(coord);
             return false;
+        }
+
+        /// Restores HP to a damaged room tile (see ApplyRoomDamage) — an
+        /// impling's repair "jump" (see BuilderJobBoard.ApplyRepairJump/
+        /// ImplingAgent's RepairingRoom state). Returns true once the tile
+        /// is back at full RoomMaxHp. A no-op-but-true return on a tile
+        /// that no longer HasRoom (e.g. sold/destroyed since the repair job
+        /// was queued) so the caller's job-completion check doesn't get
+        /// stuck waiting on a room that isn't there anymore.
+        public bool ApplyRoomRepair(Vector2Int coord, int amount)
+        {
+            if (!InBounds(coord))
+            {
+                return true;
+            }
+
+            ref var tile = ref _tiles[coord.x, coord.y];
+            if (!tile.HasRoom)
+            {
+                return true;
+            }
+
+            tile.Hp = Mathf.Min(TileState.RoomMaxHp, tile.Hp + amount);
+            RefreshVisual(coord);
+            return tile.Hp >= TileState.RoomMaxHp;
         }
 
         public void CompleteDig(Vector2Int coord)
@@ -644,7 +884,7 @@ namespace KeepersDomain.Grid
             tile.WallResourceType = WallResourceType.None;
             ClearWallDecoration(coord);
 
-            RefreshVisual(coord);
+            RefreshVisualAndWallNeighbors(coord);
             FloorNeedsClaim?.Invoke(coord);
         }
 
@@ -682,6 +922,191 @@ namespace KeepersDomain.Grid
             return true;
         }
 
+        /// Same shape as TryAssignRoom, but for Bridge (see BridgeManager),
+        /// which sits on Water/Lava instead of ordinary dug Floor — no
+        /// Ownership/Claimed requirement to place one (unlike TryAssignRoom,
+        /// see BridgeManager.CanPlaceBridgeTile's own adjacency rule
+        /// instead). Building the bridge DOES claim its own tile, though —
+        /// "bridges claim the lava tile" — so BordersClaimedTile treats it
+        /// as claimed territory too, letting an impling claim onward past
+        /// it. It still can never host an ordinary room: CanBuildRoomOn
+        /// requires Type == Floor, which a bridged Water/Lava tile never is.
+        public bool TryAssignBridgeRoom(Vector2Int coord, string roomId)
+        {
+            if (!InBounds(coord))
+            {
+                return false;
+            }
+
+            ref var tile = ref _tiles[coord.x, coord.y];
+            if ((tile.Type != TileType.Water && tile.Type != TileType.Lava) || tile.HasRoom)
+            {
+                return false;
+            }
+
+            tile.RoomId = roomId;
+            tile.Hp = TileState.RoomMaxHp;
+            tile.Ownership = TileOwnership.Claimed;
+            RefreshVisual(coord);
+            return true;
+        }
+
+        // ---- Level-editor-only tile authoring ----
+        // Unlike the gameplay-facing methods above (RequestDig,
+        // SetWallResourceType, SetTerrainFeature, SetBedrock, ...), these
+        // unconditionally overwrite a tile to the exact requested state
+        // with no "must already be Rock" precondition — the level
+        // designer needs to freely repaint any tile into any other type,
+        // authoring finished level data rather than simulating how it got
+        // that way (no dig jobs, no gold cost, no implings).
+
+        /// Resets coord back to plain, undamaged, unowned Rock — the
+        /// common baseline every other Editor* method below starts from,
+        /// so painting a tile into a wall/terrain/floor variant can never
+        /// leave stale flags (an old WallResourceType, RoomId, ownership,
+        /// ...) behind from whatever it used to be.
+        public void EditorResetToRock(Vector2Int coord)
+        {
+            if (!InBounds(coord))
+            {
+                return;
+            }
+
+            ClearWallDecoration(coord);
+            _tiles[coord.x, coord.y] = TileState.Rock;
+            RefreshVisualAndWallNeighbors(coord);
+        }
+
+        /// Paints coord into one of the wall variants the level designer's
+        /// Map Design menu offers (see EditorWallVariant) — resets to
+        /// plain Rock first, then reuses the same guarded gameplay methods
+        /// (SetWallResourceType/SetBedrock) where possible so their
+        /// existing HP/decoration logic doesn't need duplicating.
+        public void EditorPaintWall(Vector2Int coord, EditorWallVariant variant)
+        {
+            if (!InBounds(coord))
+            {
+                return;
+            }
+
+            EditorResetToRock(coord);
+            switch (variant)
+            {
+                case EditorWallVariant.Reinforced:
+                {
+                    ref var tile = ref _tiles[coord.x, coord.y];
+                    tile.IsReinforced = true;
+                    tile.Hp = TileState.ReinforcedMaxHp;
+                    RefreshVisual(coord);
+                    break;
+                }
+                case EditorWallVariant.GoldWall:
+                    SetWallResourceType(coord, WallResourceType.GoldWall);
+                    break;
+                case EditorWallVariant.RegeneratingGoldWall:
+                    SetWallResourceType(coord, WallResourceType.RegeneratingGoldWall);
+                    break;
+                case EditorWallVariant.ManaCrystalWall:
+                    SetWallResourceType(coord, WallResourceType.ManaCrystalWall);
+                    break;
+                case EditorWallVariant.Bedrock:
+                    SetBedrock(coord);
+                    break;
+                // Plain: EditorResetToRock above already leaves it as
+                // plain, undamaged Rock.
+            }
+        }
+
+        /// Paints coord into Water/Lava/Chasm — resets to plain Rock first
+        /// (unlike SetTerrainFeature, which refuses anything that isn't
+        /// already Rock) so the level designer can freely repaint any tile,
+        /// then reuses SetTerrainFeature itself for the actual conversion
+        /// so Chasm's pit-depth/spike decoration logic doesn't need
+        /// duplicating.
+        public void EditorPaintTerrain(Vector2Int coord, TileType terrainType)
+        {
+            if (!InBounds(coord))
+            {
+                return;
+            }
+
+            EditorResetToRock(coord);
+            SetTerrainFeature(coord, terrainType);
+        }
+
+        /// Digs coord directly into Floor, Claimed or not, skipping the
+        /// dig-job/impling flow entirely (see BuilderJobBoard) — the level
+        /// designer authors finished level state, not a simulation of how
+        /// it got that way. ownerId is only meaningful when claimed is
+        /// true (see TileState.OwnerId); an Unclaimed tile always ends up
+        /// with ownerId -1 regardless of what's passed in.
+        public void EditorPaintFloor(Vector2Int coord, bool claimed, int ownerId)
+        {
+            if (!InBounds(coord))
+            {
+                return;
+            }
+
+            EditorResetToRock(coord);
+            ref var tile = ref _tiles[coord.x, coord.y];
+            tile.Type = TileType.Floor;
+            tile.Ownership = claimed ? TileOwnership.Claimed : TileOwnership.Unclaimed;
+            tile.OwnerId = claimed ? ownerId : -1;
+            tile.IsBuildable = true;
+            RefreshVisualAndWallNeighbors(coord);
+        }
+
+        /// Whether the level designer's Rooms menu could stamp a room onto
+        /// coord — anything except Water/Lava/Chasm/HolyGround (rooms only
+        /// ever go on Floor, or plain Rock about to be dug for one — see
+        /// EditorPlaceRoomTile) or a tile that already has a room.
+        /// HolyGround is excluded the same way Water/Lava/Chasm are — it
+        /// can never be Claimed (see TileType.HolyGround), which a room
+        /// tile always implicitly is.
+        public bool EditorCanPlaceRoomOn(Vector2Int coord)
+        {
+            if (!InBounds(coord))
+            {
+                return false;
+            }
+
+            var tile = GetTile(coord);
+            return tile.Type != TileType.Water && tile.Type != TileType.Lava && tile.Type != TileType.Chasm
+                && tile.Type != TileType.HolyGround && !tile.HasRoom;
+        }
+
+        /// "If the area hasn't been dug out, just instantly dig it out,
+        /// make the tile into Unclaimed tile, and place the room" — per
+        /// the level-designer brief. A tile that's already Floor keeps
+        /// whatever ownership it already has (only a freshly-dug tile is
+        /// forced Unclaimed); no gold cost, no manager/economy wiring —
+        /// this just tags the tile with roomId the same way TryAssignRoom
+        /// does, which is enough for it to render as a room (see
+        /// RefreshVisual's HasRoom branch).
+        public bool EditorPlaceRoomTile(Vector2Int coord, string roomId)
+        {
+            if (!EditorCanPlaceRoomOn(coord))
+            {
+                return false;
+            }
+
+            ref var tile = ref _tiles[coord.x, coord.y];
+            if (tile.Type != TileType.Floor)
+            {
+                ClearWallDecoration(coord);
+                tile = TileState.Rock;
+                tile.Type = TileType.Floor;
+                tile.Ownership = TileOwnership.Unclaimed;
+                tile.OwnerId = -1;
+                tile.IsBuildable = true;
+            }
+
+            tile.RoomId = roomId;
+            tile.Hp = TileState.RoomMaxHp;
+            RefreshVisualAndWallNeighbors(coord);
+            return true;
+        }
+
         private void BuildAllVisuals()
         {
             for (int x = 0; x < _width; x++)
@@ -689,12 +1114,10 @@ namespace KeepersDomain.Grid
                 for (int y = 0; y < _height; y++)
                 {
                     var coord = new Vector2Int(x, y);
-                    var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                    cube.name = $"Tile_{x}_{y}";
-                    cube.transform.SetParent(transform, false);
-                    cube.transform.localPosition = GridToWorld(coord) + Vector3.down * 0.5f;
-                    cube.transform.localScale = new Vector3(_cellSize * 0.95f, 1f, _cellSize * 0.95f);
-                    _visuals[x, y] = cube;
+                    var root = new GameObject($"Tile_{x}_{y}");
+                    root.transform.SetParent(transform, false);
+                    root.transform.localPosition = GridToWorld(coord);
+                    _visuals[x, y] = root;
                     RefreshVisual(coord);
                 }
             }
@@ -712,7 +1135,13 @@ namespace KeepersDomain.Grid
             Color color;
             if (tile.HasRoom)
             {
-                color = _roomColor;
+                // Same damaged->full HP lerp Rock walls use — darkens
+                // toward _roomDamagedColor as a room tile takes damage (see
+                // ApplyRoomDamage) and eases back as an impling repairs it
+                // (see ApplyRoomRepair), so repair progress is actually
+                // visible rather than silent tracked data.
+                var hpFraction = Mathf.Clamp01(tile.Hp / (float)TileState.RoomMaxHp);
+                color = Color.Lerp(_roomDamagedColor, _roomColor, hpFraction);
             }
             else if (tile.Type == TileType.Rock)
             {
@@ -728,6 +1157,10 @@ namespace KeepersDomain.Grid
                 else if (tile.IsQueuedForReinforce)
                 {
                     baseColor = _rockQueuedReinforceColor;
+                }
+                else if (tile.IsBedrock)
+                {
+                    baseColor = _bedrockColor;
                 }
                 else if (tile.IsReinforced)
                 {
@@ -753,20 +1186,151 @@ namespace KeepersDomain.Grid
                 var hpFraction = Mathf.Clamp01(tile.Hp / (float)tile.MaxHp);
                 color = Color.Lerp(_rockDamagedColor, baseColor, hpFraction);
             }
+            else if (tile.Type == TileType.Water)
+            {
+                color = _waterColor;
+            }
+            else if (tile.Type == TileType.Lava)
+            {
+                color = _lavaColor;
+            }
+            else if (tile.Type == TileType.Chasm)
+            {
+                color = _chasmColor;
+            }
+            else if (tile.Type == TileType.HolyGround)
+            {
+                color = _holyGroundColor;
+            }
             else if (tile.IsQueuedForBuild)
             {
                 color = _floorQueuedBuildColor;
             }
+            else if (tile.Ownership == TileOwnership.Claimed)
+            {
+                // Tinted toward the owning player's color when one's set
+                // (see EditorOwnerColors/TileState.OwnerId) — null/-1 in
+                // ordinary gameplay, where this just falls back to the
+                // plain claimed color exactly as before.
+                color = tile.OwnerId >= 0 && EditorOwnerColors != null && tile.OwnerId < EditorOwnerColors.Length
+                    ? Color.Lerp(_floorClaimedColor, EditorOwnerColors[tile.OwnerId], 0.6f)
+                    : _floorClaimedColor;
+            }
             else
             {
-                color = tile.Ownership == TileOwnership.Claimed ? _floorClaimedColor : _floorUnclaimedColor;
+                color = _floorUnclaimedColor;
             }
 
-            visual.transform.localPosition = GridToWorld(coord) + Vector3.down * (tile.Type == TileType.Rock ? 0f : (0.5f + tile.PitDepth));
-            visual.transform.localScale = new Vector3(_cellSize * 0.95f, tile.Type == TileType.Rock ? 1f : 0.15f, _cellSize * 0.95f);
-            visual.GetComponent<Renderer>().material.color = color;
+            bool needsWallMesh = tile.Type == TileType.Rock && _wallCatalog != null;
+            WallShape? shape = null;
+            float rotation = 0f;
+            if (needsWallMesh)
+            {
+                (shape, rotation) = WallAutotiler.Compute(
+                    IsWallNeighbor(coord + Vector2Int.up),
+                    IsWallNeighbor(coord + Vector2Int.right),
+                    IsWallNeighbor(coord + Vector2Int.down),
+                    IsWallNeighbor(coord + Vector2Int.left));
+            }
+
+            bool needsRebuild = _visualChildren[coord.x, coord.y] == null || _cachedWallShape[coord.x, coord.y] != shape;
+            if (needsRebuild)
+            {
+                if (_visualChildren[coord.x, coord.y] != null)
+                {
+                    Destroy(_visualChildren[coord.x, coord.y]);
+                }
+
+                GameObject child;
+                if (needsWallMesh)
+                {
+                    child = Instantiate(_wallCatalog.GetPrefab(shape.Value), visual.transform, false);
+                    child.transform.localScale = Vector3.one * _wallCatalog.PrefabScale;
+                }
+                else
+                {
+                    child = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    child.transform.SetParent(visual.transform, false);
+                }
+
+                child.name = "Visual";
+                _visualChildren[coord.x, coord.y] = child;
+                _cachedWallShape[coord.x, coord.y] = shape;
+            }
+
+            var visualChild = _visualChildren[coord.x, coord.y];
+            if (needsWallMesh)
+            {
+                // Compose on top of the prefab's own authored rotation
+                // rather than replacing it outright — these source meshes
+                // carry a real orientation of their own (e.g. an axis
+                // compensation baked in at import), and overwriting
+                // localRotation wholesale silently discarded it, leaving
+                // every wall lying on its side instead of standing up.
+                var baseRotation = _wallCatalog.GetPrefab(shape.Value).transform.localRotation;
+                visualChild.transform.localPosition = Vector3.zero;
+                visualChild.transform.localRotation = Quaternion.Euler(0f, rotation + _wallCatalog.RotationOffsetDegrees, 0f) * baseRotation;
+                ApplyTint(visualChild, color);
+            }
+            else
+            {
+                visualChild.transform.localPosition = Vector3.down * (tile.Type == TileType.Rock ? 0f : (0.5f + tile.PitDepth));
+                visualChild.transform.localScale = new Vector3(_cellSize * 0.95f, tile.Type == TileType.Rock ? 1f : 0.15f, _cellSize * 0.95f);
+                visualChild.GetComponent<Renderer>().material.color = color;
+            }
 
             TileChanged?.Invoke(coord);
+        }
+
+        /// True if coord is out of bounds (map edges read as sealed rather
+        /// than sprouting spurious end-caps) or holds a Rock tile — the
+        /// input WallAutotiler needs for each of a wall tile's 4 cardinal
+        /// neighbors.
+        private bool IsWallNeighbor(Vector2Int coord)
+        {
+            return !InBounds(coord) || GetTile(coord).Type == TileType.Rock;
+        }
+
+        /// Applies a MaterialPropertyBlock color tint to every renderer
+        /// under visual, instead of touching .material (which would
+        /// instantiate a per-object material copy) — the same shared
+        /// M_DungeonWalls material is reused across every wall tile.
+        private static void ApplyTint(GameObject visual, Color color)
+        {
+            _sharedPropertyBlock ??= new MaterialPropertyBlock();
+            var renderers = visual.GetComponentsInChildren<Renderer>();
+            foreach (var renderer in renderers)
+            {
+                renderer.GetPropertyBlock(_sharedPropertyBlock);
+                _sharedPropertyBlock.SetColor(BaseColorId, color);
+                renderer.SetPropertyBlock(_sharedPropertyBlock);
+            }
+        }
+
+        /// Same as RefreshVisual(coord), but also refreshes its 4 cardinal
+        /// neighbors — needed at every call site where a tile's Type
+        /// actually flips to/from Rock (dig completing, room carving,
+        /// level-designer repainting, ...), since a Rock neighbor's wall
+        /// shape depends on whether coord itself currently reads as a wall.
+        /// Every other call site (damage, queued flags, reinforced,
+        /// bedrock, resource type — none of which change Type) can keep
+        /// calling plain RefreshVisual, since those never change any
+        /// neighbor's wall shape.
+        private void RefreshVisualAndWallNeighbors(Vector2Int coord)
+        {
+            RefreshVisual(coord);
+            RefreshVisualIfInBounds(coord + Vector2Int.up);
+            RefreshVisualIfInBounds(coord + Vector2Int.right);
+            RefreshVisualIfInBounds(coord + Vector2Int.down);
+            RefreshVisualIfInBounds(coord + Vector2Int.left);
+        }
+
+        private void RefreshVisualIfInBounds(Vector2Int coord)
+        {
+            if (InBounds(coord))
+            {
+                RefreshVisual(coord);
+            }
         }
 
         private void ClearWallDecoration(Vector2Int coord)
@@ -817,6 +1381,79 @@ namespace KeepersDomain.Grid
                 nugget.transform.localScale = Vector3.one * scale;
                 nugget.GetComponent<Renderer>().material.color = nuggetColor;
                 Destroy(nugget.GetComponent<Collider>());
+            }
+        }
+
+        /// "Spikes sticking up from the bottom" — a handful of thin,
+        /// randomly-placed pointy cubes standing on the sunk Chasm floor
+        /// (see SetTerrainFeature/ChasmPitDepth). World-positioned and
+        /// parented to this component's own transform, same convention
+        /// JailManager's pit structures use (its own dirt floor/prisoner
+        /// visuals), rather than nested under the tile's own thin (0.15-tall)
+        /// floor cube — nesting there would squash a spike's local offsets
+        /// down by that same thin scale. Reuses the seeded-per-coord RNG
+        /// pattern RebuildWallDecoration uses for gold nuggets and the same
+        /// _wallDecorations slot, built once when the tile becomes a Chasm.
+        private void BuildChasmSpikes(Vector2Int coord)
+        {
+            ClearWallDecoration(coord);
+
+            var container = new GameObject("ChasmSpikes");
+            container.transform.SetParent(transform, false);
+            _wallDecorations[coord.x, coord.y] = container;
+
+            var floorTopY = FloorSurfaceY - ChasmPitDepth;
+            var worldPos = GridToWorld(coord);
+
+            var rng = new System.Random(coord.x * 51239 + coord.y * 30097 + 7);
+            for (int i = 0; i < ChasmSpikeCount; i++)
+            {
+                var spike = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                spike.name = $"Spike_{i}";
+                spike.transform.SetParent(container.transform, false);
+                spike.transform.position = new Vector3(
+                    worldPos.x + ((float)rng.NextDouble() - 0.5f) * 0.6f,
+                    floorTopY + ChasmSpikeHeight * 0.5f,
+                    worldPos.z + ((float)rng.NextDouble() - 0.5f) * 0.6f);
+                spike.transform.rotation = Quaternion.Euler(
+                    ((float)rng.NextDouble() - 0.5f) * 20f,
+                    (float)rng.NextDouble() * 360f,
+                    ((float)rng.NextDouble() - 0.5f) * 20f);
+                spike.transform.localScale = new Vector3(ChasmSpikeRadius, ChasmSpikeHeight, ChasmSpikeRadius);
+                spike.GetComponent<Renderer>().material.color = _chasmSpikeColor;
+                Destroy(spike.GetComponent<Collider>());
+            }
+        }
+
+        /// A golden 8-pointed star centered on coord's white HolyGround
+        /// tile — 4 double-ended bars (see HolyGroundStarAngles), world-
+        /// positioned and parented to this component's own transform, same
+        /// "don't nest under the tile's own thin floor cube" convention
+        /// BuildChasmSpikes uses (nesting there would squash local offsets
+        /// down by that cube's thin 0.15 Y-scale). Reuses the
+        /// _wallDecorations slot, built once when the tile becomes
+        /// HolyGround.
+        private void BuildHolyGroundStar(Vector2Int coord)
+        {
+            ClearWallDecoration(coord);
+
+            var container = new GameObject("HolyGroundStar");
+            container.transform.SetParent(transform, false);
+            _wallDecorations[coord.x, coord.y] = container;
+
+            var worldPos = GridToWorld(coord);
+            var starY = FloorSurfaceY + HolyGroundStarReliefOffset;
+
+            foreach (var angleDegrees in HolyGroundStarAngles)
+            {
+                var bar = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                bar.name = $"StarBar_{angleDegrees}";
+                bar.transform.SetParent(container.transform, false);
+                bar.transform.position = new Vector3(worldPos.x, starY, worldPos.z);
+                bar.transform.rotation = Quaternion.Euler(0f, angleDegrees, 0f);
+                bar.transform.localScale = new Vector3(_cellSize * HolyGroundStarLength, HolyGroundStarThickness, HolyGroundStarThickness);
+                bar.GetComponent<Renderer>().material.color = _holyGroundStarColor;
+                Destroy(bar.GetComponent<Collider>());
             }
         }
     }

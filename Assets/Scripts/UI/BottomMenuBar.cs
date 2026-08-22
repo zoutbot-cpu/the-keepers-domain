@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using KeepersDomain.Core;
 using KeepersDomain.Creatures;
 using KeepersDomain.Grid;
 using KeepersDomain.Implings;
@@ -50,8 +51,11 @@ namespace KeepersDomain.UI
         private TrainingRoomManager _trainingRoomManager;
         private LibraryManager _libraryManager;
         private JailManager _jailManager;
+        private ConversionClassManager _conversionClassManager;
         private GremlinSpawner _gremlinSpawner;
         private WarlockSpawner _warlockSpawner;
+        private MazeRattlerSpawner _mazeRattlerSpawner;
+        private BeanCounterSpawner _beanCounterSpawner;
 
         private MenuTab _openTab = MenuTab.None;
         private bool _squareModeOn;
@@ -62,7 +66,7 @@ namespace KeepersDomain.UI
         private Vector2 _tasksScrollPos;
         private Vector2 _creaturesScrollPos;
 
-        public void Initialize(DungeonGrid grid, BuilderJobBoard jobBoard, TileInteractionController interactionController, TreasuryManager treasuryManager, ChaosCore chaosCore, BaconBeaconManager baconBeaconManager, TrainingRoomManager trainingRoomManager, LibraryManager libraryManager, JailManager jailManager, GremlinSpawner gremlinSpawner, WarlockSpawner warlockSpawner)
+        public void Initialize(DungeonGrid grid, BuilderJobBoard jobBoard, TileInteractionController interactionController, TreasuryManager treasuryManager, ChaosCore chaosCore, BaconBeaconManager baconBeaconManager, TrainingRoomManager trainingRoomManager, LibraryManager libraryManager, JailManager jailManager, ConversionClassManager conversionClassManager, GremlinSpawner gremlinSpawner, WarlockSpawner warlockSpawner, MazeRattlerSpawner mazeRattlerSpawner, BeanCounterSpawner beanCounterSpawner)
         {
             _grid = grid;
             _jobBoard = jobBoard;
@@ -73,8 +77,11 @@ namespace KeepersDomain.UI
             _trainingRoomManager = trainingRoomManager;
             _libraryManager = libraryManager;
             _jailManager = jailManager;
+            _conversionClassManager = conversionClassManager;
             _gremlinSpawner = gremlinSpawner;
             _warlockSpawner = warlockSpawner;
+            _mazeRattlerSpawner = mazeRattlerSpawner;
+            _beanCounterSpawner = beanCounterSpawner;
             // Seeded from the board's actual current order, not a second
             // hardcoded default — see BuilderJobBoard.GetJobPriorityOrder.
             _priorityOrder = new List<JobKind>(_jobBoard.GetJobPriorityOrder());
@@ -145,6 +152,15 @@ namespace KeepersDomain.UI
             DrawTabButton(MenuTab.Impling, "Impling menu");
             DrawTabButton(MenuTab.Creatures, "Creatures");
             DrawTabButton(MenuTab.Tasks, "Tasks");
+            GUILayout.FlexibleSpace();
+            // Tears the whole running game down and shows the main menu
+            // again — see GameBootstrap.ReturnToMainMenu. No confirmation
+            // prompt, matching every other button on this bar (Sell, cancel
+            // job, etc. all fire immediately too).
+            if (GUILayout.Button("Main Menu", GUILayout.Width(TabButtonWidth), GUILayout.Height(BarHeight - 8f)))
+            {
+                GameBootstrap.ReturnToMainMenu();
+            }
             GUILayout.EndHorizontal();
             GUILayout.EndArea();
         }
@@ -192,7 +208,7 @@ namespace KeepersDomain.UI
             var pending = _interactionController.PendingPlacementAction;
             var isDraggingRoom = _interactionController.IsPlacingLair || _interactionController.IsPlacingTreasury
                 || _interactionController.IsPlacingHatchery || _interactionController.IsPlacingBeacon || _interactionController.IsPlacingTrainingRoom
-                || _interactionController.IsPlacingLibrary || _interactionController.IsPlacingJail;
+                || _interactionController.IsPlacingLibrary || _interactionController.IsPlacingJail || _interactionController.IsPlacingConversionClass;
             if (pending == PlacementAction.None && !isDraggingRoom)
             {
                 return;
@@ -232,10 +248,14 @@ namespace KeepersDomain.UI
             {
                 DrawRoomDragSize("Jail", _interactionController.JailDragStartCoord, _interactionController.JailDragCurrentCoord, tileCount => tileCount * JailManager.CostPerTile);
             }
+            else if (_interactionController.IsPlacingConversionClass)
+            {
+                DrawRoomDragSize("Conversion Class", _interactionController.ConversionClassDragStartCoord, _interactionController.ConversionClassDragCurrentCoord, tileCount => tileCount * ConversionClassManager.CostPerTile);
+            }
             else
             {
-                var instructionVerb = pending is PlacementAction.PlaceLair or PlacementAction.PlaceTreasury or PlacementAction.PlaceSlimeHatchery or PlacementAction.PlaceBaconBeacon or PlacementAction.PlaceTrainingRoom or PlacementAction.PlaceLibrary or PlacementAction.PlaceJail ? "Drag to size, release to place" : "Tap a tile to place";
-                GUILayout.Label($"{instructionVerb}: {pending}");
+                var instructionVerb = pending is PlacementAction.PlaceLair or PlacementAction.PlaceTreasury or PlacementAction.PlaceSlimeHatchery or PlacementAction.PlaceBaconBeacon or PlacementAction.PlaceTrainingRoom or PlacementAction.PlaceLibrary or PlacementAction.PlaceJail or PlacementAction.PlaceConversionClass ? "Drag to size, release to place" : "Tap a tile to place";
+                GUILayout.Label($"{instructionVerb}: {PlacementActionLabel(pending)}");
                 if (GUILayout.Button("Cancel", GUILayout.Width(60f)))
                 {
                     _interactionController.RequestPlacement(PlacementAction.None);
@@ -278,6 +298,24 @@ namespace KeepersDomain.UI
             DrawBuildModeOption(BuildMode.Mine, "Mine mode");
             DrawBuildModeOption(BuildMode.Reinforce, "Reinforce mode");
             DrawBuildModeOption(BuildMode.Construct, "Construct wall");
+            DrawBuildModeOption(BuildMode.Grab, "Grab mode");
+            if (_interactionController.BuildMode == BuildMode.Grab)
+            {
+                GUILayout.Label(_interactionController.IsCarryingMinion
+                    ? "Carrying — tap a walkable tile to drop"
+                    : "Tap a minion to grab it");
+            }
+
+            GUILayout.Space(8f);
+            // Placeholder terrain painters standing in for the map
+            // generator that doesn't exist yet (see DungeonGrid.
+            // SetTerrainFeature) — not a real player-facing tool.
+            GUILayout.Label("[Dev] Terrain");
+            DrawBuildModeOption(BuildMode.PlaceWater, "[Dev] Place Water");
+            DrawBuildModeOption(BuildMode.PlaceLava, "[Dev] Place Lava");
+            DrawBuildModeOption(BuildMode.PlaceChasm, "[Dev] Place Chasm");
+            DrawBuildModeOption(BuildMode.PlaceHolyGround, "[Dev] Place Holy Ground");
+            DrawBuildModeOption(BuildMode.PlaceBedrock, "[Dev] Place Bedrock");
 
             GUILayout.Space(8f);
             var pauseOn = GUILayout.Toggle(_digQueuePaused, "Pause dig queue");
@@ -289,63 +327,88 @@ namespace KeepersDomain.UI
 
             GUILayout.Space(8f);
             GUILayout.Label("Buildings");
-            GUILayout.BeginHorizontal();
-            if (GUILayout.Button(PlacementButtonLabel(PlacementAction.PlaceLair, $"Lair ({LairManager.CostPerTile}g/tile)")))
-            {
-                _interactionController.RequestPlacement(PlacementAction.PlaceLair);
-            }
 
-            if (GUILayout.Button(PlacementButtonLabel(PlacementAction.PlaceTreasury, $"Treasury ({TreasuryManager.CostPerTile}g/tile)")))
-            {
-                _interactionController.RequestPlacement(PlacementAction.PlaceTreasury);
-            }
-
-            if (GUILayout.Button(PlacementButtonLabel(PlacementAction.PlaceSlimeHatchery, $"Slime Hatchery ({SlimeHatcheryManager.CostPerTile}g/tile)")))
-            {
-                _interactionController.RequestPlacement(PlacementAction.PlaceSlimeHatchery);
-            }
-
-            if (GUILayout.Button(PlacementButtonLabel(PlacementAction.PlaceBaconBeacon, $"Bacon Beacon ({BaconBeaconManager.CostPerTile}g/tile)")))
-            {
-                _interactionController.RequestPlacement(PlacementAction.PlaceBaconBeacon);
-            }
-
-            if (GUILayout.Button(PlacementButtonLabel(PlacementAction.PlaceTrainingRoom, $"Training Room ({TrainingRoomManager.CostPerTile}g/tile)")))
-            {
-                _interactionController.RequestPlacement(PlacementAction.PlaceTrainingRoom);
-            }
-
-            if (GUILayout.Button(PlacementButtonLabel(PlacementAction.PlaceLibrary, $"Library ({LibraryManager.CostPerTile}g/tile)")))
-            {
-                _interactionController.RequestPlacement(PlacementAction.PlaceLibrary);
-            }
-
-            if (GUILayout.Button(PlacementButtonLabel(PlacementAction.PlaceJail, $"Jail ({JailManager.CostPerTile}g/tile)")))
-            {
-                _interactionController.RequestPlacement(PlacementAction.PlaceJail);
-            }
-
-            // Sell stays armed across taps (see TileInteractionController.
-            // RequestPlacement) rather than being consumed after one use, so
-            // this button toggles it off on a second press instead of just
-            // re-arming an already-armed tool.
+            // 3 per row, wrapping downward, rather than one long horizontal
+            // row — that used to overflow the panel's fixed width and force
+            // a horizontal scrollbar. Sell stays armed across taps (see
+            // TileInteractionController.RequestPlacement) rather than being
+            // consumed after one use, so its own button toggles it off on a
+            // second press instead of just re-arming an already-armed tool.
             var sellActive = _interactionController.PendingPlacementAction == PlacementAction.SellLair;
-            if (GUILayout.Button(sellActive ? "Sell (active)" : "Sell"))
+
+            BeginButtonRow();
+            DrawPlacementButton(PlacementAction.PlaceLair, $"Lair ({LairManager.CostPerTile}g/tile)");
+            DrawPlacementButton(PlacementAction.PlaceTreasury, $"Treasury ({TreasuryManager.CostPerTile}g/tile)");
+            DrawPlacementButton(PlacementAction.PlaceSlimeHatchery, $"Slime Hatchery ({SlimeHatcheryManager.CostPerTile}g/tile)");
+            EndButtonRow();
+
+            BeginButtonRow();
+            DrawPlacementButton(PlacementAction.PlaceBaconBeacon, $"Bacon Beacon ({BaconBeaconManager.CostPerTile}g/tile)");
+            DrawPlacementButton(PlacementAction.PlaceTrainingRoom, $"Training Room ({TrainingRoomManager.CostPerTile}g/tile)");
+            DrawPlacementButton(PlacementAction.PlaceLibrary, $"Library ({LibraryManager.CostPerTile}g/tile)");
+            EndButtonRow();
+
+            BeginButtonRow();
+            DrawPlacementButton(PlacementAction.PlaceJail, $"Jail ({JailManager.CostPerTile}g/tile)");
+            DrawPlacementButton(PlacementAction.PlaceConversionClass, $"Conversion Class ({ConversionClassManager.CostPerTile}g/tile)");
+            if (GUILayout.Button(sellActive ? "Sell (active)" : "Sell", GUILayout.Width(ButtonGridColumnWidth)))
             {
                 _interactionController.RequestPlacement(sellActive ? PlacementAction.None : PlacementAction.SellLair);
             }
+            EndButtonRow();
 
+            BeginButtonRow();
             // Manual stand-in for a monster claiming/vacating its Lair — no
             // monster system exists yet to do this for real (see
             // LairManager.ToggleLairClaim), so this is how the claimed
             // "nest" visual gets tested in the meantime.
-            if (GUILayout.Button(PlacementButtonLabel(PlacementAction.ToggleLairClaim, "Toggle Claim")))
-            {
-                _interactionController.RequestPlacement(PlacementAction.ToggleLairClaim);
-            }
-            GUILayout.EndHorizontal();
+            DrawPlacementButton(PlacementAction.ToggleLairClaim, "Toggle Claim");
+            // Bridge is a persistent paint tool (BuildMode.Bridge), not a
+            // one-shot PlacementAction, but sits in the Buildings grid
+            // alongside every other room since it's placed the same way a
+            // player thinks about "building" it.
+            DrawBuildModeGridButton(BuildMode.Bridge, $"Bridge ({BridgeManager.CostPerTile}g/tile)");
+            EndButtonRow();
 
             GUILayout.EndScrollView();
+        }
+
+        // 3 of these per row fit comfortably inside PanelWidth (340)
+        // alongside the scroll view's own vertical scrollbar — see
+        // DrawBuildMenu's Buildings grid.
+        private const float ButtonGridColumnWidth = 100f;
+
+        private static void BeginButtonRow()
+        {
+            GUILayout.BeginHorizontal();
+        }
+
+        private static void EndButtonRow()
+        {
+            GUILayout.EndHorizontal();
+        }
+
+        private void DrawPlacementButton(PlacementAction action, string label)
+        {
+            if (GUILayout.Button(PlacementButtonLabel(action, label), GUILayout.Width(ButtonGridColumnWidth)))
+            {
+                _interactionController.RequestPlacement(action);
+            }
+        }
+
+        /// Same persistent-toggle idea as DrawBuildModeOption, but rendered
+        /// with the button style/fixed width so it sits flush in the
+        /// Buildings grid alongside the one-shot PlacementAction buttons
+        /// (see DrawPlacementButton) instead of the checkbox+label look
+        /// DrawBuildModeOption's own toggles use.
+        private void DrawBuildModeGridButton(BuildMode mode, string label)
+        {
+            var isSelected = _interactionController.BuildMode == mode;
+            var pressed = GUILayout.Toggle(isSelected, label, GUI.skin.button, GUILayout.Width(ButtonGridColumnWidth));
+            if (pressed && !isSelected)
+            {
+                _interactionController.SetBuildMode(mode);
+            }
         }
 
         private void DrawBuildModeOption(BuildMode mode, string label)
@@ -409,6 +472,13 @@ namespace KeepersDomain.UI
 
         private void DrawCreaturesMenu()
         {
+            // Whole-panel scroll, same shape DrawBuildMenu/DrawTasksMenu use
+            // — recruit buttons/labels now run to 4 creatures deep and no
+            // longer fit the fixed panel height on their own, so the scroll
+            // has to wrap everything (buttons included), not just the
+            // roster list below them.
+            _creaturesScrollPos = GUILayout.BeginScrollView(_creaturesScrollPos, GUILayout.Height(210f));
+
             // Recruiting takes one Gremlin straight out of the Portal's
             // pool and spawns it there — no tile picking, since every
             // non-Imp creature "joins" by coming down the portal stairway
@@ -436,13 +506,37 @@ namespace KeepersDomain.UI
             GUI.enabled = true;
             GUILayout.Label("Requires: a Lair tile, a 3x3+ Library, fewer non-Imp creatures than Hatchery tiles, fewer intelligent creatures than Bacon Beacon tiles");
 
+            GUILayout.Space(4f);
+
+            var mazeRattlersAvailable = _mazeRattlerSpawner.AvailableToRecruit;
+            GUI.enabled = _mazeRattlerSpawner.CanRecruit;
+            if (GUILayout.Button($"Recruit Maze Rattler ({mazeRattlersAvailable} available)"))
+            {
+                _mazeRattlerSpawner.TryRecruitMazeRattler();
+            }
+            GUI.enabled = true;
+            GUILayout.Label("Requires: a free Lair, fewer Maze Rattlers than 5x placed Jail rooms");
+
+            GUILayout.Space(4f);
+
+            var beanCountersAvailable = _beanCounterSpawner.AvailableToRecruit;
+            GUI.enabled = _beanCounterSpawner.CanRecruit;
+            if (GUILayout.Button($"Recruit Bean Counter ({beanCountersAvailable} available)"))
+            {
+                _beanCounterSpawner.TryRecruitBeanCounter();
+            }
+            GUI.enabled = true;
+            GUILayout.Label("Requires: a free Lair, fewer Bean Counters than 3x placed Conversion Class rooms");
+
             GUILayout.Space(8f);
 
             var implings = ImplingAgent.All;
             var gremlins = GremlinAgent.All;
             var warlocks = WarlockAgent.All;
-            GUILayout.Label($"{implings.Count} impling(s), {gremlins.Count} gremlin(s), {warlocks.Count} warlock(s)");
-            _creaturesScrollPos = GUILayout.BeginScrollView(_creaturesScrollPos, GUILayout.Height(210f));
+            var mazeRattlers = MazeRattlerAgent.All;
+            var beanCounters = BeanCounterAgent.All;
+            var elves = ElfAgent.All;
+            GUILayout.Label($"{implings.Count} impling(s), {gremlins.Count} gremlin(s), {warlocks.Count} warlock(s), {mazeRattlers.Count} maze rattler(s), {beanCounters.Count} bean counter(s), {elves.Count} elf(ves)");
 
             foreach (var impling in implings)
             {
@@ -464,6 +558,30 @@ namespace KeepersDomain.UI
                 var hungryTag = warlock.Hunger.IsHungry ? " (hungry)" : "";
                 var unhappyTag = warlock.Pay.IsUnhappy ? " (unpaid!)" : "";
                 GUILayout.Label($"{warlock.Name}  Lv{warlock.Creature.Level}  {warlock.Task}  ({coord.x},{coord.y})  Hunger:{warlock.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(warlock.Creature.Level)}g{unhappyTag}  Happy:{warlock.Happiness.Value:0} ({warlock.Happiness.Tier})");
+            }
+
+            foreach (var mazeRattler in mazeRattlers)
+            {
+                var coord = _grid.WorldToGrid(mazeRattler.Position);
+                var hungryTag = mazeRattler.Hunger.IsHungry ? " (hungry)" : "";
+                var unhappyTag = mazeRattler.Pay.IsUnhappy ? " (unpaid!)" : "";
+                GUILayout.Label($"{mazeRattler.Name}  Lv{mazeRattler.Creature.Level}  {mazeRattler.Task}  ({coord.x},{coord.y})  Hunger:{mazeRattler.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(mazeRattler.Creature.Level)}g{unhappyTag}  Happy:{mazeRattler.Happiness.Value:0} ({mazeRattler.Happiness.Tier})");
+            }
+
+            foreach (var beanCounter in beanCounters)
+            {
+                var coord = _grid.WorldToGrid(beanCounter.Position);
+                var hungryTag = beanCounter.Hunger.IsHungry ? " (hungry)" : "";
+                var unhappyTag = beanCounter.Pay.IsUnhappy ? " (unpaid!)" : "";
+                GUILayout.Label($"{beanCounter.Name}  Lv{beanCounter.Creature.Level}  {beanCounter.Task}  ({coord.x},{coord.y})  Hunger:{beanCounter.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(beanCounter.Creature.Level)}g{unhappyTag}  Happy:{beanCounter.Happiness.Value:0} ({beanCounter.Happiness.Tier})");
+            }
+
+            foreach (var elf in elves)
+            {
+                var coord = _grid.WorldToGrid(elf.Position);
+                var hungryTag = elf.Hunger.IsHungry ? " (hungry)" : "";
+                var unhappyTag = elf.Pay.IsUnhappy ? " (unpaid!)" : "";
+                GUILayout.Label($"{elf.Name}  Lv{elf.Creature.Level}  {elf.Task}  ({coord.x},{coord.y})  Hunger:{elf.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(elf.Creature.Level)}g{unhappyTag}  Happy:{elf.Happiness.Value:0} ({elf.Happiness.Tier})");
             }
 
             GUILayout.EndScrollView();
@@ -498,6 +616,7 @@ namespace KeepersDomain.UI
             }, showHp: false);
 
             DrawClaimJobList();
+            DrawRepairJobList();
 
             GUILayout.EndScrollView();
         }
@@ -568,9 +687,36 @@ namespace KeepersDomain.UI
             }
         }
 
+        /// Same shape as DrawClaimJobList — repair jobs are automatic
+        /// (queued whenever a room tile takes damage, see
+        /// DungeonGrid.RoomDamaged/BuilderJobBoard.OnRoomDamaged), so
+        /// there's nothing here for the player to cancel, just a status
+        /// readout.
+        private void DrawRepairJobList()
+        {
+            var repairJobs = _jobBoard.GetRepairJobs();
+            GUILayout.Label($"Repair jobs — {repairJobs.Count}");
+
+            foreach (var coord in repairJobs)
+            {
+                var status = _jobBoard.IsRepairJobAssigned(coord) ? "repairing" : "open";
+                var tile = _grid.GetTile(coord);
+                GUILayout.Label($"({coord.x},{coord.y}) hp {tile.Hp} — {status}");
+            }
+        }
+
         private string PlacementButtonLabel(PlacementAction action, string label)
         {
             return _interactionController.PendingPlacementAction == action ? $"{label} (active)" : label;
+        }
+
+        /// Friendly display name for the pending-placement banner (see
+        /// DrawPendingPlacementBanner) — SellLair's own enum name reads as
+        /// raw code ("Tap a tile to place: SellLair"); every other action's
+        /// name already doubles as a readable label.
+        private static string PlacementActionLabel(PlacementAction action)
+        {
+            return action == PlacementAction.SellLair ? "Sell room tile" : action.ToString();
         }
     }
 }

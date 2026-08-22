@@ -65,9 +65,9 @@ namespace KeepersDomain.Monsters
         ///   not — unlike Gremlin's "at least one free/unclaimed Lair").
         /// - At least one placed Library that's at least 3x3.
         /// - Fewer non-Imp creatures already in the domain (Gremlin +
-        ///   Warlock combined) than there are Slime Hatchery tiles (across
-        ///   every placed Hatchery) — same shape as GremlinSpawner's own
-        ///   Hatchery requirement, now counting Warlock too.
+        ///   Warlock + Maze Rattler + Bean Counter combined) than there are
+        ///   Slime Hatchery tiles (across every placed Hatchery) — same
+        ///   shape as GremlinSpawner's own Hatchery requirement.
         /// - Fewer intelligent creatures already in the domain (only
         ///   Warlock counts as intelligent so far) than there are Bacon
         ///   Beacon tiles (across every placed Beacon).
@@ -83,7 +83,7 @@ namespace KeepersDomain.Monsters
                 return false;
             }
 
-            var nonImpCount = GremlinAgent.All.Count + WarlockAgent.All.Count;
+            var nonImpCount = GremlinAgent.All.Count + WarlockAgent.All.Count + MazeRattlerAgent.All.Count + BeanCounterAgent.All.Count;
             if (_slimeHatcheryManager == null || nonImpCount >= _slimeHatcheryManager.TotalTileCount)
             {
                 return false;
@@ -114,7 +114,11 @@ namespace KeepersDomain.Monsters
             return true;
         }
 
-        private void SpawnWarlock(Vector2Int coord)
+        /// Public so ConversionClassManager can reuse this exact "capsule +
+        /// Initialize" spawn code when a tormented Warlock prisoner wins
+        /// its conversion roll and rejoins the domain, instead of
+        /// duplicating it.
+        public void SpawnWarlock(Vector2Int coord)
         {
             var worldPos = _grid.GridToWorld(coord);
 

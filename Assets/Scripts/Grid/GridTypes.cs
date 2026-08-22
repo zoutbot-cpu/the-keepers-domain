@@ -14,7 +14,26 @@ namespace KeepersDomain.Grid
     public enum TileType
     {
         Rock,
-        Floor
+        Floor,
+
+        /// Undeep — every creature can wade through except Imps, unless the
+        /// tile has a Bridge (see DungeonGrid.IsWalkable/TryAssignBridgeRoom).
+        Water,
+
+        /// Undeep, but nothing is fire-resistant yet, so it's impassable to
+        /// everyone (Imps included) until a Bridge is built on it.
+        Lava,
+
+        /// Deep — as deep as a Jail's pit, spikes at the bottom. Never
+        /// walkable by anyone; a Bridge can never be built across it.
+        Chasm,
+
+        /// Walkable by everyone, same as Floor — but can never be Claimed
+        /// (DungeonGrid.ClaimTile/CanBuildRoomOn/BordersClaimedTile are all
+        /// already gated to Type == Floor, so this falls out of that same
+        /// check for free rather than needing its own guard). Territory
+        /// can't grow through it either, for the same reason.
+        HolyGround
     }
 
     public enum TileOwnership
@@ -47,6 +66,21 @@ namespace KeepersDomain.Grid
         ManaCrystal
     }
 
+    /// Every wall variant the level designer's Map Design menu can paint
+    /// (see DungeonGrid.EditorPaintWall) — Plain/Reinforced/Bedrock plus
+    /// the three WallResourceType veins, unified into one list since the
+    /// editor picks exactly one at a time regardless of which underlying
+    /// TileState fields it maps to.
+    public enum EditorWallVariant
+    {
+        Plain,
+        Reinforced,
+        GoldWall,
+        RegeneratingGoldWall,
+        ManaCrystalWall,
+        Bedrock
+    }
+
     [Serializable]
     public struct TileState
     {
@@ -57,10 +91,19 @@ namespace KeepersDomain.Grid
         public const int RegeneratingGoldWallRegenPerHit = 15;
         public const int ManaCrystalWallMaxHp = 100;
 
+        /// Bedrock never actually takes dig damage (RequestDig/
+        /// ApplyDigDamage both refuse it — see DungeonGrid.SetBedrock), so
+        /// this only matters for display (Hp is set equal to it once and
+        /// never changes) — any positive value works, kept simply higher
+        /// than ReinforcedMaxHp to read as "more wall than reinforced."
+        public const int BedrockMaxHp = 9999;
+
         /// HP a Floor tile gets once a room (Lair, Treasury, ...) is
-        /// placed on it — see DungeonGrid.TryAssignRoom. For now this is
-        /// tracked data only: nothing damages it and no UI shows it, ahead
-        /// of a future room-durability mechanic.
+        /// placed on it — see DungeonGrid.TryAssignRoom. Damaged by an
+        /// unhappy creature's attack (DungeonGrid.ApplyRoomDamage) and
+        /// restored by an impling's repair job (DungeonGrid.ApplyRoomRepair
+        /// / BuilderJobBoard's RepairRoom jobs) — see design-doc.md's
+        /// Happiness section and the Room tile repair section.
         public const int RoomMaxHp = 50;
 
         /// Resource yield per point of HP a hit actually removes — "drop
@@ -75,11 +118,28 @@ namespace KeepersDomain.Grid
         public bool IsQueuedForDig;
         public bool IsQueuedForReinforce;
         public bool IsReinforced;
+
+        /// Permanently unminable — RequestDig/RequestReinforce both refuse
+        /// a Bedrock tile outright (see DungeonGrid), so it can never be
+        /// queued for either. Mutually exclusive with IsReinforced/
+        /// WallResourceType, same as those are with each other; darker than
+        /// a reinforced wall (see DungeonGrid's own _bedrockColor). Placed
+        /// today by a dev-only Build-menu tool, same as Water/Lava/Chasm.
+        public bool IsBedrock;
+
         public bool IsQueuedForBuild;
         public WallResourceType WallResourceType;
         public bool IsUnreachable;
         public string RoomId;
         public int Hp;
+
+        /// Which level-designer player owns a Claimed tile — -1 for
+        /// "no owner" (every ordinary gameplay tile, and any Unclaimed
+        /// tile). Only ever set by DungeonGrid's Editor* authoring methods
+        /// (see EditorPaintFloor); gameplay's own ClaimTile/CarveRoom/
+        /// CarveRect never touch it, so it stays -1 everywhere BuildWorld's
+        /// single-dungeon prototype is concerned.
+        public int OwnerId;
 
         /// Floor that's otherwise ordinary but explicitly off-limits to
         /// pathfinding — e.g. the Chaos Core's center tile, which stays
@@ -124,6 +184,11 @@ namespace KeepersDomain.Grid
                     return RoomMaxHp;
                 }
 
+                if (IsBedrock)
+                {
+                    return BedrockMaxHp;
+                }
+
                 switch (WallResourceType)
                 {
                     case WallResourceType.GoldWall:
@@ -142,6 +207,7 @@ namespace KeepersDomain.Grid
         {
             Type = TileType.Rock,
             Ownership = TileOwnership.Unclaimed,
+            OwnerId = -1,
             IsQueuedForDig = false,
             RoomId = null,
             Hp = RockMaxHp,

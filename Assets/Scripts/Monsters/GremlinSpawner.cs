@@ -60,10 +60,13 @@ namespace KeepersDomain.Monsters
         ///   Slime Hatchery tiles (across every placed Hatchery).
         /// - At least RequiredTrainingRoomTiles Training Room tiles placed
         ///   (across every placed Training Room).
-        /// Gremlin and Warlock (see WarlockSpawner) are both counted as
-        /// "non-Imp creatures" for the Hatchery requirement — any further
-        /// non-Imp creature type needs to be added to this population count
-        /// too.
+        /// Gremlin, Warlock, Maze Rattler, and Bean Counter (see
+        /// WarlockSpawner/MazeRattlerSpawner/BeanCounterSpawner) are all
+        /// counted as "non-Imp creatures" for the Hatchery requirement —
+        /// any further non-Imp creature type needs to be added to this
+        /// population count too. Elf deliberately isn't counted here —
+        /// it's never recruited through this gate at all (see
+        /// ElfSpawner.SpawnElf), only ever created as a conversion outcome.
         public bool MeetsJoinRequirements()
         {
             if (_lairManager == null || !_lairManager.HasUnclaimedLair())
@@ -71,7 +74,7 @@ namespace KeepersDomain.Monsters
                 return false;
             }
 
-            var nonImpCount = GremlinAgent.All.Count + WarlockAgent.All.Count;
+            var nonImpCount = GremlinAgent.All.Count + WarlockAgent.All.Count + MazeRattlerAgent.All.Count + BeanCounterAgent.All.Count;
             if (_slimeHatcheryManager == null || nonImpCount >= _slimeHatcheryManager.TotalTileCount)
             {
                 return false;
@@ -101,7 +104,12 @@ namespace KeepersDomain.Monsters
             return true;
         }
 
-        private void SpawnGremlin(Vector2Int coord)
+        /// Public so ConversionClassManager can reuse this exact "capsule +
+        /// Initialize" spawn code when a tormented Gremlin prisoner wins
+        /// its conversion roll and rejoins the domain (see
+        /// ConversionClassManager.TryTormentRandomPrisoner), instead of
+        /// duplicating it.
+        public void SpawnGremlin(Vector2Int coord)
         {
             var worldPos = _grid.GridToWorld(coord);
 

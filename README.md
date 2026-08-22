@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="Assets/Resources/UI/logo.png" alt="The Keeper's Domain logo" width="320">
+</p>
+
 # The Keeper's Domain
 
 Mobile dig-and-build dungeon management prototype — original IP, inspired by (but not derived from) Dungeon Keeper. See [Docs/project-brief.md](Docs/project-brief.md) for the full brief.
@@ -52,6 +56,17 @@ The **Treasury** is a player-buildable room, placed exactly like a Lair (see Con
 Mana crystals deposited at the **Chaos Core** raise its **Max Mana** stat 1-for-1 (`ChaosCore.DepositManaCrystals`, `MaxManaPerCrystal` — the only ratio the brief pinned down was the crystal's own weight, so this conversion is a placeholder until a real mana economy exists) and a `TextMesh` label above the platform shows the current total.
 
 Tiles have an `IsBuildable` flag (`TileState.IsBuildable`, queried via `DungeonGrid.IsBuildable`), mirroring `IsWalkable` — deliberately separate from `RoomId`/`HasRoom`, which drives the shared purple Lair-room tile color. Normal dug-out floor defaults to buildable (`DungeonGrid.CompleteDig`); `GameBootstrap` carves only the footprint that actually has a fixed structure on it — Chaos Core's center 3x3 platform, the Portal's single staircase tile, and the corridor tile — back to unbuildable, so a Lair can never overlap one of them without forcing them to render as if they were a Lair. The walkable margin around each room is left buildable, since it's the only claimed floor that exists before anything's been dug — without it there'd be no tile to ever place a first Lair on, and so no way to get a first impling at all. `LairManager.CanPlaceFootprint` checks the flag alongside the existing Type/Ownership/HasRoom checks.
+
+## Beyond Phase 1
+
+The prototype has grown well past the table above — full current detail lives in the [dev status & roadmap page](https://zoutbot-cpu.github.io/the-keepers-domain/) and [Docs/design-doc.md](Docs/design-doc.md), both kept current as things change; this is just a pointer so the section above doesn't read as the whole story.
+
+- **Creatures**: Gremlin, Warlock, Maze Rattler, Bean Counter, and Elf join the Imp — each with Hunger/Pay/Happiness (the Imp doesn't need them) and its own AI priority list.
+- **Rooms**: Treasury, Slime Hatchery, Bacon Beacon, Training Room, Library, Jail, Conversion Class, and Bridge, on top of Lair — all sellable through one generic Sell tool, most mergeable into a bigger footprint by placing adjacent to an existing one.
+- **Jail** now has a real capture/prisoner mechanic (drag a misbehaving creature onto a pit tile via the Grab hand), not just Maze Rattler flavor movement — Conversion Class's Bean Counter then processes prisoners into new domain members or into Elves.
+- **Terrain**: Water, Lava, Chasm, and Holy Ground tiles beyond Rock/Floor, plus a permanently-unminable Bedrock wall variant — see `Docs/design-doc.md`'s Terrain section for each tile's walkability/claimability rule. Bridge is the room that lets creatures (Imps included) cross Water/Lava. All five are placed today via a dev-only Build-menu tool, standing in for a real map generator that doesn't exist yet.
+- **Level Designer** (in progress): a separate menu bar for authoring multiplayer-aware levels — player slots/colors, map painting, room/creature placement, JSON save/load (`Assets/Scripts/LevelDesigner/`, [`LevelDesignerMenuBar.cs`](Assets/Scripts/UI/LevelDesignerMenuBar.cs)) — reachable from a new Main Menu ([`MainMenu.cs`](Assets/Scripts/UI/MainMenu.cs)) that now gates entry into the game.
+- **Real wall art** (in progress): an autotiler ([`WallAutotiler.cs`](Assets/Scripts/Grid/WallAutotiler.cs)/[`WallMeshCatalog.cs`](Assets/Scripts/Grid/WallMeshCatalog.cs)) picks a modular KayKit dungeon wall mesh per Rock tile based on its neighbors, replacing the placeholder cube.
 
 ### Controls
 Every plain tap/drag on the grid is governed by the Build menu's **Build mode** radio (`TileInteractionController.BuildMode`, defaults to Mine mode):

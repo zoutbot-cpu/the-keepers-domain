@@ -37,6 +37,39 @@ namespace KeepersDomain.Creatures
             "Ashkarion", "Voidmere", "Grimalkin", "Nocturnis", "Tim", "Wyrmsbane", "Duskweaver", "Malachite", "Thornebrook", "Ravencroft"
         };
 
+        public static readonly string[] MazeRattlerNames =
+        {
+            "Scritch", "Gnaw", "Rustle", "Whisker", "Burrow", "Skitters", "Chitter", "Squeak", "Ratchet", "Gristle",
+            "Tunnel", "Nibbler", "Scrabble", "Rindle", "Wick", "Twitchtail", "Molar", "Scrape", "Rot", "Fester",
+            "Pellet", "Skulker", "Grubber", "Rasper", "Snickle", "Warren", "Musk", "Clatter", "Grmisk", "Vermeel",
+            "Dank", "Scuttler", "Rindtooth", "Chew", "Mange", "Squirm", "Ratling", "Snuffle", "Gristly", "Cobweb",
+            "Scree", "Nether", "Pockmark", "Ravel", "Sinew", "Gnasher", "Wretchling", "Coil", "Skab", "Ferric"
+        };
+
+        // Preachy, bureaucratic, vegetable-pun names for the Bean Counter —
+        // half zealot-sermonizer, half heartless clipboard-bureaucrat, per
+        // the brief's own "torment with lectures about veganism" flavor.
+        public static readonly string[] BeanCounterNames =
+        {
+            "Kale", "Bramwell", "Sprout", "Gourd", "Lentil", "Chickpea", "Radish", "Fennel", "Pious", "Marrow",
+            "Turnip", "Zealous", "Gristlebane", "Cassia", "Fig", "Wormwood", "Sanctimony", "Bramble", "Endive", "Parsnip",
+            "Legume", "Ledger", "Tofu", "Sable", "Bindweed", "Quorn", "Auditwick", "Chard", "Cress", "Puritan",
+            "Vetch", "Tally", "Bran", "Absolvo", "Rutabaga", "Preachum", "Millet", "Grievance", "Sorrel", "Kohl",
+            "Docket", "Penance", "Yeoman", "Sundry", "Verdigris", "Bushel", "Thistlewick", "Pulse", "Compost", "Amaranth"
+        };
+
+        // Short, whimsical names for the Elf — a "weak and worthless"
+        // transformation outcome, not a proud recruited race, so the tone
+        // leans deflated/silly rather than grand.
+        public static readonly string[] ElfNames =
+        {
+            "Pip", "Wisty", "Fen", "Dandle", "Rue", "Twig", "Marl", "Sable", "Pim", "Fenwick",
+            "Lark", "Moth", "Dew", "Bracken", "Wren", "Nib", "Sorrel", "Hollis", "Vell", "Tansy",
+            "Birch", "Elowen", "Fable", "Ash", "Marigold", "Peaseblossom", "Quill", "Reed", "Wisp", "Thistle",
+            "Wick", "Yarrow", "Bellis", "Clove", "Dill", "Elder", "Flax", "Gorse", "Heath", "Ivy",
+            "Juniper", "Larkin", "Meadow", "Nettle", "Oaken", "Petal", "Quince", "Rowan", "Sedge", "Timothy"
+        };
+
         public static string GetRandom(string[] pool)
         {
             return pool[Random.Range(0, pool.Length)];

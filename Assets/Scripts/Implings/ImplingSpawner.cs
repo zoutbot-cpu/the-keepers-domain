@@ -49,7 +49,7 @@ namespace KeepersDomain.Implings
         /// SpawnImpling.
         public void SpawnImplingAt(Vector2Int coord)
         {
-            if (_grid.IsWalkable(coord))
+            if (_grid.IsWalkable(coord, isImp: true))
             {
                 SpawnImpling(_grid.GridToWorld(coord));
             }

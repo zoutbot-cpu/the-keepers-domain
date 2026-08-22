@@ -163,9 +163,21 @@ namespace KeepersDomain.Monsters
         private float _attackCheckTimer;
         private float _attackHitTimer;
 
+        // Set by MinionGrabController when the player's Grab hand drops
+        // this Warlock onto a Training Room tile — see SetTrainingPriority.
+        private bool _hasTrainingPriority;
+
         private readonly List<Vector2Int> _gridPathBuffer = new List<Vector2Int>();
         private readonly List<Vector3> _waypoints = new List<Vector3>();
         private int _waypointIndex;
+
+        // The goal last handed to PlanPathTo — cached so
+        // ReplanPathFromCurrentPosition can re-run the exact same call
+        // after this Warlock's position changes out from under it (see
+        // MinionGrabController), without needing to know which task kind
+        // that goal belonged to.
+        private Vector2Int _lastGoalCoord;
+        private Vector3 _lastGoalWorldPos;
 
         private void Awake()
         {
@@ -192,7 +204,7 @@ namespace KeepersDomain.Monsters
         {
             _creature.Tick(Time.deltaTime);
             _hunger.Tick(Time.deltaTime);
-            _happiness.Tick(Time.deltaTime, _hunger.IsHungry);
+            _happiness.Tick(Time.deltaTime, _hunger.IsHungry, _task == WarlockTask.Researching);
             if (_pay.Tick(Time.deltaTime))
             {
                 TryGetPaid();
@@ -208,15 +220,17 @@ namespace KeepersDomain.Monsters
 
         /// Payday — draws this Warlock's wage (see Pay.WageFor) straight
         /// out of the Treasury, no walking/task involved (unlike eating,
-        /// which needs a Bacon Beacon trip). Going unpaid marks it unhappy
-        /// (Pay.IsUnhappy) and now also actually dents Happiness (see
-        /// Happiness.ApplyUnpaidPenalty), unlike before.
+        /// which needs a Bacon Beacon trip). A successful payment now also
+        /// bumps Happiness (Happiness.ApplyPaidBonus); going unpaid marks it
+        /// unhappy (Pay.IsUnhappy) and dents Happiness instead
+        /// (Happiness.ApplyUnpaidPenalty).
         private void TryGetPaid()
         {
             var wage = Pay.WageFor(_creature.Level);
             if (_treasuryManager != null && _treasuryManager.TrySpendGold(wage))
             {
                 _pay.MarkPaid();
+                _happiness.ApplyPaidBonus();
                 GameplayLog.Write($"{Name} was paid {wage} gold (Lv{_creature.Level})");
             }
             else
@@ -693,24 +707,76 @@ namespace KeepersDomain.Monsters
             SetTask(WarlockTask.Idle);
         }
 
+        /// Set by MinionGrabController when the player's Grab hand drops
+        /// this Warlock onto a Training Room tile — "throw it at the
+        /// Training Room to make it actually go train." Flips the tier-40
+        /// pick below from its default Research-first order (see
+        /// TryBeginResearchOrTrain) to Training-first instead, without
+        /// touching anything above it: an unclaimed Lair (100) and hunger
+        /// (80) still come first, and the Happiness mood gate still
+        /// applies exactly as before — this only reorders which of this
+        /// Warlock's own productive tasks it reaches for.
+        ///
+        /// If this Warlock is already walking to (or working at) a
+        /// bookcase when the flag flips on, that's now the wrong choice —
+        /// drop it back to Idle so EvaluateAndAct re-derives it fresh next
+        /// frame with the new priority applied (Lair/hunger/mood are
+        /// re-checked first regardless, same as any other Idle frame, so
+        /// this can't jump the queue above them). Already-training is left
+        /// alone — the flag has nothing to correct there.
+        public void SetTrainingPriority(bool hasPriority)
+        {
+            _hasTrainingPriority = hasPriority;
+
+            if (hasPriority && _task is WarlockTask.MovingToResearch or WarlockTask.Researching)
+            {
+                SetTask(WarlockTask.Idle);
+            }
+        }
+
+        /// Research (Library) first, Training (Training Room) as the
+        /// fallback if no Library exists — unless _hasTrainingPriority
+        /// flips that order (see SetTrainingPriority), in which case
+        /// Training is tried first instead. Idle if neither is available,
+        /// same either way.
         private void TryBeginResearchOrTrain()
         {
-            if (_libraryManager != null
-                && _libraryManager.TryFindNearestBookcaseTile(_grid.WorldToGrid(transform.position), out var libraryCoord)
-                && PlanPathTo(libraryCoord, _grid.GridToWorld(libraryCoord)))
+            if (_hasTrainingPriority)
             {
-                _researchTargetCoord = libraryCoord;
-                SetTask(WarlockTask.MovingToResearch);
-                return;
+                _ = TryBeginTrain() || TryBeginResearch();
+            }
+            else
+            {
+                _ = TryBeginResearch() || TryBeginTrain();
+            }
+        }
+
+        private bool TryBeginResearch()
+        {
+            if (_libraryManager == null
+                || !_libraryManager.TryFindNearestBookcaseTile(_grid.WorldToGrid(transform.position), out var libraryCoord)
+                || !PlanPathTo(libraryCoord, _grid.GridToWorld(libraryCoord)))
+            {
+                return false;
             }
 
-            if (_trainingRoomManager != null
-                && _trainingRoomManager.TryFindNearestDummyTile(_grid.WorldToGrid(transform.position), out var trainingCoord)
-                && PlanPathTo(trainingCoord, _grid.GridToWorld(trainingCoord)))
+            _researchTargetCoord = libraryCoord;
+            SetTask(WarlockTask.MovingToResearch);
+            return true;
+        }
+
+        private bool TryBeginTrain()
+        {
+            if (_trainingRoomManager == null
+                || !_trainingRoomManager.TryFindNearestDummyTile(_grid.WorldToGrid(transform.position), out var trainingCoord)
+                || !PlanPathTo(trainingCoord, _grid.GridToWorld(trainingCoord)))
             {
-                _trainingTargetCoord = trainingCoord;
-                SetTask(WarlockTask.MovingToTraining);
+                return false;
             }
+
+            _trainingTargetCoord = trainingCoord;
+            SetTask(WarlockTask.MovingToTraining);
+            return true;
         }
 
         private void ArriveAtResearch()
@@ -858,12 +924,47 @@ namespace KeepersDomain.Monsters
             _task = newTask;
         }
 
+        /// Re-plans this Warlock's route to whatever it was last walking
+        /// toward, from wherever it is right now — called by
+        /// MinionGrabController after the player's Grab hand drops it
+        /// somewhere else mid-walk, so it heads straight for its actual
+        /// objective instead of resuming stale waypoints computed from the
+        /// tile it used to stand on (which could path straight through a
+        /// wall placed/discovered in the meantime). No-ops if it wasn't
+        /// actually walking anywhere when grabbed. Falls back to Idle if
+        /// the objective just isn't reachable any more from the new spot —
+        /// EvaluateAndAct re-derives a fresh objective from there next
+        /// frame the same way it already does after any other task finishes.
+        public void ReplanPathFromCurrentPosition()
+        {
+            if (!IsMovingTask(_task))
+            {
+                return;
+            }
+
+            if (PlanPathTo(_lastGoalCoord, _lastGoalWorldPos))
+            {
+                return;
+            }
+
+            SetTask(WarlockTask.Idle);
+        }
+
+        private static bool IsMovingTask(WarlockTask task)
+        {
+            return task is WarlockTask.MovingToLairSpot or WarlockTask.MovingToFood or WarlockTask.MovingToResearch
+                or WarlockTask.MovingToTraining or WarlockTask.MovingToAttackTarget or WarlockTask.MovingToPortal;
+        }
+
         // Same A*-planned-route movement ImplingAgent uses (see its own
         // PlanPathTo/MoveAlongPathThen for the full rationale) — duplicated
         // here rather than shared, matching how GremlinSpawner/WarlockSpawner
         // are already duplicated rather than sharing a base.
         private bool PlanPathTo(Vector2Int goalCoord, Vector3 finalWorldPos)
         {
+            _lastGoalCoord = goalCoord;
+            _lastGoalWorldPos = finalWorldPos;
+
             var startCoord = _grid.WorldToGrid(transform.position);
             var found = AStarPathfinder.TryFindPath(_grid, startCoord, goalCoord, _gridPathBuffer);
 

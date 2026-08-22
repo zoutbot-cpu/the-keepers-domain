@@ -379,7 +379,11 @@ namespace KeepersDomain.Rooms
         /// — same shape as TreasuryManager.TryFindNearestTileWithRoom.
         public bool TryFindNearestTileWithRoom(Vector2Int fromCoord, out Vector2Int targetCoord)
         {
-            var distances = _grid.GetReachableFloorDistances(fromCoord);
+            // Impling-only (slime deposit) — Imps need a Bridge to cross
+            // Water/Lava, see DungeonGrid.IsWalkable. Not shared with
+            // TryFindNearestTileWithBacon below, which is the eating query
+            // every other creature type uses and stays default (non-Imp).
+            var distances = _grid.GetReachableFloorDistances(fromCoord, isImp: true);
             var bestDistance = int.MaxValue;
             targetCoord = default;
             var found = false;

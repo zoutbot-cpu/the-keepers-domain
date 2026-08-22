@@ -10,8 +10,11 @@ namespace KeepersDomain.CameraControl
     public class IsoCameraController : MonoBehaviour
     {
         [SerializeField] private float _panSpeed = 1f;
-        [SerializeField] private float _zoomSpeed = 0.02f;
-        [SerializeField] private float _mouseScrollZoomSpeed = 2f;
+        // Bumped 4-5x from the original 0.02/2 — the old values made both
+        // pinch-zoom and mouse-wheel zoom feel sluggish, taking many
+        // gestures/notches to cross the min/max ortho size range.
+        [SerializeField] private float _zoomSpeed = 0.08f;
+        [SerializeField] private float _mouseScrollZoomSpeed = 10f;
         [SerializeField] private float _minOrthoSize = 4f;
         [SerializeField] private float _maxOrthoSize = 20f;
         [SerializeField] private Vector2 _panBoundsMin = new Vector2(-5f, -5f);

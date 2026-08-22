@@ -13,7 +13,7 @@ namespace KeepersDomain.Grid
         /// Fills path with the route from start to goal (exclusive of start,
         /// inclusive of goal) and returns true if one exists. path is cleared
         /// first either way.
-        public static bool TryFindPath(DungeonGrid grid, Vector2Int start, Vector2Int goal, List<Vector2Int> path)
+        public static bool TryFindPath(DungeonGrid grid, Vector2Int start, Vector2Int goal, List<Vector2Int> path, bool isImp = false)
         {
             path.Clear();
 
@@ -43,7 +43,7 @@ namespace KeepersDomain.Grid
                 foreach (var offset in GridDirections.Cardinal)
                 {
                     var neighbor = current + offset;
-                    if (closed.Contains(neighbor) || !grid.IsWalkable(neighbor))
+                    if (closed.Contains(neighbor) || !grid.IsWalkable(neighbor, isImp))
                     {
                         continue;
                     }

@@ -2,6 +2,7 @@ using UnityEngine;
 using KeepersDomain.Grid;
 using KeepersDomain.Input;
 using KeepersDomain.CameraControl;
+using KeepersDomain.LevelDesigner;
 using KeepersDomain.Rooms;
 using KeepersDomain.Implings;
 using KeepersDomain.Monsters;
@@ -59,6 +60,13 @@ namespace KeepersDomain.Core
         // Same idea, for Warlocks — 10 to start, per the brief.
         private const int StartingWarlockPoolCount = 10;
 
+        // Same idea again, for Maze Rattlers — 5 to start, per the brief.
+        private const int StartingMazeRattlerPoolCount = 5;
+
+        // Same idea again, for Bean Counters — 5 to start, matching Maze
+        // Rattler's own starting count (no design-brief value exists yet).
+        private const int StartingBeanCounterPoolCount = 5;
+
         // Starting Lair/Slime Hatchery/Bacon Beacon, each their own 4x4
         // room chained off Chaos Core the same one-tile-corridor way as
         // Treasury/Library/Training Room — see CarveStartingUtilityRooms.
@@ -79,6 +87,154 @@ namespace KeepersDomain.Core
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void Init()
         {
+            // ShowMainMenu clears any stray camera itself (see its own
+            // comment) — no need to do it again here.
+            ShowMainMenu();
+        }
+
+        /// Called from BottomMenuBar's own "Main Menu" button — tears down
+        /// the entire running game (every root object BuildWorld created:
+        /// grid, camera, managers, every creature) and shows the main menu
+        /// again, same as a fresh launch. Nothing here needs special
+        /// per-system cleanup beyond that: every creature agent already
+        /// removes itself from its own static roster in OnDestroy (see e.g.
+        /// ImplingAgent.OnDestroy), and nothing else in this prototype holds
+        /// state that outlives its GameObject.
+        public static void ReturnToMainMenu()
+        {
+            foreach (var root in UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects())
+            {
+                Object.Destroy(root);
+            }
+
+            ShowMainMenu();
+        }
+
+        /// First thing the player sees — the dungeon isn't built at all yet
+        /// (see BuildWorld), just a logo and Start/Quit over a plain
+        /// background, so a camera still needs to exist for the clear color.
+        /// Real world-building only starts once Start is pressed.
+        private static void ShowMainMenu()
+        {
+            // Clears out whatever camera the previous screen was using
+            // (BuildWorld's iso camera on a "Main Menu" bounce-back, or this
+            // same menu's own camera on a "Back" from Level Designer
+            // properties) before creating a fresh one below.
+            RemoveStrayCameras();
+
+            var menuCameraGO = new GameObject("Menu Camera");
+            menuCameraGO.tag = "MainCamera";
+            var menuCamera = menuCameraGO.AddComponent<Camera>();
+            menuCamera.orthographic = true;
+            menuCamera.clearFlags = CameraClearFlags.SolidColor;
+            menuCamera.backgroundColor = new Color(0.05f, 0.05f, 0.07f);
+
+            var menu = CreateComponent<MainMenu>("MainMenu");
+            menu.Initialize(BuildWorld, ShowLevelDesignerProperties);
+        }
+
+        /// Reached via the main menu's "Level Designer" button — collects
+        /// the up-front properties (player count, map size) the actual
+        /// editor world (see BuildLevelDesignerWorld) gets created with.
+        /// Reuses the menu camera ShowMainMenu already created rather than
+        /// making its own.
+        private static void ShowLevelDesignerProperties()
+        {
+            var propertiesMenu = CreateComponent<LevelDesignerPropertiesMenu>("LevelDesignerPropertiesMenu");
+            propertiesMenu.Initialize(ShowMainMenu, BuildLevelDesignerWorld);
+        }
+
+        /// Builds the Level Designer's own world — a blank map at the
+        /// chosen size (all Rock, Bedrock border) plus its 6-menu editor
+        /// UI. Much lighter than BuildWorld's gameplay setup: no
+        /// BuilderJobBoard, no room managers, no creature spawners — every
+        /// editor tool (see LevelDesignerInteractionController) authors
+        /// tile/room/creature data directly through DungeonGrid/
+        /// LevelDesignerSession instead of going through gameplay's
+        /// job-queue/economy systems, since none of those exist at
+        /// level-design time.
+        private static void BuildLevelDesignerWorld(LevelDesignerProperties properties)
+        {
+            RemoveStrayCameras();
+            CreateSun();
+
+            var grid = CreateComponent<DungeonGrid>("DungeonGrid");
+            grid.Initialize(properties.MapWidth, properties.MapHeight, CellSize);
+
+            // Border Bedrock — every tile starts as plain Rock (see
+            // DungeonGrid.Initialize), so SetBedrock's "must be plain
+            // Rock" guard is already satisfied for all of them.
+            for (int x = 0; x < properties.MapWidth; x++)
+            {
+                grid.SetBedrock(new Vector2Int(x, 0));
+                grid.SetBedrock(new Vector2Int(x, properties.MapHeight - 1));
+            }
+            for (int y = 0; y < properties.MapHeight; y++)
+            {
+                grid.SetBedrock(new Vector2Int(0, y));
+                grid.SetBedrock(new Vector2Int(properties.MapWidth - 1, y));
+            }
+
+            var session = CreateComponent<LevelDesignerSession>("LevelDesignerSession");
+            session.Initialize(grid, properties);
+
+            SetUpLevelDesignerWorld(grid, session, initialLevelName: null);
+        }
+
+        /// Reached from the Level Designer's own Save/Load menu — tears
+        /// down whatever's currently running (same full-scene teardown
+        /// ReturnToMainMenu uses) and rebuilds the editor world from a
+        /// previously saved LevelData instead of a blank map: every
+        /// non-default tile, the saved player roster, and every placed
+        /// creature are restored by LevelDesignerSession.ApplyLevelData.
+        private static void LoadLevelDesignerWorld(string levelName, LevelData data)
+        {
+            foreach (var root in UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects())
+            {
+                Object.Destroy(root);
+            }
+
+            RemoveStrayCameras();
+            CreateSun();
+
+            var grid = CreateComponent<DungeonGrid>("DungeonGrid");
+            grid.Initialize(data.MapWidth, data.MapHeight, CellSize);
+
+            var session = CreateComponent<LevelDesignerSession>("LevelDesignerSession");
+            session.InitializeFromSave(grid, data);
+            session.ApplyLevelData(data);
+
+            SetUpLevelDesignerWorld(grid, session, levelName);
+        }
+
+        /// Shared by BuildLevelDesignerWorld/LoadLevelDesignerWorld once
+        /// each has its own grid+session ready (blank vs. restored from a
+        /// save) — camera, the interaction controller, and the 6-menu
+        /// editor UI are identical either way.
+        private static void SetUpLevelDesignerWorld(DungeonGrid grid, LevelDesignerSession session, string initialLevelName)
+        {
+            // Unlike BuildWorld's fixed 22.5 pan margin (tuned for the
+            // gameplay grid's own fixed size), the editor's pan bounds
+            // scale with the actual map footprint, padded enough to reach
+            // every edge tile comfortably.
+            var panMargin = Mathf.Max(grid.Width, grid.Height) * CellSize * 0.5f + 10f;
+            var camera = CreateIsoCamera(grid, panMargin);
+
+            var interactionController = CreateComponent<LevelDesignerInteractionController>("LevelDesignerInteractionController");
+            interactionController.Initialize(camera, grid, session);
+
+            var menuBar = CreateComponent<LevelDesignerMenuBar>("LevelDesignerMenuBar");
+            menuBar.Initialize(session, interactionController, LoadLevelDesignerWorld, initialLevelName);
+        }
+
+        /// Everything that used to run directly out of Init() — deferred
+        /// until the player presses Start on the main menu (see
+        /// ShowMainMenu), so the prototype no longer drops straight into the
+        /// dungeon on launch.
+        private static void BuildWorld()
+        {
+            // Clears out the menu camera created by ShowMainMenu — the real
+            // iso camera below replaces it.
             RemoveStrayCameras();
             CreateSun();
 
@@ -265,13 +421,57 @@ namespace KeepersDomain.Core
             warlockSpawner.Initialize(grid, portal, lairManager, libraryManager, slimeHatcheryManager, baconBeaconManager, trainingRoomManager, treasuryManager);
             portal.SeedPool(WarlockAgent.CreatureKind, StartingWarlockPoolCount);
 
-            var camera = CreateIsoCamera(grid);
+            // Third non-Imp creature — see MazeRattlerAgent/MazeRattlerSpawner's
+            // own header comments for its join requirement (a placed Jail,
+            // 5 Maze Rattlers per Jail room) and its "haunt the prisoners"
+            // idle-tier behavior.
+            var mazeRattlerSpawner = CreateComponent<MazeRattlerSpawner>("MazeRattlerSpawner");
+            mazeRattlerSpawner.Initialize(grid, portal, lairManager, jailManager, baconBeaconManager, trainingRoomManager, treasuryManager);
+            portal.SeedPool(MazeRattlerAgent.CreatureKind, StartingMazeRattlerPoolCount);
+
+            // Elf is never recruited through the Portal (see ElfSpawner's
+            // own header) — only ever created as Conversion Class's
+            // torment-failure outcome — so it's created here with no
+            // SeedPool call, just wired up so ConversionClassManager has
+            // something to call SpawnElf on.
+            var elfSpawner = CreateComponent<ElfSpawner>("ElfSpawner");
+            elfSpawner.Initialize(grid, portal, lairManager, baconBeaconManager, treasuryManager);
+
+            // Conversion Class follows the same "player-placed, subscribes
+            // to RoomSold" wiring as every other room — see
+            // ConversionClassManager's own header for the bench/wall-board
+            // visuals and the torment mechanic it owns.
+            var conversionClassManager = CreateComponent<ConversionClassManager>("ConversionClassManager");
+            conversionClassManager.Initialize(grid, lairManager, treasuryManager, jailManager, gremlinSpawner, warlockSpawner, mazeRattlerSpawner, elfSpawner);
+
+            // Bridge follows the same "player-placed, subscribes to
+            // RoomSold" wiring as every other room manager — see
+            // BridgeManager's own header for its line-paint placement and
+            // Lava-decay mechanic.
+            var bridgeManager = CreateComponent<BridgeManager>("BridgeManager");
+            bridgeManager.Initialize(grid, lairManager, treasuryManager);
+
+            // Fourth non-Imp creature — see BeanCounterAgent/
+            // BeanCounterSpawner's own header comments for its join
+            // requirement (a placed Conversion Class) and its "teach"
+            // idle-tier behavior.
+            var beanCounterSpawner = CreateComponent<BeanCounterSpawner>("BeanCounterSpawner");
+            beanCounterSpawner.Initialize(grid, portal, lairManager, conversionClassManager, jailManager, baconBeaconManager, treasuryManager);
+            portal.SeedPool(BeanCounterAgent.CreatureKind, StartingBeanCounterPoolCount);
+
+            // Pan margin scaled by the same +50% as GridWidth/GridHeight
+            // (15f base -> 22.5f), so the camera can still reach the whole
+            // enlarged map instead of the old grid's bounds.
+            var camera = CreateIsoCamera(grid, 22.5f);
+
+            var minionGrabController = CreateComponent<MinionGrabController>("MinionGrabController");
+            minionGrabController.Initialize(camera, grid, trainingRoomManager, jailManager);
 
             var interactionController = CreateComponent<TileInteractionController>("TileInteractionController");
-            interactionController.Initialize(camera, grid, jobBoard, lairManager, treasuryManager, slimeHatcheryManager, baconBeaconManager, trainingRoomManager, libraryManager, jailManager, implingSpawner);
+            interactionController.Initialize(camera, grid, jobBoard, lairManager, treasuryManager, slimeHatcheryManager, baconBeaconManager, trainingRoomManager, libraryManager, jailManager, conversionClassManager, bridgeManager, implingSpawner, minionGrabController);
 
             var bottomMenuBar = CreateComponent<BottomMenuBar>("BottomMenuBar");
-            bottomMenuBar.Initialize(grid, jobBoard, interactionController, treasuryManager, chaosCore, baconBeaconManager, trainingRoomManager, libraryManager, jailManager, gremlinSpawner, warlockSpawner);
+            bottomMenuBar.Initialize(grid, jobBoard, interactionController, treasuryManager, chaosCore, baconBeaconManager, trainingRoomManager, libraryManager, jailManager, conversionClassManager, gremlinSpawner, warlockSpawner, mazeRattlerSpawner, beanCounterSpawner);
         }
 
         /// GameBootstrap owns the one true camera/listener for this prototype.
@@ -293,9 +493,27 @@ namespace KeepersDomain.Core
             light.type = LightType.Directional;
             light.intensity = 1.1f;
             lightGO.transform.rotation = Quaternion.Euler(50f, -30f, 0f);
+
+            // Set explicitly rather than trusting the scene file's own
+            // Render Settings — Prototype.unity's Ambient Mode is left at
+            // Skybox with no Skybox Material assigned, which leaves
+            // surfaces with no ambient/fill light at all. That's invisible
+            // on the flat-topped placeholder cubes (their top face still
+            // catches the Sun directly), but it reads as solid black on
+            // the KayKit wall meshes' vertical faces wherever they don't
+            // point straight at the Sun. Flat ambient is the simplest fix
+            // that doesn't depend on a skybox existing.
+            RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Flat;
+            RenderSettings.ambientLight = new Color(0.35f, 0.35f, 0.4f);
         }
 
-        private static Camera CreateIsoCamera(DungeonGrid grid)
+        /// panMargin is the caller's own choice rather than a fixed
+        /// constant — BuildWorld's gameplay grid is always the same fixed
+        /// size, but the level designer's map varies a lot (12 to 256 per
+        /// side — see LevelDesignerPropertiesMenu), so its own caller
+        /// (BuildLevelDesignerWorld) scales the margin to the actual map
+        /// footprint instead of reusing gameplay's fixed 22.5.
+        private static Camera CreateIsoCamera(DungeonGrid grid, float panMargin)
         {
             var cameraGO = new GameObject("Main Camera");
             cameraGO.tag = "MainCamera";
@@ -314,10 +532,6 @@ namespace KeepersDomain.Core
 
             var isoCam = cameraGO.AddComponent<IsoCameraController>();
             var camPos = cameraGO.transform.position;
-            // Pan margin scaled by the same +50% as GridWidth/GridHeight
-            // (15f base -> 22.5f), so the camera can still reach the whole
-            // enlarged map instead of the old grid's bounds.
-            const float panMargin = 22.5f;
             isoCam.SetPanBounds(new Vector2(camPos.x - panMargin, camPos.z - panMargin), new Vector2(camPos.x + panMargin, camPos.z + panMargin));
 
             return camera;

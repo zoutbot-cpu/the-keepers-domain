@@ -239,6 +239,7 @@ namespace KeepersDomain.Rooms
             if (roomId.StartsWith("TrainingRoom_")) return TrainingRoomManager.CostPerTile;
             if (roomId.StartsWith("Library_")) return LibraryManager.CostPerTile;
             if (roomId.StartsWith("Jail_")) return JailManager.CostPerTile;
+            if (roomId.StartsWith("Bridge_")) return BridgeManager.CostPerTile;
             return 0;
         }
 

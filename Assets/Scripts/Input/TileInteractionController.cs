@@ -33,6 +33,7 @@ namespace KeepersDomain.Input
         PlaceTrainingRoom,
         PlaceLibrary,
         PlaceJail,
+        PlaceConversionClass,
         SellLair,
         SpawnImpling,
         ToggleLairClaim
@@ -51,7 +52,25 @@ namespace KeepersDomain.Input
         View,
         Mine,
         Reinforce,
-        Construct
+        Construct,
+        /// Arms the grab hand (see MinionGrabController) — taps stop
+        /// mining/reinforcing/constructing entirely, same "inert to
+        /// everything but its own tap handling" carve-out View mode gets.
+        Grab,
+        /// Line/square-paints a Bridge onto Water/Lava tiles (see
+        /// BridgeManager) — instant and gold-charged per tile, unlike
+        /// Mine/Reinforce/Construct's queue-a-job shape.
+        Bridge,
+        /// Dev-only terrain placement (see DungeonGrid.SetTerrainFeature) —
+        /// paints a Rock tile directly into Water/Lava/Chasm/HolyGround,
+        /// standing in for the map generator that doesn't exist yet.
+        PlaceWater,
+        PlaceLava,
+        PlaceChasm,
+        PlaceHolyGround,
+        /// Dev-only wall placement (see DungeonGrid.SetBedrock) — marks a
+        /// Rock tile permanently unminable.
+        PlaceBedrock
     }
 
     /// Turns raw pointer input into grid actions. If a PlacementAction is
@@ -83,7 +102,12 @@ namespace KeepersDomain.Input
             None,
             Queue,
             Unqueue,
-            Sell
+            Sell,
+            /// Instant, gold-charged bridge placement — see BuildMode.Bridge.
+            BuildBridge,
+            /// Instant dev-only terrain painting — see BuildMode.PlaceWater/
+            /// PlaceLava/PlaceChasm.
+            PlaceTerrain
         }
 
         [SerializeField] private float _tapMaxDragPixels = 12f;
@@ -98,7 +122,10 @@ namespace KeepersDomain.Input
         private TrainingRoomManager _trainingRoomManager;
         private LibraryManager _libraryManager;
         private JailManager _jailManager;
+        private ConversionClassManager _conversionClassManager;
+        private BridgeManager _bridgeManager;
         private ImplingSpawner _implingSpawner;
+        private MinionGrabController _minionGrabController;
 
         // Sits alongside the Shift-key check so a future UI toggle (touch
         // devices have no Shift key) can flip this without touching any of
@@ -114,7 +141,18 @@ namespace KeepersDomain.Input
         private Vector2Int _lastPaintedCoord;
         private bool _hasLastPaintedCoord;
         private GestureMode _gestureMode;
+
+        // A Bridge gesture locks onto whichever axis (horizontal/vertical)
+        // the drag first moves toward from _dragStartCoord, then every
+        // further tile is projected onto that same axis regardless of how
+        // the pointer actually wanders — see ContinueGesture's BuildBridge
+        // branch. Keeps a bridge a straight line even if the player's drag
+        // wobbles, rather than following the raw (possibly jagged) mouse
+        // path the way ordinary line painting does.
+        private bool _hasBridgeAxis;
+        private bool _isBridgeAxisHorizontal;
         private bool _isViewTap;
+        private bool _isGrabTap;
         private bool _isPlacingLair;
         private Vector2Int _lairDragCurrentCoord;
         private bool _isPlacingTreasury;
@@ -129,6 +167,8 @@ namespace KeepersDomain.Input
         private Vector2Int _libraryDragCurrentCoord;
         private bool _isPlacingJail;
         private Vector2Int _jailDragCurrentCoord;
+        private bool _isPlacingConversionClass;
+        private Vector2Int _conversionClassDragCurrentCoord;
         private PlacementAction _pendingPlacementAction;
 
         /// While a Lair placement is being dragged out, the rectangle so far
@@ -169,11 +209,20 @@ namespace KeepersDomain.Input
         public Vector2Int JailDragStartCoord => _dragStartCoord;
         public Vector2Int JailDragCurrentCoord => _jailDragCurrentCoord;
 
+        /// Same idea again, for a Conversion Class placement in progress.
+        public bool IsPlacingConversionClass => _isPlacingConversionClass;
+        public Vector2Int ConversionClassDragStartCoord => _dragStartCoord;
+        public Vector2Int ConversionClassDragCurrentCoord => _conversionClassDragCurrentCoord;
+
         public PlacementAction PendingPlacementAction => _pendingPlacementAction;
         public BuildMode BuildMode => _buildMode;
         public string InspectedDescription => _inspectedDescription;
 
-        public void Initialize(Camera camera, DungeonGrid grid, BuilderJobBoard jobBoard, LairManager lairManager, TreasuryManager treasuryManager, SlimeHatcheryManager slimeHatcheryManager, BaconBeaconManager baconBeaconManager, TrainingRoomManager trainingRoomManager, LibraryManager libraryManager, JailManager jailManager, ImplingSpawner implingSpawner)
+        /// Whether the Grab hand is currently carrying a minion — read by
+        /// BottomMenuBar to show the right instruction text for Grab mode.
+        public bool IsCarryingMinion => _minionGrabController != null && _minionGrabController.IsCarrying;
+
+        public void Initialize(Camera camera, DungeonGrid grid, BuilderJobBoard jobBoard, LairManager lairManager, TreasuryManager treasuryManager, SlimeHatcheryManager slimeHatcheryManager, BaconBeaconManager baconBeaconManager, TrainingRoomManager trainingRoomManager, LibraryManager libraryManager, JailManager jailManager, ConversionClassManager conversionClassManager, BridgeManager bridgeManager, ImplingSpawner implingSpawner, MinionGrabController minionGrabController)
         {
             _camera = camera;
             _grid = grid;
@@ -185,7 +234,10 @@ namespace KeepersDomain.Input
             _trainingRoomManager = trainingRoomManager;
             _libraryManager = libraryManager;
             _jailManager = jailManager;
+            _conversionClassManager = conversionClassManager;
+            _bridgeManager = bridgeManager;
             _implingSpawner = implingSpawner;
+            _minionGrabController = minionGrabController;
         }
 
         public void SetSquareModeToggle(bool isEnabled)
@@ -195,6 +247,15 @@ namespace KeepersDomain.Input
 
         public void SetBuildMode(BuildMode mode)
         {
+            // Leaving Grab mode mid-carry drops the minion straight back
+            // where it was grabbed from (see MinionGrabController.
+            // CancelCarry) rather than leaving it stuck floating forever
+            // just because the player switched tools.
+            if (_buildMode == BuildMode.Grab && mode != BuildMode.Grab)
+            {
+                _minionGrabController?.CancelCarry();
+            }
+
             _buildMode = mode;
             _inspectedDescription = "";
         }
@@ -219,10 +280,18 @@ namespace KeepersDomain.Input
             if (_camera == null || _grid == null || BottomMenuBar.PointerOverPanel)
             {
                 _lairManager?.ClearSellPreview();
+                _minionGrabController?.SetVisible(false);
                 return;
             }
 
             UpdateSellPreview();
+
+            var isGrabModeActive = _buildMode == BuildMode.Grab;
+            _minionGrabController?.SetVisible(isGrabModeActive);
+            if (isGrabModeActive)
+            {
+                _minionGrabController?.UpdateHover(PointerInput.PrimaryPosition);
+            }
 
             if (PointerInput.PrimaryDown)
             {
@@ -275,6 +344,7 @@ namespace KeepersDomain.Input
             _hasLastPaintedCoord = false;
             _gestureMode = GestureMode.None;
             _isViewTap = false;
+            _isGrabTap = false;
 
             if (!TryGetCoordUnderScreenPos(screenPos, out var coord))
             {
@@ -339,6 +409,14 @@ namespace KeepersDomain.Input
                 return;
             }
 
+            if (_pendingPlacementAction == PlacementAction.PlaceConversionClass)
+            {
+                _isPlacingConversionClass = true;
+                _conversionClassDragCurrentCoord = coord;
+                _conversionClassManager?.UpdatePlacementPreview(coord, coord);
+                return;
+            }
+
             if (_pendingPlacementAction == PlacementAction.SellLair)
             {
                 // Draggable like Mine/Reinforce/Construct queuing — sells
@@ -364,6 +442,40 @@ namespace KeepersDomain.Input
                 // make sense, and this also guarantees View mode never
                 // queues anything even if the player drags.
                 _isViewTap = true;
+                return;
+            }
+
+            if (_buildMode == BuildMode.Grab)
+            {
+                // Same tap-only, resolved-on-release shape as View mode —
+                // grabbing/dropping mid-drag doesn't make sense either,
+                // and this keeps Grab mode from ever queuing a dig/
+                // reinforce/build job even if the player drags.
+                _isGrabTap = true;
+                return;
+            }
+
+            if (_buildMode == BuildMode.Bridge)
+            {
+                // Instant, gold-charged per tile — same one-tap-then-line-
+                // continues shape GestureMode.Sell already uses, rather
+                // than Mine/Reinforce/Construct's queue/unqueue toggle. The
+                // axis isn't known yet — see ContinueGesture's BuildBridge
+                // branch, which locks it in once the drag actually moves.
+                _gestureMode = GestureMode.BuildBridge;
+                _hasBridgeAxis = false;
+                ApplyGestureAction(coord);
+                _hasLastPaintedCoord = true;
+                _lastPaintedCoord = coord;
+                return;
+            }
+
+            if (_buildMode is BuildMode.PlaceWater or BuildMode.PlaceLava or BuildMode.PlaceChasm or BuildMode.PlaceHolyGround or BuildMode.PlaceBedrock)
+            {
+                _gestureMode = GestureMode.PlaceTerrain;
+                ApplyGestureAction(coord);
+                _hasLastPaintedCoord = true;
+                _lastPaintedCoord = coord;
                 return;
             }
 
@@ -448,8 +560,46 @@ namespace KeepersDomain.Input
                 return;
             }
 
+            if (_isPlacingConversionClass)
+            {
+                if (TryGetCoordUnderScreenPos(screenPos, out var conversionClassCoord) && conversionClassCoord != _conversionClassDragCurrentCoord)
+                {
+                    _conversionClassDragCurrentCoord = conversionClassCoord;
+                    _conversionClassManager?.UpdatePlacementPreview(_dragStartCoord, _conversionClassDragCurrentCoord);
+                }
+                return;
+            }
+
             if (_gestureMode == GestureMode.None || !TryGetCoordUnderScreenPos(screenPos, out var currentCoord))
             {
+                return;
+            }
+
+            if (_gestureMode == GestureMode.BuildBridge)
+            {
+                // Never square-fills (a bridge is 1 tile wide) and never
+                // follows the raw pointer path either — locks onto whichever
+                // axis the drag first moves toward from _dragStartCoord, then
+                // every further tile is that axis's projection of the
+                // pointer, so a wobbly drag still comes out as a straight
+                // line instead of a jagged one.
+                if (!_hasBridgeAxis)
+                {
+                    var dx = currentCoord.x - _dragStartCoord.x;
+                    var dy = currentCoord.y - _dragStartCoord.y;
+                    if (dx == 0 && dy == 0)
+                    {
+                        return;
+                    }
+
+                    _isBridgeAxisHorizontal = Mathf.Abs(dx) >= Mathf.Abs(dy);
+                    _hasBridgeAxis = true;
+                }
+
+                var projectedCoord = _isBridgeAxisHorizontal
+                    ? new Vector2Int(currentCoord.x, _dragStartCoord.y)
+                    : new Vector2Int(_dragStartCoord.x, currentCoord.y);
+                ApplyLineSelectionStep(projectedCoord);
                 return;
             }
 
@@ -551,6 +701,29 @@ namespace KeepersDomain.Input
                 return;
             }
 
+            if (_isPlacingConversionClass)
+            {
+                _isPlacingConversionClass = false;
+                _pendingPlacementAction = PlacementAction.None;
+                if (TryGetCoordUnderScreenPos(screenPos, out var endCoord))
+                {
+                    _conversionClassManager?.TryPlaceConversionClass(_dragStartCoord, endCoord);
+                }
+                _conversionClassManager?.ClearPlacementPreview();
+                return;
+            }
+
+            if (_isGrabTap)
+            {
+                _isGrabTap = false;
+                var grabDragDistance = Vector2.Distance(_dragStartScreenPos, screenPos);
+                if (grabDragDistance <= _tapMaxDragPixels && TryGetCoordUnderScreenPos(screenPos, out var grabCoord))
+                {
+                    _minionGrabController?.HandleTap(grabCoord);
+                }
+                return;
+            }
+
             if (!_isViewTap)
             {
                 return;
@@ -649,12 +822,54 @@ namespace KeepersDomain.Input
                 }
             }
 
+            foreach (var mazeRattler in MazeRattlerAgent.All)
+            {
+                if (_grid.WorldToGrid(mazeRattler.Position) == coord)
+                {
+                    _inspectedDescription = DescribeMonster(mazeRattler.Name, mazeRattler.Task.ToString(), coord, mazeRattler.Creature, mazeRattler.Hunger, mazeRattler.Pay, mazeRattler.Happiness);
+                    return;
+                }
+            }
+
+            foreach (var beanCounter in BeanCounterAgent.All)
+            {
+                if (_grid.WorldToGrid(beanCounter.Position) == coord)
+                {
+                    _inspectedDescription = DescribeMonster(beanCounter.Name, beanCounter.Task.ToString(), coord, beanCounter.Creature, beanCounter.Hunger, beanCounter.Pay, beanCounter.Happiness);
+                    return;
+                }
+            }
+
+            foreach (var elf in ElfAgent.All)
+            {
+                if (_grid.WorldToGrid(elf.Position) == coord)
+                {
+                    _inspectedDescription = DescribeMonster(elf.Name, elf.Task.ToString(), coord, elf.Creature, elf.Hunger, elf.Pay, elf.Happiness);
+                    return;
+                }
+            }
+
             var tile = _grid.GetTile(coord);
-            if (tile.Type == TileType.Rock)
+            if (tile.Type == TileType.Rock && tile.IsBedrock)
+            {
+                _inspectedDescription = $"Bedrock ({coord.x},{coord.y})\nUnminable";
+            }
+            else if (tile.Type == TileType.Rock)
             {
                 var kind = tile.IsReinforced ? "Reinforced wall" : "Wall";
                 var queued = tile.IsQueuedForDig ? " (queued: mine)" : tile.IsQueuedForReinforce ? " (queued: reinforce)" : "";
                 _inspectedDescription = $"{kind} ({coord.x},{coord.y}){queued}\nHP: {tile.Hp}/{tile.MaxHp}";
+            }
+            else if (tile.Type is TileType.Water or TileType.Lava or TileType.Chasm)
+            {
+                var bridged = tile.HasRoom ? "Bridged" : "Not bridged";
+                _inspectedDescription = tile.Type == TileType.Chasm
+                    ? $"Chasm ({coord.x},{coord.y})\nImpassable — no bridge can be built here"
+                    : $"{tile.Type} ({coord.x},{coord.y})\n{bridged}";
+            }
+            else if (tile.Type == TileType.HolyGround)
+            {
+                _inspectedDescription = $"Holy Ground ({coord.x},{coord.y})\nUnclaimable";
             }
             else
             {
@@ -760,6 +975,29 @@ namespace KeepersDomain.Input
                     break;
                 case GestureMode.Sell:
                     _lairManager?.TrySellRoom(coord);
+                    break;
+                case GestureMode.BuildBridge:
+                    _bridgeManager?.TryPlaceBridgeTile(coord);
+                    break;
+                case GestureMode.PlaceTerrain:
+                    switch (_buildMode)
+                    {
+                        case BuildMode.PlaceWater:
+                            _grid.SetTerrainFeature(coord, TileType.Water);
+                            break;
+                        case BuildMode.PlaceLava:
+                            _grid.SetTerrainFeature(coord, TileType.Lava);
+                            break;
+                        case BuildMode.PlaceChasm:
+                            _grid.SetTerrainFeature(coord, TileType.Chasm);
+                            break;
+                        case BuildMode.PlaceHolyGround:
+                            _grid.SetTerrainFeature(coord, TileType.HolyGround);
+                            break;
+                        case BuildMode.PlaceBedrock:
+                            _grid.SetBedrock(coord);
+                            break;
+                    }
                     break;
             }
         }

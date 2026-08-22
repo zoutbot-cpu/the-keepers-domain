@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using KeepersDomain.Grid;
+using KeepersDomain.DebugUI;
 
 namespace KeepersDomain.Rooms
 {
@@ -14,11 +15,19 @@ namespace KeepersDomain.Rooms
     /// room uses — which guarantees at least a 3x3 pit inside the 1-tile
     /// ring. Ringed by a low fence around the pit's own boundary (not the
     /// room's outer edge) with a single staircase-and-gate entrance.
-    /// Attracts the Maze Rattler, but that creature (and any actual
-    /// capture/prisoner mechanic) doesn't exist yet — this is
-    /// placement/visuals only, same "player-placed, subscribes to
-    /// RoomSold" shape TrainingRoomManager/LibraryManager use, including
-    /// their adjacent-placement merge rule (see TryFindMergeableRoom): a
+    /// Attracts the Maze Rattler (haunts the pit tiles, no interaction with
+    /// prisoners). Capture is real now: dropping a carried Gremlin/Warlock/
+    /// Maze Rattler/Elf onto a pit tile via the Grab hand (see
+    /// MinionGrabController.TryDrop/JailManager.TryCapture) imprisons it as
+    /// inert JailedPrisoner data — no longer a live agent — until Conversion
+    /// Class's Bean Counter processes it (ConversionClassManager.
+    /// TryTormentRandomPrisoner/JailManager.TryReleaseRandomPrisoner). This
+    /// class only owns the prisoner bookkeeping and its "bound blob"
+    /// visual; the actual torment/outcome logic lives in
+    /// ConversionClassManager. Placement/visuals otherwise follow the same
+    /// "player-placed, subscribes to RoomSold" shape TrainingRoomManager/
+    /// LibraryManager use, including their adjacent-placement merge rule
+    /// (see TryFindMergeableRoom): a
     /// footprint that exactly completes a rectangle together with an
     /// existing Jail extends that Jail instead of starting a separate
     /// one. A merge can only ever grow the room, which can only ever grow
@@ -42,20 +51,19 @@ namespace KeepersDomain.Rooms
     ///   DungeonGrid.IsWalkable checks Type/IsBlocked, never Y — so a Jail
     ///   tile is exactly as walkable as any other Floor tile despite
     ///   sitting visually in a pit; prisoners/implings can path across it
-    ///   like any room. The "infinite blocks below" look asked for is a
-    ///   stack of black panel-with-a-gray-cross "blocks" this class
-    ///   builds along the pit's outer rim (see BuildRimWallVisual/
-    ///   BuildRimWallBlock) reaching down far past anything the camera
-    ///   can ever see the bottom of — not a second grid layer, and
-    ///   deliberately NOT a slab under the whole tile: a full-footprint
-    ///   column reaching up to ground level would sit physically in front
-    ///   of (above) the sunk floor from any downward-looking angle and
-    ///   bury it, which is exactly the "solid black box" bug an earlier
-    ///   version of this had. Only the thin rim, inset like the fence
-    ///   rail rather than covering the tile, is needed — interior pit
-    ///   tiles have no elevation seam against their neighbors and don't
-    ///   need anything under them, same as ordinary DungeonGrid floor
-    ///   never does.
+    ///   like any room. The pit's own rim is a short, plain dark wall
+    ///   (see BuildRimWallVisual) just deep enough to close the gap under
+    ///   the light gray fence — deliberately NOT a slab under the whole
+    ///   tile: a full-footprint column reaching up to ground level would
+    ///   sit physically in front of (above) the sunk floor from any
+    ///   downward-looking angle and bury it, which is exactly the "solid
+    ///   black box" bug an earlier, much deeper version of this wall had.
+    ///   Interior pit tiles have no elevation seam against their
+    ///   neighbors and don't need a wall at all, same as ordinary
+    ///   DungeonGrid floor never does. The black-panel-with-a-gray-cross
+    ///   "block" look the wall originally carried now lives on the ring's
+    ///   own floor instead (see BuildGrateFloorVisual) — the fence is the
+    ///   pit's one real decorated rim marker.
     public class JailManager : MonoBehaviour
     {
         /// Gold cost per tile of a placed Jail — no design-brief value
@@ -77,19 +85,13 @@ namespace KeepersDomain.Rooms
         // unit per grid step, so this is exactly one step down.
         private const float PitDepth = 1f;
 
-        // How far down the rim wall reaches. Not literally infinite —
-        // just far enough that the iso camera (min pitch 20°, max
-        // orthographic size 20 — see IsoCameraController) can never see
-        // its bottom edge at any zoom/pan/rotation the player can reach,
-        // so it reads as bottomless.
-        private const float RimWallDepth = 40f;
-
-        // Rock's own top face sits at 0.5 (see DungeonGrid.RefreshVisual)
-        // — the rim wall reaches up to that same height so it closes
-        // flush against a neighboring undug Rock tile with no gap, and
-        // against a neighboring dug Floor tile it simply reads as "rock
-        // behind the floor," which is exactly what it is.
-        private const float RimWallTopY = 0.5f;
+        // How far down the rim wall reaches — just 2 tile-heights (cellSize
+        // is 1 world unit per grid step, same "world units == grid steps"
+        // assumption PitDepth relies on). Doesn't need to fake bottomless
+        // depth any more: the pit's actual rim marker is the light gray
+        // fence below, not this wall — the wall now only needs to close
+        // the immediate gap under that fence.
+        private const float RimWallDepth = 2f;
         private const float RimWallThickness = 0.1f;
 
         // Right at the tile's true edge (half a cell is 0.5) rather than
@@ -98,34 +100,39 @@ namespace KeepersDomain.Rooms
         // faces don't coplanar-z-fight with each other.
         private const float RimWallEdgeInset = 0.49f;
 
-        // Only the near-rim portion of the wall is ever actually visible
-        // (see RimWallDepth's own comment) — that portion is built as a
-        // stack of textured one-cell "blocks" (a black panel with a light
-        // gray plus/cross centered on it, arms reaching to the middle of
-        // each of the block's four sides — see BuildRimWallBlock).
-        // Everything below that is one plain black filler panel instead
-        // of tiling the same texture all the way down, since it's cheap
-        // and nothing ever sees it.
-        private const int RimWallTexturedBlockCount = 6;
-        private const float RimWallCrossBarThickness = 0.09f;
-
-        // How far the cross bars sit proud of the black panel behind
-        // them, along the wall's own outward-facing axis — without this
-        // they'd sit exactly coplanar with the panel and z-fight/flicker.
-        private const float RimWallCrossReliefOffset = 0.02f;
-
+        // Plain dark fill, no cross texture — the wall itself is
+        // deliberately unstyled now that the fence is the pit's one real
+        // rim marker. Also reused as the ring floor grate's own panel
+        // color (see BuildGrateFloorVisual) so the two still read as the
+        // same material.
         [SerializeField] private Color _rimWallColor = new Color(0.05f, 0.05f, 0.05f);
-        [SerializeField] private Color _rimWallCrossColor = new Color(0.72f, 0.72f, 0.72f);
 
-        // Low rim fence — short posts along every outward-facing edge of
-        // the pit except the one gate tile/edge, grounded at ordinary
-        // FloorSurfaceY (ground level) regardless of the pit's own sunk
-        // floor, since it's a guard rail marking the rim, not something
-        // that spans the pit's depth.
-        [SerializeField] private Color _fenceColor = new Color(0.4f, 0.32f, 0.2f);
+        // Light gray rim fence — the pit's only decorated rim marker now.
+        // Short rails along every outward-facing edge of the pit except
+        // the one gate tile/edge, grounded at ordinary FloorSurfaceY
+        // (ground level) regardless of the pit's own sunk floor, since
+        // it's a guard rail marking the rim, not something that spans
+        // the pit's depth.
+        [SerializeField] private Color _fenceColor = new Color(0.75f, 0.75f, 0.75f);
         private const float FenceRailHeight = 0.35f;
         private const float FenceRailThickness = 0.06f;
         private const float FenceEdgeInset = 0.42f;
+
+        // Ring floor "grate" — every walkway tile around the pit gets a
+        // black panel with a light gray plus/cross centered on it, arms
+        // reaching to the middle of each of the tile's four sides. The
+        // same block pattern the rim wall used to carry, moved onto the
+        // ring's own floor instead (see BuildGrateFloorVisual) now that
+        // the wall itself is plain.
+        [SerializeField] private Color _grateCrossColor = new Color(0.75f, 0.75f, 0.75f);
+        private const float GrateFloorHeight = 0.17f;
+        private const float GrateFloorFootprintScale = 0.95f;
+        private const float GrateCrossBarThickness = 0.09f;
+
+        // How far the cross bars sit proud of the panel beneath them —
+        // without this they'd sit exactly coplanar with the panel and
+        // z-fight/flicker.
+        private const float GrateCrossReliefOffset = 0.02f;
 
         // Staircase + gate — one designated boundary tile (the south
         // edge's middle tile — always a real boundary edge regardless of
@@ -166,10 +173,15 @@ namespace KeepersDomain.Rooms
         private int _nextRoomId;
         private readonly Dictionary<string, List<Vector2Int>> _roomTiles = new Dictionary<string, List<Vector2Int>>();
 
-        // Per-tile, built once when a tile first joins any Jail room and
-        // never rebuilt after — the dirt floor doesn't depend on the
-        // room's overall shape, unlike the rim structures below.
+        // Per-tile — the dirt floor (pit tiles) and grate floor (ring
+        // tiles) doesn't depend on the room's overall shape the way the
+        // rim structures below do, EXCEPT that a merge can promote a
+        // former ring tile to pit (see IsPitTile's own comment), which is
+        // the one case that has to swap a tile from _ringFloorVisuals
+        // into _floorVisuals — see the per-tile loop in
+        // TryPlaceJailInternal.
         private readonly Dictionary<Vector2Int, GameObject> _floorVisuals = new Dictionary<Vector2Int, GameObject>();
+        private readonly Dictionary<Vector2Int, GameObject> _ringFloorVisuals = new Dictionary<Vector2Int, GameObject>();
 
         // Per-room — fence rails, rim walls, and the one staircase/gate,
         // torn down and rebuilt in full every time this room's footprint
@@ -178,7 +190,47 @@ namespace KeepersDomain.Rooms
         // depends on the room's overall shape.
         private readonly Dictionary<string, List<GameObject>> _rimStructures = new Dictionary<string, List<GameObject>>();
 
+        // Per-room snapshot of that room's current pit tiles — recomputed
+        // alongside _rimStructures every placement/merge (see
+        // TryPlaceJailInternal), so MazeRattlerAgent's haunting behavior
+        // (TryFindRandomPitTile) always sees the up-to-date set without
+        // re-deriving it from scratch on every call.
+        private readonly Dictionary<string, HashSet<Vector2Int>> _pitTilesByRoom = new Dictionary<string, HashSet<Vector2Int>>();
+
         private readonly List<GameObject> _previewMarkers = new List<GameObject>();
+
+        // Prisoner color/size — a small bound gray blob sitting on its own
+        // pit tile, distinct from the "haunting" Maze Rattler capsules that
+        // pass through the same pit tiles (see TryFindRandomPitTile) so the
+        // two never read as the same thing.
+        [SerializeField] private Color _prisonerColor = new Color(0.55f, 0.55f, 0.58f);
+        private const float PrisonerRadiusScale = 0.16f;
+        private const float PrisonerHeightScale = 0.22f;
+
+        /// A captured creature, pulled out of Grab-and-drop onto a pit tile
+        /// (see MinionGrabController.TryDrop) and held here as inert data —
+        /// not a live agent/GameObject — until Conversion Class's own Bean
+        /// Counter processes it (see ConversionClassManager.
+        /// TryTormentRandomPrisoner). IsGoodAlignment exists for the torment
+        /// table's "Good creature" branch, but nothing in the game can
+        /// produce a Good creature yet — every creature captured today
+        /// (Gremlin/Warlock/Maze Rattler/Elf) is Evil, same "real code,
+        /// currently unreachable" honesty this class's own header used to
+        /// carry for the whole capture mechanic before this existed.
+        private class JailedPrisoner
+        {
+            public string CreatureKind;
+            public string Name;
+            public int Level;
+            public bool IsGoodAlignment;
+            public Vector2Int PitCoord;
+        }
+
+        // Keyed by the pit tile the prisoner occupies — occupancy is just
+        // key presence, same "dictionary keyed by coord" shape
+        // _floorVisuals/_ringFloorVisuals already use.
+        private readonly Dictionary<Vector2Int, JailedPrisoner> _prisoners = new Dictionary<Vector2Int, JailedPrisoner>();
+        private readonly Dictionary<Vector2Int, GameObject> _prisonerVisuals = new Dictionary<Vector2Int, GameObject>();
 
         public void Initialize(DungeonGrid grid, BuilderJobBoard jobBoard, LairManager lairManager, TreasuryManager treasuryManager)
         {
@@ -188,11 +240,149 @@ namespace KeepersDomain.Rooms
             lairManager.RoomSold += OnRoomSold;
         }
 
+        /// How many prisoners are currently held across every placed Jail —
+        /// read by BeanCounterAgent to decide whether there's anyone to
+        /// torment this lecture session.
+        public int PrisonerCount => _prisoners.Count;
+
+        /// Whether coord is a pit tile of any placed Jail — a public wrapper
+        /// over the per-room _pitTilesByRoom bookkeeping (previously only
+        /// checked internally), needed by MinionGrabController to recognize
+        /// a "drop onto Jail" gesture the same way it already recognizes a
+        /// "drop onto Training Room" one.
+        public bool IsPitTile(Vector2Int coord)
+        {
+            foreach (var pitTiles in _pitTilesByRoom.Values)
+            {
+                if (pitTiles.Contains(coord))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// Captures a creature into the nearest reachable, currently-empty
+        /// pit tile of any placed Jail — called by MinionGrabController
+        /// when a carried creature is dropped onto a Jail pit tile.
+        /// Opportunistic: returns false (never forces the caller to fail
+        /// the drop) if there's no Jail, every pit tile is already
+        /// occupied, or none is reachable from nearCoord.
+        public bool TryCapture(Vector2Int nearCoord, string creatureKind, string name, int level, bool isGoodAlignment)
+        {
+            var distances = _grid.GetReachableFloorDistances(nearCoord);
+            var bestDistance = int.MaxValue;
+            var found = false;
+            var targetCoord = default(Vector2Int);
+
+            foreach (var pitTiles in _pitTilesByRoom.Values)
+            {
+                foreach (var coord in pitTiles)
+                {
+                    if (_prisoners.ContainsKey(coord))
+                    {
+                        continue;
+                    }
+
+                    if (distances.TryGetValue(coord, out var distance) && distance < bestDistance)
+                    {
+                        bestDistance = distance;
+                        targetCoord = coord;
+                        found = true;
+                    }
+                }
+            }
+
+            if (!found)
+            {
+                return false;
+            }
+
+            _prisoners[targetCoord] = new JailedPrisoner
+            {
+                CreatureKind = creatureKind,
+                Name = name,
+                Level = level,
+                IsGoodAlignment = isGoodAlignment,
+                PitCoord = targetCoord
+            };
+            _prisonerVisuals[targetCoord] = BuildPrisonerVisual(targetCoord);
+            GameplayLog.Write($"{name} was thrown in the Jail at ({targetCoord.x},{targetCoord.y})");
+            return true;
+        }
+
+        /// Pops one random currently-held prisoner (across every placed
+        /// Jail) for Conversion Class's Bean Counter to process — see
+        /// ConversionClassManager.TryTormentRandomPrisoner. Frees the pit
+        /// tile and tears down its visual as part of the release, whatever
+        /// the torment's eventual outcome turns out to be.
+        public bool TryReleaseRandomPrisoner(out string creatureKind, out string name, out int level, out bool isGoodAlignment, out Vector2Int pitCoord)
+        {
+            if (_prisoners.Count == 0)
+            {
+                creatureKind = null;
+                name = null;
+                level = 0;
+                isGoodAlignment = false;
+                pitCoord = default;
+                return false;
+            }
+
+            var index = UnityEngine.Random.Range(0, _prisoners.Count);
+            var i = 0;
+            Vector2Int keyCoord = default;
+            foreach (var coord in _prisoners.Keys)
+            {
+                if (i == index)
+                {
+                    keyCoord = coord;
+                    break;
+                }
+                i++;
+            }
+
+            var prisoner = _prisoners[keyCoord];
+            creatureKind = prisoner.CreatureKind;
+            name = prisoner.Name;
+            level = prisoner.Level;
+            isGoodAlignment = prisoner.IsGoodAlignment;
+            pitCoord = prisoner.PitCoord;
+
+            ReleasePrisonerAt(keyCoord);
+            return true;
+        }
+
+        private void ReleasePrisonerAt(Vector2Int coord)
+        {
+            if (_prisonerVisuals.TryGetValue(coord, out var visual) && visual != null)
+            {
+                Destroy(visual);
+            }
+            _prisonerVisuals.Remove(coord);
+            _prisoners.Remove(coord);
+        }
+
+        /// A small bound gray blob sitting on its own pit tile — same
+        /// primitives-only, collider-stripped convention every structure in
+        /// this class already uses.
+        private GameObject BuildPrisonerVisual(Vector2Int coord)
+        {
+            var visual = GameObject.CreatePrimitive(PrimitiveType.Capsule);
+            visual.name = $"JailPrisoner_{coord.x}_{coord.y}";
+            visual.transform.SetParent(transform, false);
+            visual.transform.localScale = new Vector3(PrisonerRadiusScale, PrisonerHeightScale, PrisonerRadiusScale);
+            var groundY = _grid.FloorSurfaceY - PitDepth;
+            var worldPos = _grid.GridToWorld(coord);
+            visual.transform.position = new Vector3(worldPos.x, groundY + PrisonerHeightScale, worldPos.z);
+            visual.GetComponent<Renderer>().material.color = _prisonerColor;
+            Destroy(visual.GetComponent<Collider>());
+            return visual;
+        }
+
         /// Total tile count across every placed Jail — mirrors the
         /// TotalTileCount convention SlimeHatcheryManager/
-        /// TrainingRoomManager/LibraryManager/LairManager all expose, for
-        /// whatever future join requirement the Maze Rattler ends up
-        /// needing.
+        /// TrainingRoomManager/LibraryManager/LairManager all expose.
         public int TotalTileCount
         {
             get
@@ -205,6 +395,14 @@ namespace KeepersDomain.Rooms
                 return total;
             }
         }
+
+        /// Number of distinct placed Jail rooms (not tiles) — read by
+        /// MazeRattlerSpawner as its join requirement ("1 Jail per 5 Maze
+        /// Rattlers"). A room count rather than a tile count on purpose:
+        /// Jail's 5x5 minimum footprint (25+ tiles) makes a per-tile ratio
+        /// meaningless for a "5 per Jail" rule the way it works for the
+        /// smaller utility rooms' per-tile population caps.
+        public int RoomCount => _roomTiles.Count;
 
         /// Places a Jail spanning the rectangle between startCoord and
         /// endCoord inclusive. Unlike every other room, footprint tiles
@@ -287,15 +485,19 @@ namespace KeepersDomain.Rooms
             // just the newly dragged footprint — a merge can turn a
             // former ring tile into a pit tile (see IsPitTile's own
             // comment), and this is the only place that needs to notice.
-            // Guarded by _floorVisuals.ContainsKey so an already-pit tile
-            // from an earlier placement is left untouched rather than
-            // rebuilt.
+            // Guarded by _floorVisuals/_ringFloorVisuals.ContainsKey so an
+            // already-treated tile from an earlier placement is left
+            // untouched rather than rebuilt.
             var allTiles = _roomTiles[roomId];
             var pitTiles = new HashSet<Vector2Int>();
             foreach (var coord in allTiles)
             {
                 if (!IsPitTile(coord, origin, width, height))
                 {
+                    if (!_ringFloorVisuals.ContainsKey(coord))
+                    {
+                        _ringFloorVisuals[coord] = BuildGrateFloorVisual(coord);
+                    }
                     continue;
                 }
 
@@ -305,7 +507,19 @@ namespace KeepersDomain.Rooms
                 {
                     _floorVisuals[coord] = BuildDirtFloorVisual(coord);
                 }
+
+                // A merge can promote a former ring tile straight to pit
+                // (see IsPitTile's own comment) — clear whatever grate
+                // floor it picked up while it was still ring, since a
+                // tile is never both at once.
+                if (_ringFloorVisuals.TryGetValue(coord, out var grate) && grate != null)
+                {
+                    Destroy(grate);
+                }
+                _ringFloorVisuals.Remove(coord);
             }
+
+            _pitTilesByRoom[roomId] = pitTiles;
 
             // The fence/rim wall/gate ring the pit's own boundary, not
             // the room's outer edge — a pit tile's neighbor is always
@@ -465,15 +679,61 @@ namespace KeepersDomain.Rooms
                 // itself) doesn't inherit a leftover sunken tile.
                 _grid.SetPitDepth(coord, 0f);
 
+                // A prisoner held on a sold tile is simply lost, same
+                // "stored contents don't get refunded" convention
+                // Treasury's gold and Bacon Beacon's bacon already follow.
+                if (_prisoners.ContainsKey(coord))
+                {
+                    ReleasePrisonerAt(coord);
+                }
+
                 if (_floorVisuals.TryGetValue(coord, out var floor) && floor != null)
                 {
                     Destroy(floor);
                 }
                 _floorVisuals.Remove(coord);
+
+                if (_ringFloorVisuals.TryGetValue(coord, out var grate) && grate != null)
+                {
+                    Destroy(grate);
+                }
+                _ringFloorVisuals.Remove(coord);
             }
 
             ClearRimStructures(roomId);
             _rimStructures.Remove(roomId);
+            _pitTilesByRoom.Remove(roomId);
+        }
+
+        /// A random reachable pit tile (any placed Jail's) — read by
+        /// MazeRattlerAgent's haunting behavior ("go haunt the prisoners in
+        /// the jail"), same flat unweighted-random-pick shape
+        /// GremlinAgent.TryBeginRoam uses for its own "wander to a random
+        /// reachable floor tile" fallback.
+        public bool TryFindRandomPitTile(Vector2Int fromCoord, out Vector2Int targetCoord)
+        {
+            var distances = _grid.GetReachableFloorDistances(fromCoord);
+            var candidates = new List<Vector2Int>();
+
+            foreach (var pitTiles in _pitTilesByRoom.Values)
+            {
+                foreach (var coord in pitTiles)
+                {
+                    if (distances.ContainsKey(coord))
+                    {
+                        candidates.Add(coord);
+                    }
+                }
+            }
+
+            if (candidates.Count == 0)
+            {
+                targetCoord = default;
+                return false;
+            }
+
+            targetCoord = candidates[UnityEngine.Random.Range(0, candidates.Count)];
+            return true;
         }
 
         /// A flat dirt-colored slab sitting flush on top of DungeonGrid's
@@ -497,16 +757,62 @@ namespace KeepersDomain.Rooms
             return floor;
         }
 
-        /// Every outward-facing edge of coord (a pit tile) gets a rim wall
-        /// (the "infinite blocks below" look) plus either a fence rail or
-        /// — for the one designated gate edge — a staircase down into the
-        /// pit flanked by gate posts instead of a fence. An edge whose
-        /// neighbor is also a pit tile is an interior tile boundary, not
-        /// a rim, so it gets nothing — two pit tiles sitting at the same
-        /// depth have no seam to fill. Every other neighbor is one of
-        /// this room's own ring tiles (the pit is always inset exactly 1
-        /// tile from the room's outer edge), never a tile outside the
-        /// room entirely.
+        /// The ring's own floor treatment — a black panel with a light
+        /// gray plus/cross centered on it, arms reaching to the middle of
+        /// each of the tile's four sides, laid flat on the ground rather
+        /// than standing upright the way the rim wall's blocks used to
+        /// (see this class's own header comment). Sits flush on top of
+        /// DungeonGrid's own floor cube at ordinary FloorSurfaceY — the
+        /// ring is never sunk, unlike BuildDirtFloorVisual's pit tiles.
+        private GameObject BuildGrateFloorVisual(Vector2Int coord)
+        {
+            var container = new GameObject($"JailGrateFloor_{coord.x}_{coord.y}");
+            container.transform.SetParent(transform, false);
+
+            var cellSize = _grid.CellSize;
+            var basePosition = _grid.GridToWorld(coord) + Vector3.down * 0.5f;
+
+            var panel = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            panel.name = "Panel";
+            panel.transform.SetParent(container.transform, false);
+            panel.transform.position = basePosition;
+            panel.transform.localScale = new Vector3(cellSize * GrateFloorFootprintScale, GrateFloorHeight, cellSize * GrateFloorFootprintScale);
+            panel.GetComponent<Renderer>().material.color = _rimWallColor;
+            Destroy(panel.GetComponent<Collider>());
+
+            // The cross sits proud of the panel (raised further up by
+            // GrateCrossReliefOffset) so it never coplanar-z-fights with
+            // the panel beneath it.
+            var crossY = basePosition.y + GrateFloorHeight * 0.5f + GrateCrossReliefOffset;
+
+            var barX = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            barX.name = "CrossX";
+            barX.transform.SetParent(container.transform, false);
+            barX.transform.position = new Vector3(basePosition.x, crossY, basePosition.z);
+            barX.transform.localScale = new Vector3(cellSize, GrateCrossBarThickness, GrateCrossBarThickness);
+            barX.GetComponent<Renderer>().material.color = _grateCrossColor;
+            Destroy(barX.GetComponent<Collider>());
+
+            var barZ = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            barZ.name = "CrossZ";
+            barZ.transform.SetParent(container.transform, false);
+            barZ.transform.position = new Vector3(basePosition.x, crossY, basePosition.z);
+            barZ.transform.localScale = new Vector3(GrateCrossBarThickness, GrateCrossBarThickness, cellSize);
+            barZ.GetComponent<Renderer>().material.color = _grateCrossColor;
+            Destroy(barZ.GetComponent<Collider>());
+
+            return container;
+        }
+
+        /// Every outward-facing edge of coord (a pit tile) gets a short
+        /// plain rim wall plus either a fence rail or — for the one
+        /// designated gate edge — a staircase down into the pit flanked
+        /// by gate posts instead of a fence. An edge whose neighbor is
+        /// also a pit tile is an interior tile boundary, not a rim, so it
+        /// gets nothing — two pit tiles sitting at the same depth have no
+        /// seam to fill. Every other neighbor is one of this room's own
+        /// ring tiles (the pit is always inset exactly 1 tile from the
+        /// room's outer edge), never a tile outside the room entirely.
         private void BuildRimStructures(Vector2Int coord, HashSet<Vector2Int> pitTiles, Vector2Int gateCoord, List<GameObject> structures)
         {
             foreach (var direction in GridDirections.Cardinal)
@@ -529,93 +835,39 @@ namespace KeepersDomain.Rooms
             }
         }
 
-        /// A stack of textured "blocks" standing right at one
-        /// outward-facing edge of coord, from RimWallTopY down to
-        /// RimWallDepth below — the "infinite blocks below the ground"
-        /// look. Inset to the tile's true edge like the fence rail rather
-        /// than covering the tile's own footprint, so it closes the
-        /// vertical gap against a neighboring ground-level tile without
-        /// ever sitting in front of (and hiding) the sunk floor the way a
-        /// full-tile column would — see this class's own header comment
-        /// for why that was a bug. Only the near-rim RimWallTexturedBlockCount
-        /// blocks actually get the black-panel-with-a-gray-cross texture
-        /// (see BuildRimWallBlock) — nothing below that is ever visible,
-        /// so the remaining depth is one plain filler panel instead of
-        /// tiling the same texture dozens of times over.
+        /// A short, plain dark wall standing right at one outward-facing
+        /// edge of coord, from ordinary ground level (FloorSurfaceY — the
+        /// walkway ring's own floor height, not Rock's taller top face;
+        /// using Rock's height here used to poke a visible black slab up
+        /// above the ring's floor surface, since the ring is walkable
+        /// Floor now, not Rock) down RimWallDepth (2 tile-heights) — just
+        /// enough to close the immediate gap under the fence without any
+        /// void showing through below ground, now that the pit's real rim
+        /// marker is the light gray fence rather than a deep textured wall
+        /// (see this class's own header comment). Inset to the tile's
+        /// true edge like the fence rail rather than covering the tile's
+        /// own footprint, so it never sits in front of (and hides) the
+        /// sunk floor.
         private GameObject BuildRimWallVisual(Vector2Int coord, Vector2Int direction)
         {
-            var container = new GameObject($"JailRimWall_{coord.x}_{coord.y}_{direction.x}_{direction.y}");
-            container.transform.SetParent(transform, false);
-
             var cellSize = _grid.CellSize;
             var worldPos = _grid.GridToWorld(coord);
             var outward = new Vector3(direction.x, 0f, direction.y);
             var basePosition = worldPos + outward * (cellSize * RimWallEdgeInset);
             var isEastWestEdge = direction.x != 0;
+            var wallTopY = _grid.FloorSurfaceY;
+            var centerY = wallTopY - RimWallDepth * 0.5f;
 
-            var texturedDepth = RimWallTexturedBlockCount * cellSize;
-            for (int i = 0; i < RimWallTexturedBlockCount; i++)
-            {
-                var blockCenterY = RimWallTopY - cellSize * (i + 0.5f);
-                BuildRimWallBlock(container.transform, basePosition, outward, blockCenterY, cellSize, isEastWestEdge);
-            }
-
-            var fillerDepth = RimWallDepth - texturedDepth;
-            if (fillerDepth > 0f)
-            {
-                var fillerCenterY = RimWallTopY - texturedDepth - fillerDepth * 0.5f;
-                var filler = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                filler.name = "Filler";
-                filler.transform.SetParent(container.transform, false);
-                filler.transform.position = new Vector3(basePosition.x, fillerCenterY, basePosition.z);
-                filler.transform.localScale = isEastWestEdge
-                    ? new Vector3(RimWallThickness, fillerDepth, cellSize * 0.98f)
-                    : new Vector3(cellSize * 0.98f, fillerDepth, RimWallThickness);
-                filler.GetComponent<Renderer>().material.color = _rimWallColor;
-                Destroy(filler.GetComponent<Collider>());
-            }
-
-            return container;
-        }
-
-        /// One rim-wall "block": a black square panel one cell tall, with
-        /// a light gray plus/cross centered on it — arms reaching to the
-        /// middle of each of the block's four sides, i.e. each bar spans
-        /// the block's full width (or height) rather than stopping short
-        /// of the edges. The cross sits proud of the panel (offset
-        /// further outward by RimWallCrossReliefOffset) so it never
-        /// coplanar-z-fights with the panel behind it.
-        private void BuildRimWallBlock(Transform parent, Vector3 basePosition, Vector3 outward, float centerY, float cellSize, bool isEastWestEdge)
-        {
-            var panel = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            panel.name = "Panel";
-            panel.transform.SetParent(parent, false);
-            panel.transform.position = new Vector3(basePosition.x, centerY, basePosition.z);
-            panel.transform.localScale = isEastWestEdge
-                ? new Vector3(RimWallThickness, cellSize * 0.96f, cellSize * 0.98f)
-                : new Vector3(cellSize * 0.98f, cellSize * 0.96f, RimWallThickness);
-            panel.GetComponent<Renderer>().material.color = _rimWallColor;
-            Destroy(panel.GetComponent<Collider>());
-
-            var crossPosition = new Vector3(basePosition.x, centerY, basePosition.z) + outward * RimWallCrossReliefOffset;
-
-            var horizontalBar = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            horizontalBar.name = "CrossHorizontal";
-            horizontalBar.transform.SetParent(parent, false);
-            horizontalBar.transform.position = crossPosition;
-            horizontalBar.transform.localScale = isEastWestEdge
-                ? new Vector3(RimWallCrossBarThickness, RimWallCrossBarThickness, cellSize)
-                : new Vector3(cellSize, RimWallCrossBarThickness, RimWallCrossBarThickness);
-            horizontalBar.GetComponent<Renderer>().material.color = _rimWallCrossColor;
-            Destroy(horizontalBar.GetComponent<Collider>());
-
-            var verticalBar = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            verticalBar.name = "CrossVertical";
-            verticalBar.transform.SetParent(parent, false);
-            verticalBar.transform.position = crossPosition;
-            verticalBar.transform.localScale = new Vector3(RimWallCrossBarThickness, cellSize, RimWallCrossBarThickness);
-            verticalBar.GetComponent<Renderer>().material.color = _rimWallCrossColor;
-            Destroy(verticalBar.GetComponent<Collider>());
+            var wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            wall.name = $"JailRimWall_{coord.x}_{coord.y}_{direction.x}_{direction.y}";
+            wall.transform.SetParent(transform, false);
+            wall.transform.position = new Vector3(basePosition.x, centerY, basePosition.z);
+            wall.transform.localScale = isEastWestEdge
+                ? new Vector3(RimWallThickness, RimWallDepth, cellSize * 0.98f)
+                : new Vector3(cellSize * 0.98f, RimWallDepth, RimWallThickness);
+            wall.GetComponent<Renderer>().material.color = _rimWallColor;
+            Destroy(wall.GetComponent<Collider>());
+            return wall;
         }
 
         /// One low fence rail along a single outward-facing edge of coord
