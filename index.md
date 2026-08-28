@@ -6,7 +6,9 @@ title: Dev Status
 
 Mobile dig-and-build dungeon management prototype, original IP (inspired by, not derived from, Dungeon Keeper). This page is a hand-maintained snapshot of what's built, what's in progress, and what's next — edit it directly (`index.md` on the `gh-pages` branch) whenever status changes.
 
-*Last updated: 2026-08-22*
+**Latest update: "Graphical Start" — v0.0004**
+
+*Last updated: 2026-08-28*
 
 For the full brief and system-by-system design detail, see [project-brief.md](https://github.com/zoutbot-cpu/the-keepers-domain/blob/main/Docs/project-brief.md) and [design-doc.md](https://github.com/zoutbot-cpu/the-keepers-domain/blob/main/Docs/design-doc.md). Engineering rationale (why things are built the way they are) lives in the [README's Architecture Notes](https://github.com/zoutbot-cpu/the-keepers-domain/blob/main/README.md#architecture-notes).
 
@@ -14,9 +16,9 @@ For the full brief and system-by-system design detail, see [project-brief.md](ht
 
 ## Snapshot
 
-Phase 1's core loop is implemented and playable: **dig → claim → build → impling appears.** Beyond that, the prototype has grown a resource economy, six creature types, nine room types, five terrain tile variants beyond Rock/Floor, a real Jail capture/prisoner mechanic, and a debug/UI layer well past the original Phase 1 brief. A Level Designer subsystem (multiplayer-aware level authoring, JSON save/load) and real modular dungeon wall art are both now in progress, gated behind a new Main Menu.
+Phase 1's core loop is implemented and playable: **dig → claim → build → impling appears.** Beyond that, the prototype has grown a resource economy, six creature types, nine room types, five terrain tile variants beyond Rock/Floor, a real Jail capture/prisoner mechanic, and a debug/UI layer well past the original Phase 1 brief.
 
-Everything gameplay-facing is still placeholder primitives (cubes/capsules) — real art is only just starting to land, for walls first (see below).
+**v0.0004, "Graphical Start," is the biggest single jump the project has had:** most of the dungeon is no longer flat-colored primitive cubes. Walls, floors, the Chaos Core throne, the Portal, and Water/Lava all now render with real modular art (a purpose-bought "dungeon_pack" asset set — the earlier KayKit experiment was tried, found unworkable, and fully reverted before this pack was adopted instead). The Level Designer went from "authors data nothing else uses" to a genuinely complete tool: it now builds the *same real room decorations* gameplay does (not placeholder cubes), tracks per-player ownership on floor **and** reinforced walls with live color updates, and ships a new Edit mode for reassigning who owns an already-placed tile/wall/room/structure/creature. And — the headline architectural change — **the game no longer regenerates a random map every time you press Start.** It now loads a persistent, Level-Designer-editable save (`level1`) if one exists, falling back to procedural generation only on a first-ever run. Edit the starting dungeon in the Level Designer, save, and that's what you play next time.
 
 ---
 
@@ -53,24 +55,38 @@ Everything gameplay-facing is still placeholder primitives (cubes/capsules) — 
 
 **UI/Debug** — Permanent bottom menu bar (Build/Impling/Creatures/Tasks), F1/F2 debug panels, `Logs/gameplay-debug.log` for timing-sensitive bug repro. A new **Main Menu** (logo + Start/Level Designer) now gates entry into the game.
 
+**Art & Visuals (new in v0.0004)** — Real modular art from a purpose-bought "dungeon_pack" asset set, replacing placeholder cubes across most of the dungeon:
+- **Walls** — a real mesh per wall type (Stone, Gold, Regenerating Gold, Mana Crystal, Bedrock, Reinforced), full tile width with no gaps between neighbors. Reinforced walls are a multi-material mesh (brick body + stone cap + a glowing orb) — the orb is now tinted **per owner**, swapping in a dedicated material clone per player instead of one color shared by the whole map, so different players' walls read as different colors at once.
+- **Floors** — real Claimed/Unclaimed floor textures (4 tile variants for Claimed, tile-hashed so neighbors don't look identical); Claimed floor is additionally tinted toward its owner's color where ownership tracking applies.
+- **Chaos Core & Portal** — both now use real dungeon_pack props (a throne centerpiece, a portal/stairway prop) in place of the old primitive platform/staircase (kept as a code fallback).
+- **Water & Lava** — real animated tiles (scrolling water, pulsing lava glow) instead of flat-colored cubes.
+- **Wall selection & queued-action icons** — tapping a wall now shows a yellow inverted-hull outline (`DungeonGrid.SetSelectedWall`); queued dig/reinforce/build state shows as a floating pickaxe/shield/hammer+frame icon instead of a color tint, freeing that color channel up for ownership.
+
+**Level Designer & persistent starting level (new in v0.0004)** — What used to be "authors JSON nobody reads" is now a genuinely working tool, and the game's own starting map is now data it produces:
+- Placing a room in the Level Designer (or loading a saved one) builds the **exact same real room decorations** gameplay's own room managers build (carpet, nest, bookcases, dummies, coop, shrine, bench, pit/fence) — not a flat placeholder cube — via a new `IRestorableRoomManager`/`RestoreRoom` path shared by all 8 non-Bridge room managers, wired into the Level Designer with gold costs disabled and background simulation (Slime breeding, auto-reinforce scanning) turned off so editing a level never silently runs gameplay in the background.
+- Per-tile ownership now covers Reinforced walls too, not just Claimed floor, with a live color refresh the moment a player's color is changed (previously required a reload).
+- A new **Edit mode**: tap an already-placed tile, wall, room, structure, or creature and reassign which player owns it.
+- **"Start Game" now loads a persistent `level1` save if one exists** instead of generating a fresh random map every launch (`GameBootstrap.StartGame`/`BuildWorld(LevelData)`) — real gameplay room managers, job board, and creature spawners reconstruct the saved map, including creatures as actual live agents (not the Level Designer's inert markers). Procedural generation still exists and runs automatically on a first-ever install (auto-saving its own output as `level1`), but from then on the Level Designer is how you shape what "Start Game" plays.
+
 ## In Progress / Partially Implemented
 
-- **Level Designer** — a separate menu bar (`LevelDesignerMenuBar`) for authoring multiplayer-aware levels: player slots/colors, map painting, room/creature placement, and JSON save/load (`LevelFileIO`, under `Application.persistentDataPath`). How much of this is wired end-to-end (vs. still being built out) hasn't been fully verified against a Play-mode pass yet.
-- **Real wall art** — an autotiler (`WallAutotiler`/`WallMeshCatalog`) picks a modular KayKit dungeon wall mesh per Rock tile based on its 4 cardinal wall neighbors, replacing the placeholder cube — first piece of real (non-primitive) art in the project. Rollout/verification status not yet confirmed in-Editor.
 - **Room durability** — every room tile tracks 50 HP and Unhappy/Angry creatures can chip it down, but there's no HP UI and no repair mechanic.
 - **Mana economy** — crystals raise Max Mana 1-for-1; this ratio is a placeholder, not a tuned economy.
 - **Happiness/Hunger/Pay consequences** — hitting 0 happiness makes a creature leave or attack the dungeon; starving below 50 hunger currently has no extra penalty (decay just continues).
+- **Ownership model is Level-Designer/tile-only so far** — no live creature agent (Impling/Gremlin/Warlock/Maze Rattler/Bean Counter/Elf) carries an owner/player field yet, and reassigning a Structure's (Chaos Core/Portal) owner in the new Edit mode updates the saved data but doesn't yet retint its throne visual live. Both are fine for the current single-player-only prototype, both block real multiplayer.
+- **Bridge rooms aren't part of room reconstruction** — the one room type still excluded from `IRestorableRoomManager`/the Level Designer's Rooms menu; a saved Bridge tile still loads as a flat placeholder cube.
+- **No "delete a room" tool in the Level Designer** — rooms can be placed and reassigned, not yet removed, from that UI.
 
 ## Not Started
 
 - Combat system (no PvE/PvP yet — Imp's "Mine" attack only works on walls/other Imps)
 - Imp → full-size Imp growth (noted in brief, unimplemented)
 - Per-creature/per-level stat scaling curves (stats are flat placeholders past level 1)
-- Real art for anything besides walls — creatures/rooms are still cubes/capsules
+- Real art for creatures/rooms — still cubes/capsules; only walls/floors/Chaos Core/Portal/Water/Lava have real art so far
 - Additional creature races beyond the current six
 - Skill slots 2–6 (only slot 1, the basic attack, is defined for any creature)
-- A real procedural map generator (Water/Lava/Chasm/Holy Ground/Bedrock are dev-tool-placed only, see Terrain above)
-- Live gameplay use of Level Designer-authored levels (save/load exists; whether `GameBootstrap` can actually load one to play hasn't been confirmed)
+- Saving mid-game progress — only the very first "Start Game" run auto-saves itself as `level1`; there's no in-play "save my current game" flow yet, so playing doesn't persist beyond that starting snapshot
+- Real multiplayer (the Level Designer authors multiple players/colors, but live gameplay is still single-player; see the ownership-model gap above)
 
 ## Known Placeholder Values (revisit before balancing)
 
@@ -91,8 +107,10 @@ Everything gameplay-facing is still placeholder primitives (cubes/capsules) — 
 
 ## Next Steps (TODO)
 
-- [ ] Finish and verify the Level Designer end-to-end (author a level, load it into an actual Play session)
-- [ ] Finish rolling out real wall art and confirm it renders correctly across all wall shapes
+- [ ] Extend ownership beyond tiles: give live creature agents an owner/player field, and make Structure (Chaos Core/Portal) reassignment retint the throne visual live
+- [ ] Bring Bridge into the same `IRestorableRoomManager` reconstruction as the other 8 room types
+- [ ] Add a "delete a room" tool to the Level Designer
+- [ ] A real "save my current game" flow, distinct from the one-time starting-level snapshot
 - [ ] First real combat pass (targeting, damage, death) — currently the only "combat" is unhappy creatures chipping walls/rooms
 - [ ] Decide and implement Imp → full Imp growth trigger
 - [ ] Replace placeholder per-level stat curves with real per-creature scaling
