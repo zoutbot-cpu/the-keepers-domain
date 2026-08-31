@@ -30,17 +30,17 @@ namespace KeepersDomain.Monsters
         private Portal _portal;
         private LairManager _lairManager;
         private JailManager _jailManager;
-        private BaconBeaconManager _baconBeaconManager;
+        private TavernManager _tavernManager;
         private TrainingRoomManager _trainingRoomManager;
         private TreasuryManager _treasuryManager;
 
-        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, JailManager jailManager, BaconBeaconManager baconBeaconManager, TrainingRoomManager trainingRoomManager, TreasuryManager treasuryManager)
+        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, JailManager jailManager, TavernManager tavernManager, TrainingRoomManager trainingRoomManager, TreasuryManager treasuryManager)
         {
             _grid = grid;
             _portal = portal;
             _lairManager = lairManager;
             _jailManager = jailManager;
-            _baconBeaconManager = baconBeaconManager;
+            _tavernManager = tavernManager;
             _trainingRoomManager = trainingRoomManager;
             _treasuryManager = treasuryManager;
         }
@@ -113,7 +113,7 @@ namespace KeepersDomain.Monsters
             Destroy(visual.GetComponent<Collider>());
 
             var agent = visual.AddComponent<MazeRattlerAgent>();
-            agent.Initialize(_grid, _lairManager, _baconBeaconManager, _trainingRoomManager, _jailManager, _treasuryManager, _portal);
+            agent.Initialize(_grid, _lairManager, _tavernManager, _trainingRoomManager, _jailManager, _treasuryManager, _portal);
             GameplayLog.Write($"{agent.Name} joined via the Portal at ({coord.x},{coord.y})");
         }
     }

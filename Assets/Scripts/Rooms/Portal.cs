@@ -32,7 +32,7 @@ namespace KeepersDomain.Rooms
             Coord = coord;
 
             transform.position = grid.GridToWorld(coord);
-            BuildStaircaseVisual(grid.CellSize, grid.FloorSurfaceY);
+            BuildStairway(grid.CellSize, grid.FloorSurfaceY);
         }
 
         /// Adds count to this portal's pool of a recruitable creature kind.
@@ -67,12 +67,75 @@ namespace KeepersDomain.Rooms
             return true;
         }
 
+        // The room itself is still being reworked — this is just the
+        // default facing/size for the new dungeon_pack Portal prop until
+        // then. -20 (first pass) + another -70 = -90.
+        private const float PortalYRotationDegrees = -90f;
+        private const float PortalScaleMultiplier = 2f;
+
+        /// dungeon_pack's Portal prop (see Tools > DungeonPack > Setup
+        /// Props) replaces the primitive step cubes below — scaled
+        /// uniformly to fit this room's single tile (then doubled, see
+        /// PortalScaleMultiplier — deliberately overflows past the tile's
+        /// own edges now), pivot-at-base like every other dungeon_pack mesh
+        /// so it's grounded at floorSurfaceY (re-exported once already to
+        /// fix a version that floated — see the source .obj's own Y bounds
+        /// if this needs rechecking). Falls back to the original primitive
+        /// staircase if the prop hasn't been set up yet.
+        private void BuildStairway(float cellSize, float floorSurfaceY)
+        {
+            var prefab = Resources.Load<GameObject>("Dungeon/Prop_Portal");
+            if (prefab == null)
+            {
+                BuildStaircaseVisual(cellSize, floorSurfaceY);
+                return;
+            }
+
+            var portal = Instantiate(prefab, transform, false);
+            portal.name = "PortalGateway";
+            portal.transform.localPosition = Vector3.zero;
+            portal.transform.localRotation = Quaternion.Euler(0f, PortalYRotationDegrees, 0f);
+            portal.transform.localScale = Vector3.one;
+
+            var renderers = portal.GetComponentsInChildren<Renderer>();
+            var scale = 1f;
+            var xzCenterOffset = Vector2.zero;
+            if (renderers.Length > 0)
+            {
+                var bounds = renderers[0].bounds;
+                for (int i = 1; i < renderers.Length; i++)
+                {
+                    bounds.Encapsulate(renderers[i].bounds);
+                }
+
+                var footprint = Mathf.Max(bounds.size.x, bounds.size.z);
+                if (footprint > 0.01f)
+                {
+                    scale = (cellSize * 0.95f * PortalScaleMultiplier) / footprint;
+                }
+
+                // The mesh's footprint isn't centered on its own local
+                // origin (its bounds are lopsided, not symmetric around
+                // 0) — measured here at scale 1/before the final position
+                // is set, so the correction can be scaled up consistently
+                // with whatever final scale gets applied below, keeping
+                // the prop's visual center (not just its pivot) on the
+                // tile's actual center rather than off to one side.
+                var worldCenterOffset = bounds.center - transform.position;
+                xzCenterOffset = new Vector2(worldCenterOffset.x, worldCenterOffset.z);
+            }
+
+            portal.transform.localScale = Vector3.one * scale;
+            portal.transform.localPosition = new Vector3(-xzCenterOffset.x * scale, floorSurfaceY, -xzCenterOffset.y * scale);
+        }
+
         /// Fakes a staircase with a row of ascending step cubes, all within
         /// this one tile — cheap with primitives, still reads clearly as
         /// "the way out" rather than just another floor tile. Grounded at
         /// floorSurfaceY, not y=0 — floor tiles don't actually sit at y=0
         /// (see DungeonGrid.FloorSurfaceY), so stairs anchored to world-zero
         /// would float visibly above the ground they're supposed to start on.
+        /// Fallback only now — see BuildStairway.
         private void BuildStaircaseVisual(float cellSize, float floorSurfaceY)
         {
             var stepDepth = cellSize / StepCount;

@@ -28,7 +28,7 @@ namespace KeepersDomain.Rooms
     /// walkable, same "creature can't stand on the structure itself, walks
     /// its adjacent tile instead" rule Library's bookcases/Training Room's
     /// dummies both already use — see FindBenchAdjacentTiles.
-    public class ConversionClassManager : MonoBehaviour
+    public class ConversionClassManager : MonoBehaviour, IRestorableRoomManager
     {
         /// Gold cost per tile of a placed Conversion Class — same
         /// unbalanced 20g/tile placeholder every other room besides
@@ -165,6 +165,14 @@ namespace KeepersDomain.Rooms
         public bool PlaceStartingConversionClass(Vector2Int startCoord, Vector2Int endCoord)
         {
             return TryPlaceConversionClassInternal(startCoord, endCoord, chargeGold: false);
+        }
+
+        /// IRestorableRoomManager — see its own header. ownerId is unused
+        /// here; the footprint is expected to already be Claimed Floor
+        /// (owned correctly) by the time this runs.
+        public bool RestoreRoom(Vector2Int start, Vector2Int end, int ownerId)
+        {
+            return PlaceStartingConversionClass(start, end);
         }
 
         private bool TryPlaceConversionClassInternal(Vector2Int startCoord, Vector2Int endCoord, bool chargeGold)

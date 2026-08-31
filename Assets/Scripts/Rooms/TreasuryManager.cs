@@ -11,7 +11,7 @@ namespace KeepersDomain.Rooms
     /// only clears a tile's RoomId; RoomSold is where this class hears
     /// about it and cleans up its own gold/visual bookkeeping for that
     /// room, via OnRoomSold).
-    public class TreasuryManager : MonoBehaviour
+    public class TreasuryManager : MonoBehaviour, IRestorableRoomManager
     {
         private const int GoldCapacityPerTile = 500;
 
@@ -134,6 +134,14 @@ namespace KeepersDomain.Rooms
 
             PlaceFootprint(footprint);
             return true;
+        }
+
+        /// IRestorableRoomManager — see its own header. ownerId is unused
+        /// here; the footprint is expected to already be Claimed Floor
+        /// (owned correctly) by the time this runs.
+        public bool RestoreRoom(Vector2Int start, Vector2Int end, int ownerId)
+        {
+            return PlaceStartingTreasury(start, end);
         }
 
         /// Gold cost of placing a footprint of this many tiles — every tile

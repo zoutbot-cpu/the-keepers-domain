@@ -55,8 +55,10 @@ namespace KeepersDomain.UI
             if (GUI.Button(startRect, "Start Game"))
             {
                 // Fire the callback before destroying this object — Initialize
-                // handed us BuildWorld itself, so this is what actually kicks
-                // off GameBootstrap's dungeon construction.
+                // handed us GameBootstrap.StartGame, which loads "level1" if
+                // it exists or falls back to BuildWorld's fresh generation
+                // otherwise — either way, this is what actually kicks off
+                // GameBootstrap's dungeon construction.
                 _onStart?.Invoke();
                 Destroy(gameObject);
             }

@@ -129,7 +129,7 @@ namespace KeepersDomain.Monsters
 
         private DungeonGrid _grid;
         private LairManager _lairManager;
-        private BaconBeaconManager _baconBeaconManager;
+        private TavernManager _tavernManager;
         private TrainingRoomManager _trainingRoomManager;
         private JailManager _jailManager;
         private TreasuryManager _treasuryManager;
@@ -174,11 +174,11 @@ namespace KeepersDomain.Monsters
             _creature = new Creature(_baseStats, _growthPerLevel, _expPerLevelStep);
         }
 
-        public void Initialize(DungeonGrid grid, LairManager lairManager, BaconBeaconManager baconBeaconManager, TrainingRoomManager trainingRoomManager, JailManager jailManager, TreasuryManager treasuryManager, Portal portal)
+        public void Initialize(DungeonGrid grid, LairManager lairManager, TavernManager tavernManager, TrainingRoomManager trainingRoomManager, JailManager jailManager, TreasuryManager treasuryManager, Portal portal)
         {
             _grid = grid;
             _lairManager = lairManager;
-            _baconBeaconManager = baconBeaconManager;
+            _tavernManager = tavernManager;
             _trainingRoomManager = trainingRoomManager;
             _jailManager = jailManager;
             _treasuryManager = treasuryManager;
@@ -596,7 +596,7 @@ namespace KeepersDomain.Monsters
 
         private bool TryBeginPursueFood()
         {
-            if (_baconBeaconManager == null || !_baconBeaconManager.TryFindNearestTileWithBacon(_grid.WorldToGrid(transform.position), out var coord) || !PlanPathTo(coord, _grid.GridToWorld(coord)))
+            if (_tavernManager == null || !_tavernManager.TryFindNearestTileWithBacon(_grid.WorldToGrid(transform.position), out var coord) || !PlanPathTo(coord, _grid.GridToWorld(coord)))
             {
                 return false;
             }
@@ -608,7 +608,7 @@ namespace KeepersDomain.Monsters
 
         private void ArriveAtFood()
         {
-            if (_baconBeaconManager.TryEatBacon(_foodTargetCoord, BaconBeaconManager.MealBaconAmount))
+            if (_tavernManager.TryEatBacon(_foodTargetCoord, TavernManager.MealBaconAmount))
             {
                 _hunger.Eat();
             }

@@ -12,7 +12,7 @@ namespace KeepersDomain.Implings
     /// LairManager), it's just a resting spot a monster claims later.
     public class ImplingSpawner : MonoBehaviour
     {
-        /// Mana every impling reserves out of the Chaos Core's free pool
+        /// Mana every impling reserves out of the Throne Room's free pool
         /// for as long as it's alive (see ImplingAgent.OnDestroy, which
         /// releases it back). Read by BottomMenuBar too, so the Spawn
         /// Impling button's label/enabled state stays in sync with what
@@ -25,18 +25,18 @@ namespace KeepersDomain.Implings
         private BuilderJobBoard _jobBoard;
         private DungeonGrid _grid;
         private TreasuryManager _treasuryManager;
-        private ChaosCore _chaosCore;
+        private ThroneRoom _throneRoom;
         private SlimeHatcheryManager _slimeHatchery;
-        private BaconBeaconManager _baconBeacon;
+        private TavernManager _tavern;
 
-        public void Initialize(BuilderJobBoard jobBoard, DungeonGrid grid, TreasuryManager treasuryManager, ChaosCore chaosCore, SlimeHatcheryManager slimeHatchery, BaconBeaconManager baconBeacon)
+        public void Initialize(BuilderJobBoard jobBoard, DungeonGrid grid, TreasuryManager treasuryManager, ThroneRoom throneRoom, SlimeHatcheryManager slimeHatchery, TavernManager tavern)
         {
             _jobBoard = jobBoard;
             _grid = grid;
             _treasuryManager = treasuryManager;
-            _chaosCore = chaosCore;
+            _throneRoom = throneRoom;
             _slimeHatchery = slimeHatchery;
-            _baconBeacon = baconBeacon;
+            _tavern = tavern;
         }
 
         /// Summons an impling directly out of mana, no Lair required — the
@@ -56,12 +56,12 @@ namespace KeepersDomain.Implings
         }
 
         /// Reserves this impling's upkeep mana before creating anything —
-        /// if the Chaos Core doesn't have enough free mana, nothing spawns
+        /// if the Throne Room doesn't have enough free mana, nothing spawns
         /// at all. Mana upkeep is what actually pays for an impling
         /// existing; a Lair is not a requirement.
         private void SpawnImpling(Vector3 homeWorldPos)
         {
-            if (_chaosCore != null && !_chaosCore.TryReserveMana(ImplingManaUpkeep))
+            if (_throneRoom != null && !_throneRoom.TryReserveMana(ImplingManaUpkeep))
             {
                 return;
             }
@@ -75,7 +75,7 @@ namespace KeepersDomain.Implings
             Destroy(visual.GetComponent<Collider>());
 
             var agent = visual.AddComponent<ImplingAgent>();
-            agent.Initialize(_jobBoard, _grid, homeWorldPos, _treasuryManager, _chaosCore, _slimeHatchery, _baconBeacon, ImplingManaUpkeep);
+            agent.Initialize(_jobBoard, _grid, homeWorldPos, _treasuryManager, _throneRoom, _slimeHatchery, _tavern, ImplingManaUpkeep);
             GameplayLog.Write($"{agent.Name} spawned at {_grid.WorldToGrid(homeWorldPos)}");
         }
     }

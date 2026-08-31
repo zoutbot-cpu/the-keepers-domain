@@ -133,16 +133,22 @@ namespace KeepersDomain.Grid
         public string RoomId;
         public int Hp;
 
-        /// Which level-designer player owns a Claimed tile — -1 for
-        /// "no owner" (every ordinary gameplay tile, and any Unclaimed
-        /// tile). Only ever set by DungeonGrid's Editor* authoring methods
-        /// (see EditorPaintFloor); gameplay's own ClaimTile/CarveRoom/
-        /// CarveRect never touch it, so it stays -1 everywhere BuildWorld's
-        /// single-dungeon prototype is concerned.
+        /// Which player owns this tile — a Claimed Floor tile (see
+        /// EditorPaintFloor) or a Reinforced wall (see EditorPaintWall/
+        /// DungeonGrid.ApplyOrbOwnerColor, which tints its orb by owner).
+        /// -1 means "no owner" (explicitly set that way by the Editor*
+        /// authoring methods above; not used elsewhere). Ordinary
+        /// gameplay's own ClaimTile/CarveRoom/CarveRect never assign this
+        /// explicitly, so it just sits at the struct default (0) for
+        /// every one of their tiles — which is also owner index 0 in
+        /// DungeonGrid.OwnerColors, exactly matching PlayerColor's own
+        /// single-implicit-player convenience setter (see its own
+        /// comment), so this reads correctly without gameplay ever having
+        /// to think about ownership explicitly.
         public int OwnerId;
 
         /// Floor that's otherwise ordinary but explicitly off-limits to
-        /// pathfinding — e.g. the Chaos Core's center tile, which stays
+        /// pathfinding — e.g. the Throne Room's center tile, which stays
         /// Floor/Claimed for room purposes but sits under the raised orb
         /// pedestal, not something an impling should walk onto. See
         /// DungeonGrid.IsWalkable/SetBlocked.
@@ -150,7 +156,7 @@ namespace KeepersDomain.Grid
 
         // Meaningless for Rock — only matters once a tile is Floor. Normal
         // dug-out floor defaults to true (see DungeonGrid.CompleteDig);
-        // fixed feature rooms (Chaos Core, Portal room, Treasury, the
+        // fixed feature rooms (Throne Room, Portal room, Treasury, the
         // corridors to them) are carved with this explicitly false so a
         // Lair can never be placed on top of them, independent of
         // RoomId/HasRoom — which is tied to the shared purple room-tile

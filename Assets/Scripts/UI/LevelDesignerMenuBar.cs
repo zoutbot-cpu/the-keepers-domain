@@ -25,6 +25,7 @@ namespace KeepersDomain.UI
             MapDesign,
             Rooms,
             Creatures,
+            Edit,
             File
         }
 
@@ -102,6 +103,24 @@ namespace KeepersDomain.UI
             {
                 DrawPanel(panelRect);
             }
+
+            DrawHoveredCoordLabel(mouseScreenPos);
+        }
+
+        /// Small (x, y) readout following the cursor — troubleshooting aid
+        /// for confirming exactly which tile an edit is about to land on.
+        /// Blank whenever the pointer isn't over the grid at all (over a
+        /// panel, or off the map edge).
+        private void DrawHoveredCoordLabel(Vector2 mouseScreenPos)
+        {
+            var coord = _interactionController.HoveredCoord;
+            if (!coord.HasValue)
+            {
+                return;
+            }
+
+            var rect = new Rect(mouseScreenPos.x + 16f, mouseScreenPos.y + 16f, 90f, 22f);
+            GUI.Label(rect, $"({coord.Value.x}, {coord.Value.y})", GUI.skin.box);
         }
 
         /// The two round Mirror X/Y toggles on the left edge of the
@@ -182,6 +201,7 @@ namespace KeepersDomain.UI
             DrawTabButton(MenuTab.MapDesign, "Map Design");
             DrawTabButton(MenuTab.Rooms, "Rooms");
             DrawTabButton(MenuTab.Creatures, "Creatures");
+            DrawTabButton(MenuTab.Edit, "Edit");
             DrawTabButton(MenuTab.File, "Save/Load");
             GUILayout.FlexibleSpace();
             // Tears the level-designer world down and shows the main menu
@@ -223,6 +243,9 @@ namespace KeepersDomain.UI
                     break;
                 case MenuTab.Creatures:
                     DrawCreaturesMenu();
+                    break;
+                case MenuTab.Edit:
+                    DrawEditMenu();
                     break;
                 case MenuTab.File:
                     DrawFileMenu();
@@ -282,6 +305,12 @@ namespace KeepersDomain.UI
                     if (GUILayout.Toggle(player.ColorIndex == c, player.ColorIndex == c ? "■" : "□", GUI.skin.button, GUILayout.Width(28f)))
                     {
                         player.ColorIndex = c;
+                        // Without this, DungeonGrid's cached owner-color
+                        // array (and every already-placed Claimed tile's
+                        // baked-in tint) stays stale until the level is
+                        // reloaded — see LevelDesignerSession.
+                        // RefreshGridOwnerColors's own comment.
+                        _session.RefreshGridOwnerColors();
                     }
                     GUI.color = previousColor;
                 }
@@ -332,7 +361,7 @@ namespace KeepersDomain.UI
             DrawMapToolButton(MapDesignTool.ClaimedFloor, "Claimed");
             EndButtonRow();
 
-            if (activeTool == MapDesignTool.ClaimedFloor)
+            if (activeTool == MapDesignTool.ClaimedFloor || activeTool == MapDesignTool.ReinforcedWall)
             {
                 GUILayout.Space(8f);
                 DrawOwnerSelector("Belongs to:");
@@ -348,7 +377,7 @@ namespace KeepersDomain.UI
             DrawRoomToolButton(RoomDesignTool.SlimeHatchery, "Slime Hatchery");
             EndButtonRow();
             BeginButtonRow();
-            DrawRoomToolButton(RoomDesignTool.BaconBeacon, "Bacon Beacon");
+            DrawRoomToolButton(RoomDesignTool.Tavern, "Tavern");
             DrawRoomToolButton(RoomDesignTool.TrainingRoom, "Training Room");
             DrawRoomToolButton(RoomDesignTool.Library, "Library");
             EndButtonRow();
@@ -373,13 +402,13 @@ namespace KeepersDomain.UI
             }
 
             // Structures — fixed 5x5/3x3 footprints reusing the real
-            // ChaosCore/Portal components (see LevelDesignerSession.
+            // ThroneRoom/Portal components (see LevelDesignerSession.
             // PlaceStructure), placed with a single tap rather than a
             // drag, unlike every ordinary room above.
             GUILayout.Space(10f);
             GUILayout.Label("Structures (fixed size, tap to place)");
             BeginButtonRow();
-            DrawStructureToolButton(StructureKind.CoreRoom, "Core Room");
+            DrawStructureToolButton(StructureKind.ThroneRoom, "Throne Room");
             DrawStructureToolButton(StructureKind.PortalRoom, "Portal Room");
             EndButtonRow();
 
@@ -412,6 +441,55 @@ namespace KeepersDomain.UI
 
             GUILayout.Space(8f);
             GUILayout.Label($"{_session.Creatures.Count} creature(s) placed");
+        }
+
+        /// A 5th tool category (see LevelDesignerInteractionController.
+        /// SetEditMode) — an on/off toggle, same GUILayout.Toggle-as-
+        /// button pattern every other tool button here already uses, plus
+        /// a readout of whatever Edit mode's last tap selected (see
+        /// SelectAt) and the same DrawOwnerSelector every placement tool
+        /// already uses, repurposed here as "reassign to" instead of
+        /// "belongs to."
+        private void DrawEditMenu()
+        {
+            GUILayout.Label("Tap an already-placed tile, wall, room, structure, or creature to select it, then reassign who it belongs to.");
+            GUILayout.Space(8f);
+
+            var isEditModeOn = _interactionController.EditMode;
+            var pressed = GUILayout.Toggle(isEditModeOn, isEditModeOn ? "[Edit Mode: ON]" : "Edit Mode: OFF", GUI.skin.button);
+            if (pressed != isEditModeOn)
+            {
+                _interactionController.SetEditMode(pressed);
+            }
+
+            if (!_interactionController.EditMode)
+            {
+                return;
+            }
+
+            GUILayout.Space(8f);
+
+            var selection = _interactionController.SelectionKind;
+            if (selection == EditSelectionKind.None || !_interactionController.SelectedCoord.HasValue)
+            {
+                GUILayout.Label("Nothing selected.");
+                return;
+            }
+
+            var coord = _interactionController.SelectedCoord.Value;
+            var currentOwnerId = _interactionController.SelectedCurrentOwnerId;
+            var currentOwnerLabel = currentOwnerId >= 0 && currentOwnerId < _session.Players.Count
+                ? $"Player {currentOwnerId + 1}"
+                : "no owner";
+            GUILayout.Label($"Selected: {selection} at ({coord.x}, {coord.y}) — currently {currentOwnerLabel}");
+
+            GUILayout.Space(8f);
+            DrawOwnerSelector("Reassign to:");
+
+            if (GUILayout.Button("Reassign", GUILayout.Height(28f)))
+            {
+                _interactionController.ReassignSelectedOwner(_selectedOwnerId);
+            }
         }
 
         private void DrawFileMenu()

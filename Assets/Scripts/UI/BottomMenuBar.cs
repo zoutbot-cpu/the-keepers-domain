@@ -46,8 +46,8 @@ namespace KeepersDomain.UI
         private BuilderJobBoard _jobBoard;
         private TileInteractionController _interactionController;
         private TreasuryManager _treasuryManager;
-        private ChaosCore _chaosCore;
-        private BaconBeaconManager _baconBeaconManager;
+        private ThroneRoom _throneRoom;
+        private TavernManager _tavernManager;
         private TrainingRoomManager _trainingRoomManager;
         private LibraryManager _libraryManager;
         private JailManager _jailManager;
@@ -66,14 +66,14 @@ namespace KeepersDomain.UI
         private Vector2 _tasksScrollPos;
         private Vector2 _creaturesScrollPos;
 
-        public void Initialize(DungeonGrid grid, BuilderJobBoard jobBoard, TileInteractionController interactionController, TreasuryManager treasuryManager, ChaosCore chaosCore, BaconBeaconManager baconBeaconManager, TrainingRoomManager trainingRoomManager, LibraryManager libraryManager, JailManager jailManager, ConversionClassManager conversionClassManager, GremlinSpawner gremlinSpawner, WarlockSpawner warlockSpawner, MazeRattlerSpawner mazeRattlerSpawner, BeanCounterSpawner beanCounterSpawner)
+        public void Initialize(DungeonGrid grid, BuilderJobBoard jobBoard, TileInteractionController interactionController, TreasuryManager treasuryManager, ThroneRoom throneRoom, TavernManager tavernManager, TrainingRoomManager trainingRoomManager, LibraryManager libraryManager, JailManager jailManager, ConversionClassManager conversionClassManager, GremlinSpawner gremlinSpawner, WarlockSpawner warlockSpawner, MazeRattlerSpawner mazeRattlerSpawner, BeanCounterSpawner beanCounterSpawner)
         {
             _grid = grid;
             _jobBoard = jobBoard;
             _interactionController = interactionController;
             _treasuryManager = treasuryManager;
-            _chaosCore = chaosCore;
-            _baconBeaconManager = baconBeaconManager;
+            _throneRoom = throneRoom;
+            _tavernManager = tavernManager;
             _trainingRoomManager = trainingRoomManager;
             _libraryManager = libraryManager;
             _jailManager = jailManager;
@@ -109,6 +109,23 @@ namespace KeepersDomain.UI
             }
 
             DrawInspectionPanel(inspectionRect);
+            DrawHoveredCoordLabel(mouseScreenPos);
+        }
+
+        /// Small (x, y) readout following the cursor — troubleshooting aid
+        /// for confirming exactly which tile is under the pointer. Blank
+        /// whenever the pointer isn't over the grid at all (over a panel,
+        /// or off the map edge).
+        private void DrawHoveredCoordLabel(Vector2 mouseScreenPos)
+        {
+            var coord = _interactionController.HoveredCoord;
+            if (!coord.HasValue)
+            {
+                return;
+            }
+
+            var rect = new Rect(mouseScreenPos.x + 16f, mouseScreenPos.y + 16f, 90f, 22f);
+            GUI.Label(rect, $"({coord.Value.x}, {coord.Value.y})", GUI.skin.box);
         }
 
         /// View mode's inspection readout — kept independent of which (if
@@ -130,16 +147,16 @@ namespace KeepersDomain.UI
 
         /// Always-visible resource readout, top-left of the screen — gold
         /// in Treasury reserves, plus mana as current/reserved/max (see
-        /// ChaosCore: reserved is upkeep held by currently-alive implings).
+        /// ThroneRoom: reserved is upkeep held by currently-alive implings).
         private void DrawTopBar(Rect rect)
         {
             GUILayout.BeginArea(rect, GUI.skin.box);
             GUILayout.BeginHorizontal();
             GUILayout.Label($"Gold: {_treasuryManager.TotalGold}");
             GUILayout.Space(12f);
-            GUILayout.Label($"Mana: {_chaosCore.CurrentMana}/{_chaosCore.ReservedMana}/{_chaosCore.MaxMana}");
+            GUILayout.Label($"Mana: {_throneRoom.CurrentMana}/{_throneRoom.ReservedMana}/{_throneRoom.MaxMana}");
             GUILayout.Space(12f);
-            GUILayout.Label($"Bacon: {_baconBeaconManager.TotalBacon}");
+            GUILayout.Label($"Bacon: {_tavernManager.TotalBacon}");
             GUILayout.EndHorizontal();
             GUILayout.EndArea();
         }
@@ -207,7 +224,7 @@ namespace KeepersDomain.UI
         {
             var pending = _interactionController.PendingPlacementAction;
             var isDraggingRoom = _interactionController.IsPlacingLair || _interactionController.IsPlacingTreasury
-                || _interactionController.IsPlacingHatchery || _interactionController.IsPlacingBeacon || _interactionController.IsPlacingTrainingRoom
+                || _interactionController.IsPlacingHatchery || _interactionController.IsPlacingTavern || _interactionController.IsPlacingTrainingRoom
                 || _interactionController.IsPlacingLibrary || _interactionController.IsPlacingJail || _interactionController.IsPlacingConversionClass;
             if (pending == PlacementAction.None && !isDraggingRoom)
             {
@@ -232,9 +249,9 @@ namespace KeepersDomain.UI
             {
                 DrawRoomDragSize("Slime Hatchery", _interactionController.HatcheryDragStartCoord, _interactionController.HatcheryDragCurrentCoord, tileCount => tileCount * SlimeHatcheryManager.CostPerTile);
             }
-            else if (_interactionController.IsPlacingBeacon)
+            else if (_interactionController.IsPlacingTavern)
             {
-                DrawRoomDragSize("Bacon Beacon", _interactionController.BeaconDragStartCoord, _interactionController.BeaconDragCurrentCoord, tileCount => tileCount * BaconBeaconManager.CostPerTile);
+                DrawRoomDragSize("Tavern", _interactionController.TavernDragStartCoord, _interactionController.TavernDragCurrentCoord, tileCount => tileCount * TavernManager.CostPerTile);
             }
             else if (_interactionController.IsPlacingTrainingRoom)
             {
@@ -254,7 +271,7 @@ namespace KeepersDomain.UI
             }
             else
             {
-                var instructionVerb = pending is PlacementAction.PlaceLair or PlacementAction.PlaceTreasury or PlacementAction.PlaceSlimeHatchery or PlacementAction.PlaceBaconBeacon or PlacementAction.PlaceTrainingRoom or PlacementAction.PlaceLibrary or PlacementAction.PlaceJail or PlacementAction.PlaceConversionClass ? "Drag to size, release to place" : "Tap a tile to place";
+                var instructionVerb = pending is PlacementAction.PlaceLair or PlacementAction.PlaceTreasury or PlacementAction.PlaceSlimeHatchery or PlacementAction.PlaceTavern or PlacementAction.PlaceTrainingRoom or PlacementAction.PlaceLibrary or PlacementAction.PlaceJail or PlacementAction.PlaceConversionClass ? "Drag to size, release to place" : "Tap a tile to place";
                 GUILayout.Label($"{instructionVerb}: {PlacementActionLabel(pending)}");
                 if (GUILayout.Button("Cancel", GUILayout.Width(60f)))
                 {
@@ -343,7 +360,7 @@ namespace KeepersDomain.UI
             EndButtonRow();
 
             BeginButtonRow();
-            DrawPlacementButton(PlacementAction.PlaceBaconBeacon, $"Bacon Beacon ({BaconBeaconManager.CostPerTile}g/tile)");
+            DrawPlacementButton(PlacementAction.PlaceTavern, $"Tavern ({TavernManager.CostPerTile}g/tile)");
             DrawPlacementButton(PlacementAction.PlaceTrainingRoom, $"Training Room ({TrainingRoomManager.CostPerTile}g/tile)");
             DrawPlacementButton(PlacementAction.PlaceLibrary, $"Library ({LibraryManager.CostPerTile}g/tile)");
             EndButtonRow();
@@ -424,7 +441,7 @@ namespace KeepersDomain.UI
         private void DrawImplingMenu()
         {
             var spawnLabel = PlacementButtonLabel(PlacementAction.SpawnImpling, $"Spawn impling ({ImplingSpawner.ImplingManaUpkeep} mana)");
-            GUI.enabled = _chaosCore.CurrentMana >= ImplingSpawner.ImplingManaUpkeep;
+            GUI.enabled = _throneRoom.CurrentMana >= ImplingSpawner.ImplingManaUpkeep;
             if (GUILayout.Button(spawnLabel))
             {
                 _interactionController.RequestPlacement(PlacementAction.SpawnImpling);
@@ -504,7 +521,7 @@ namespace KeepersDomain.UI
                 _warlockSpawner.TryRecruitWarlock();
             }
             GUI.enabled = true;
-            GUILayout.Label("Requires: a Lair tile, a 3x3+ Library, fewer non-Imp creatures than Hatchery tiles, fewer intelligent creatures than Bacon Beacon tiles");
+            GUILayout.Label("Requires: a Lair tile, a 3x3+ Library, fewer non-Imp creatures than Hatchery tiles, fewer intelligent creatures than Tavern tiles");
 
             GUILayout.Space(4f);
 

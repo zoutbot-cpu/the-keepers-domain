@@ -8,16 +8,16 @@ namespace KeepersDomain.Rooms
     /// their exp from mining instead (see ImplingAgent), so this room has no
     /// effect on them. Placed the same drag-a-footprint way a Lair/Treasury
     /// is (see TryPlaceTrainingRoom), with no stated minimum size (like
-    /// Lair/Treasury, unlike the Hatchery/Beacon's hard minimums). Training
+    /// Lair/Treasury, unlike the Hatchery/Tavern's hard minimums). Training
     /// dummies are blocked to pathfinding, same as Library's bookcases — a
     /// training creature (see GremlinAgent/WarlockAgent) stands on one of
     /// the tiles cardinally adjacent to a dummy, walking between different
     /// dummies' adjacent tiles rather than standing in one spot the whole
     /// time (see TryFindNearestDummyTile/TryFindRandomDummyTile).
-    public class TrainingRoomManager : MonoBehaviour
+    public class TrainingRoomManager : MonoBehaviour, IRestorableRoomManager
     {
         /// Gold cost per tile of a placed Training Room — charged out of
-        /// TreasuryManager's reserves, same as Hatchery/Beacon/Lair.
+        /// TreasuryManager's reserves, same as Hatchery/Tavern/Lair.
         public const int CostPerTile = 20;
 
         /// Training now actually runs (see GremlinAgent/WarlockAgent) — a
@@ -31,24 +31,47 @@ namespace KeepersDomain.Rooms
         // the full placement rule (e.g. 1 at 3x3, 4 at 5x5, 6 at 7x5).
 
         // Ground overlay on every footprint tile (including the structure's
-        // own tile): a thin dark-green border with a slightly lighter green
-        // fill in the middle — same border/fill grammar TreasuryManager's
-        // gold tiles use, just with a wider fill fraction so the border
-        // reads as thin rather than Treasury's thicker ring. Taller than
-        // DungeonGrid's own 0.15 floor visual so its top face wins the
-        // z-fight instead of flickering; the fill sits a further margin
-        // above the border for the same reason (see TreasuryManager's
-        // FillHeightMargin).
-        [SerializeField] private Color _groundBorderColor = new Color(0.1f, 0.35f, 0.1f);
+        // own tile): the real dungeon_pack tatami floor texture (Assets/
+        // Resources/Dungeon/TrainingRoom/floor_tatami — a plain texture, no
+        // prefab/material build step needed, same as DungeonGrid's own
+        // Floors set) with a slightly lighter green fill inset on top —
+        // same border/fill footprint convention TreasuryManager's gold
+        // tiles use. Taller than DungeonGrid's own 0.15 floor visual so its
+        // top face wins the z-fight instead of flickering; the fill sits a
+        // further margin above the border for the same reason (see
+        // TreasuryManager's FillHeightMargin).
+        private Material _floorTatamiMaterial;
         [SerializeField] private Color _groundFillColor = new Color(0.35f, 0.65f, 0.35f);
         private const float GroundTileHeight = 0.17f;
         private const float GroundFillHeightMargin = 0.03f;
         private const float GroundFootprintScale = 0.95f;
         private const float GroundFillFootprintScale = 0.8f;
 
-        // Training dummy: a wooden post with a crossbar (arms) partway up
-        // and a round head on top — "a stick cross with a head" per the
-        // brief, standing in for a real dummy model until one exists.
+        // Border's own GroundFootprintScale (0.95) leaves a thin gap at
+        // every tile edge where neighboring tiles don't quite touch — a
+        // full-cell gray Seam layer underneath fills it in, sitting a bit
+        // lower than Border/Fill (SeamHeight, between DungeonGrid's own
+        // 0.15 hidden-tile height and Border's 0.17 — tall enough to fully
+        // hide that tile, short enough that Border/Fill still visibly "pop
+        // out" above it) so adjacent tiles read as flush-fitted floor
+        // panels with a mortar line between them, not a void gap.
+        [SerializeField] private Color _seamColor = new Color(0.32f, 0.32f, 0.32f);
+        private const float SeamFootprintScale = 1.0f;
+        private const float SeamHeight = 0.16f;
+
+        // Real dungeon_pack mesh (Assets/Art/DungeonPack/TrainingRoom/
+        // TrainingDummy, built by Tools > DungeonPack > Setup Props into
+        // Dungeon/Prop_TrainingDummy) — a wooden post/crossbar frame with a
+        // straw torso and a red target mark. Falls back to the original
+        // primitive-built post+crossbar+head (same graceful-degradation
+        // pattern ThroneRoom.BuildThrone uses for the throne prop) until
+        // that tool has been run at least once.
+        private GameObject _trainingDummyPrefab;
+        private const float TrainingDummyFootprintScale = 0.95f;
+
+        // Fallback-only primitive dummy — a wooden post with a crossbar
+        // (arms) partway up and a round head on top, used only if
+        // Prop_TrainingDummy hasn't been set up yet. See BuildDummyVisual.
         [SerializeField] private Color _postColor = new Color(0.4f, 0.27f, 0.15f);
         [SerializeField] private Color _headColor = new Color(0.75f, 0.65f, 0.4f);
         private const float PostRadius = 0.06f;
@@ -80,6 +103,30 @@ namespace KeepersDomain.Rooms
             _grid = grid;
             _treasuryManager = treasuryManager;
             lairManager.RoomSold += OnRoomSold;
+
+            _floorTatamiMaterial = BuildDungeonPackMaterial("Dungeon/TrainingRoom/floor_tatami");
+            _trainingDummyPrefab = Resources.Load<GameObject>("Dungeon/Prop_TrainingDummy");
+        }
+
+        /// A real URP/Lit material with texturePath's texture baked in as
+        /// its _BaseMap — built explicitly via Shader.Find, the same way
+        /// every DungeonPack*Setup Editor tool builds its own materials,
+        /// rather than relying on whatever material GameObject.
+        /// CreatePrimitive happens to hand back and mutating that: that
+        /// implicit default rendered as Unity's pink/error material here,
+        /// since nothing guarantees it's actually URP/Lit-shaded. Null if
+        /// the texture itself failed to load.
+        private static Material BuildDungeonPackMaterial(string texturePath)
+        {
+            var texture = Resources.Load<Texture2D>(texturePath);
+            if (texture == null)
+            {
+                return null;
+            }
+
+            var material = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            material.SetTexture("_BaseMap", texture);
+            return material;
         }
 
         /// Total tile count across every placed Training Room — read by
@@ -101,7 +148,7 @@ namespace KeepersDomain.Rooms
         /// Places a Training Room spanning the rectangle between startCoord
         /// and endCoord inclusive. Fails atomically, same as
         /// LairManager.TryPlaceLair — no minimum footprint size, unlike the
-        /// Hatchery/Beacon.
+        /// Hatchery/Tavern.
         public bool TryPlaceTrainingRoom(Vector2Int startCoord, Vector2Int endCoord)
         {
             return TryPlaceTrainingRoomInternal(startCoord, endCoord, chargeGold: true);
@@ -114,6 +161,14 @@ namespace KeepersDomain.Rooms
         public bool PlaceStartingTrainingRoom(Vector2Int startCoord, Vector2Int endCoord)
         {
             return TryPlaceTrainingRoomInternal(startCoord, endCoord, chargeGold: false);
+        }
+
+        /// IRestorableRoomManager — see its own header. ownerId is unused
+        /// here; the footprint is expected to already be Claimed Floor
+        /// (owned correctly) by the time this runs.
+        public bool RestoreRoom(Vector2Int start, Vector2Int end, int ownerId)
+        {
+            return PlaceStartingTrainingRoom(start, end);
         }
 
         private bool TryPlaceTrainingRoomInternal(Vector2Int startCoord, Vector2Int endCoord, bool chargeGold)
@@ -608,9 +663,16 @@ namespace KeepersDomain.Rooms
             return _grid.GetTile(coord).Type == TileType.Rock ? RockTopY : _grid.FloorSurfaceY;
         }
 
-        /// Thin dark-green border with a slightly lighter green fill in the
-        /// middle — same border/fill footprint convention
-        /// TreasuryManager.CreateTileVisual uses for its gold tiles.
+        /// A real dungeon_pack-textured tatami border (see
+        /// _floorTatamiMaterial), with a slightly lighter flat-green fill
+        /// inset on top — same border/fill footprint convention
+        /// TreasuryManager.CreateTileVisual uses for its gold tiles. A
+        /// full-cell gray Seam sits beneath both (see its own field header)
+        /// so the gap Border's own 0.95 footprint would otherwise leave at
+        /// every tile edge reads as a mortar line instead of a void gap.
+        /// RefreshVisual's own isPlainFloor check never applies once a room
+        /// covers the tile, so without this the floor underneath would just
+        /// be a flat placeholder color.
         private GameObject BuildGroundVisual(Vector2Int coord)
         {
             var container = new GameObject($"TrainingRoomGround_{coord.x}_{coord.y}");
@@ -619,12 +681,33 @@ namespace KeepersDomain.Rooms
             var cellSize = _grid.CellSize;
             var basePosition = _grid.GridToWorld(coord) + Vector3.down * 0.5f;
 
+            var seam = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            seam.name = "Seam";
+            seam.transform.SetParent(container.transform, false);
+            // Same "position = basePosition, no offset" convention Border
+            // itself uses — SeamHeight sits between DungeonGrid's own
+            // hidden-tile height (0.15) and Border's (0.17), so it wins the
+            // z-fight against the hidden tile the same way Border does,
+            // while still visibly sitting lower than Border/Fill.
+            seam.transform.position = basePosition;
+            seam.transform.localScale = new Vector3(cellSize * SeamFootprintScale, SeamHeight, cellSize * SeamFootprintScale);
+            seam.GetComponent<Renderer>().material.color = _seamColor;
+            Destroy(seam.GetComponent<Collider>());
+
             var border = GameObject.CreatePrimitive(PrimitiveType.Cube);
             border.name = "Border";
             border.transform.SetParent(container.transform, false);
             border.transform.position = basePosition;
             border.transform.localScale = new Vector3(cellSize * GroundFootprintScale, GroundTileHeight, cellSize * GroundFootprintScale);
-            border.GetComponent<Renderer>().material.color = _groundBorderColor;
+
+            if (_floorTatamiMaterial != null)
+            {
+                // Shared, pre-built material (see BuildDungeonPackMaterial)
+                // — no color tint, the tatami art already carries its own
+                // correct look.
+                border.GetComponent<Renderer>().sharedMaterial = _floorTatamiMaterial;
+            }
+
             Destroy(border.GetComponent<Collider>());
 
             var fill = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -641,8 +724,11 @@ namespace KeepersDomain.Rooms
             return container;
         }
 
-        /// Placeholder training dummy: a vertical post, a horizontal
-        /// crossbar partway up (the "cross"), and a sphere head on top.
+        /// The real training_dummy prop, scaled to fit within coord's tile
+        /// — falls back to the original primitive-built post+crossbar+head
+        /// below if Prop_TrainingDummy hasn't been set up yet (Tools >
+        /// DungeonPack > Setup Props), same graceful-degradation pattern
+        /// ThroneRoom.BuildThrone uses for the throne prop.
         private GameObject BuildDummyVisual(Vector2Int coord)
         {
             var container = new GameObject($"TrainingDummy_{coord.x}_{coord.y}");
@@ -650,6 +736,33 @@ namespace KeepersDomain.Rooms
 
             var worldPos = _grid.GridToWorld(coord);
             var basePosition = new Vector3(worldPos.x, _grid.FloorSurfaceY, worldPos.z);
+
+            if (_trainingDummyPrefab != null)
+            {
+                var dummy = Instantiate(_trainingDummyPrefab, container.transform, false);
+                dummy.name = "Dummy";
+
+                var renderers = dummy.GetComponentsInChildren<Renderer>();
+                var scale = 1f;
+                if (renderers.Length > 0)
+                {
+                    var bounds = renderers[0].bounds;
+                    for (int i = 1; i < renderers.Length; i++)
+                    {
+                        bounds.Encapsulate(renderers[i].bounds);
+                    }
+
+                    var footprint = Mathf.Max(bounds.size.x, bounds.size.z);
+                    if (footprint > 0.01f)
+                    {
+                        scale = (_grid.CellSize * TrainingDummyFootprintScale) / footprint;
+                    }
+                }
+
+                dummy.transform.localScale = Vector3.one * scale;
+                dummy.transform.localPosition = basePosition;
+                return container;
+            }
 
             var post = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
             post.name = "Post";

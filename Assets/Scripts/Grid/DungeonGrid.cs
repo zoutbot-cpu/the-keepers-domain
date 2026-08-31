@@ -14,9 +14,22 @@ namespace KeepersDomain.Grid
         [SerializeField] private float _cellSize = 1f;
 
         [SerializeField] private Color _rockColor = new Color(0.35f, 0.32f, 0.3f);
-        [SerializeField] private Color _rockQueuedColor = new Color(0.55f, 0.5f, 0.2f);
-        [SerializeField] private Color _rockQueuedReinforceColor = new Color(0.2f, 0.35f, 0.55f);
-        [SerializeField] private Color _rockReinforcedColor = new Color(0.16f, 0.14f, 0.13f);
+        // Was a near-black tint from back when Reinforced was just a
+        // flat-colored cube and needed a dark hue of its own to read as
+        // distinct from plain Rock. Now that it's the dungeon_pack's own
+        // grey-brick mesh (which already reads as visually distinct on
+        // its own), that same dark tint was instead crushing the brick
+        // texture toward black — lightened to near-neutral so the
+        // texture's own gray shows through, while still leaving headroom
+        // for the damage-lerp tint to read clearly against it.
+        [SerializeField] private Color _rockReinforcedColor = new Color(0.85f, 0.85f, 0.85f);
+
+        /// Tints the Reinforced wall mesh's glowing orb sub-part (see
+        /// ApplyTint) — same placeholder-blue value as ThroneRoom's own
+        /// _playerColor field, kept in sync manually since there's no
+        /// real per-player color selection system yet for either to read
+        /// from instead (both are marked as stand-ins for one).
+        [SerializeField] private Color _playerColor = new Color(0.25f, 0.55f, 0.95f);
 
         /// Bedrock — darker than a reinforced wall, per the brief.
         [SerializeField] private Color _bedrockColor = new Color(0.07f, 0.06f, 0.055f);
@@ -25,7 +38,6 @@ namespace KeepersDomain.Grid
         [SerializeField] private Color _rockUnreachableColor = new Color(0.2f, 0.28f, 0.38f);
         [SerializeField] private Color _floorUnclaimedColor = new Color(0.2f, 0.18f, 0.15f);
         [SerializeField] private Color _floorClaimedColor = new Color(0.25f, 0.4f, 0.25f);
-        [SerializeField] private Color _floorQueuedBuildColor = new Color(0.45f, 0.32f, 0.18f);
         [SerializeField] private Color _roomColor = new Color(0.55f, 0.15f, 0.5f);
         [SerializeField] private Color _roomDamagedColor = new Color(0.2f, 0.05f, 0.18f);
         [SerializeField] private Color _goldWallColor = new Color(0.5f, 0.42f, 0.2f);
@@ -74,32 +86,107 @@ namespace KeepersDomain.Grid
 
         // Stable per-tile anchor, positioned once via GridToWorld and never
         // moved again — decorations (RebuildWallDecoration, below) parent
-        // under this. The tile's actual geometry (flat colored cube for
-        // Floor/Water/..., or an autotiled KayKit wall prefab for Rock —
-        // see WallAutotiler/WallMeshCatalog) lives in _visualChildren as a
-        // single swappable child, so geometry can change (dug out, wall
-        // shape changes as neighbors change) without disturbing decorations
-        // parented alongside it.
+        // under this. The tile's actual geometry (flat colored cube, or a
+        // dungeon_pack wall mesh — see GetWallMeshPrefab) lives in
+        // _visualChildren as a single swappable child, so it can change
+        // (dug out, reinforced toggled, resource type changed, ...)
+        // without disturbing decorations parented alongside it.
         private GameObject[,] _visuals;
         private GameObject[,] _visualChildren;
 
-        // Parallel to _visualChildren — null means that tile's current
-        // child is the plain flat-colored cube; a value means it's an
-        // instantiated wall prefab of that shape. Lets RefreshVisual tell
-        // whether it needs to destroy/recreate the child (shape actually
-        // changed) or just re-tint the existing one (e.g. a damage tick),
-        // since RefreshVisual fires on every single dig-damage hit.
-        private WallShape?[,] _cachedWallShape;
+        // Parallel to _visualChildren — which prefab (if any) the current
+        // child was instantiated from; null means it's the plain flat
+        // cube. Lets RefreshVisual tell whether it needs to destroy/
+        // recreate the child (the target prefab actually changed — e.g.
+        // Gold -> RegeneratingGold, not just any two mesh tiles) or just
+        // re-tint the existing one (e.g. a damage tick), since RefreshVisual
+        // fires on every single dig-damage hit.
+        private GameObject[,] _currentWallPrefab;
 
         // Loaded once from Resources (DungeonGrid is built entirely
         // procedurally by GameBootstrap — there's no scene object to
-        // hand-wire this reference onto). Null is a valid, supported state:
-        // Rock tiles just fall back to the plain colored cube every other
-        // tile type already uses, rather than throwing.
-        private WallMeshCatalog _wallCatalog;
+        // hand-wire these references onto). Null is a valid, supported
+        // state per field: a tile whose corresponding mesh isn't loaded
+        // just falls back to the plain colored cube every other tile type
+        // already uses, rather than throwing (see GetWallMeshPrefab).
+        private GameObject _wallMeshStone;
+        private GameObject _wallMeshGold;
+        private GameObject _wallMeshGoldRegen;
+        private GameObject _wallMeshManaCrystal;
+        private GameObject _wallMeshBedrock;
+        private GameObject _wallMeshReinforced;
+
+        // Same graceful-fallback rule as the wall meshes above — null
+        // just means Water/Lava keep the plain colored cube every other
+        // non-mesh tile type uses. Unlike walls these need no
+        // scale/margin correction at all: the dungeon_pack tiles are
+        // already an exact 1x1 quad, and (unlike a wall's height) there's
+        // no vertical dimension to preserve either.
+        private GameObject _waterMesh;
+        private GameObject _lavaMesh;
+
+        // Plain Claimed/Unclaimed floor tiles are still the same primitive
+        // cube every non-mesh tile uses, just textured now (see
+        // RefreshVisual's isPlainFloor branch) instead of flat-colored —
+        // no mesh import involved, so no catalog of prefabs like the wall
+        // fields above. _plainFloorMaterial is what every other non-mesh
+        // case (rooms, water/lava/chasm/holy ground, build-queued) keeps
+        // using — untextured, tinted flat via ApplyTint exactly like
+        // before, just via a shared material instead of the auto-instanced
+        // one .material used to hand back. _claimedTileTextures holds the
+        // 4 paved-floor variants DungeonGrid picks between per-tile (seeded
+        // by coord, see ApplyTint's baseMapOverride) so a large claimed
+        // territory doesn't read as one obviously repeating texture.
+        private Material _plainFloorMaterial;
+        private Material _floorUnclaimedMaterial;
+        private Material _floorClaimedMaterial;
+        private Texture2D[] _claimedTileTextures;
+
+        /// Which floating icon (if any) a queued Rock/Floor tile shows —
+        /// replaces the old flat queued-color tint (see RefreshVisual's
+        /// Rock/Floor color branches) so the wall/floor itself just reads
+        /// as its ordinary type color, with the pending action called out
+        /// by a small icon on top instead.
+        private enum QueuedIcon
+        {
+            None,
+            Pickaxe,
+            Shield,
+            Hammer
+        }
+
+        // Parallel to _visuals — the current queued-action icon (if any),
+        // and which kind it is, so UpdateQueuedActionIcon only rebuilds
+        // when that actually changes rather than every RefreshVisual call
+        // (which fires per dig-damage hit).
+        private GameObject[,] _queuedActionIcons;
+        private QueuedIcon[,] _queuedActionIconKind;
+
+        // Floats the Mine/Reinforce icon just above a wall's peak
+        // (dungeon_pack wall meshes stand ~2.03 units tall on a 1-unit
+        // cell — see DungeonPackWallSetup's bounds log — based at
+        // floorSurfaceY - 0.5, i.e. topping out around 1.53).
+        private const float QueuedIconFloatHeight = 1.75f;
+
+        // The Construct-wall frame stands roughly where the future wall
+        // will rise, base at the floor surface rather than floating high
+        // like the Mine/Reinforce icons — see BuildConstructIcon.
+        private const float ConstructFrameWidth = 0.8f;
+        private const float ConstructFrameHeight = 1.6f;
+        private const float ConstructFrameBarThickness = 0.05f;
+
+        /// The wall tile currently selected (see SetSelectedWall) — null
+        /// when nothing is. Only ever one at a time; _selectionOutline is
+        /// the single "inverted hull" visual for it (see SetSelectedWall).
+        private Vector2Int? _selectedWallCoord;
+        private GameObject _selectionOutline;
+        private Material _selectionOutlineMaterial;
+        private const float SelectionOutlineScale = 1.04f;
 
         private static MaterialPropertyBlock _sharedPropertyBlock;
         private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
+        private static readonly int EmissionColorId = Shader.PropertyToID("_EmissionColor");
+        private static readonly int BaseMapId = Shader.PropertyToID("_BaseMap");
 
         // Parallel to _visuals — small decorative child objects (currently
         // just gold nuggets) parented to a tile's cube, built once when a
@@ -112,12 +199,174 @@ namespace KeepersDomain.Grid
         public int Height => _height;
         public float CellSize => _cellSize;
 
-        /// Per-player colors used to tint a Claimed tile's visual by its
-        /// owner (see RefreshVisual/TileState.OwnerId) — set once by the
-        /// level designer's session (LevelDesignerSession.
-        /// RefreshGridOwnerColors) and left null during ordinary gameplay,
-        /// so BuildWorld's tiles render exactly as before.
-        public Color[] EditorOwnerColors { get; set; }
+        /// Convenience single-owner setter for ordinary (non-Level-
+        /// Designer) gameplay, where there's exactly one implicit player
+        /// and TileState.OwnerId is never explicitly set (stays at its
+        /// struct default, 0) — wraps that one color as OwnerColors[0],
+        /// the same per-owner array RefreshVisual's Claimed-floor tint and
+        /// a Reinforced wall's orb coloring (see ApplyOrbOwnerColor) both
+        /// read from, so GameBootstrap.BuildWorld's one call site
+        /// (`grid.PlayerColor = Color.green`) needs no change even though
+        /// a Reinforced wall's orb is no longer one material mutated
+        /// globally for the whole grid — it's now looked up per-tile by
+        /// owner, the same mechanism the Level Designer's multi-player
+        /// case already used for Claimed floor. RefreshAllVisuals so every
+        /// already-placed Reinforced wall (not just ones painted from now
+        /// on) picks up the new color immediately.
+        public Color PlayerColor
+        {
+            get => _playerColor;
+            set
+            {
+                _playerColor = value;
+                OwnerColors = new[] { value };
+                RefreshAllVisuals();
+            }
+        }
+
+        /// Per-owner colors, indexed by TileState.OwnerId — used
+        /// unconditionally by a Reinforced wall's glowing orb (see
+        /// ApplyOrbOwnerColor, always needs *some* color) and, only when
+        /// TintFloorByOwner is also set, to additionally tint Claimed
+        /// floor (see RefreshVisual). Populated either by PlayerColor's
+        /// own convenience setter (ordinary single-player gameplay, one
+        /// entry at index 0) or by the Level Designer's
+        /// LevelDesignerSession.RefreshGridOwnerColors (one entry per
+        /// player) — renamed from EditorOwnerColors since it's no longer
+        /// Level-Designer-exclusive. Null only before either has ever run.
+        public Color[] OwnerColors { get; set; }
+
+        /// Gates Claimed-floor owner-tinting specifically (RefreshVisual)
+        /// — separate from OwnerColors itself, which a Reinforced wall's
+        /// orb always uses regardless of this flag. Only
+        /// LevelDesignerSession.RefreshGridOwnerColors ever sets this
+        /// true; PlayerColor's own convenience setter (ordinary gameplay)
+        /// deliberately leaves it false, so gameplay's Claimed floor
+        /// (e.g. the Throne Room/Portal footprints, which CarveRoom already
+        /// claims with OwnerId 0) keeps rendering the plain, untinted
+        /// claimed color exactly as before — populating OwnerColors for
+        /// the orb's sake must not, by itself, start tinting floor that
+        /// never opted into per-owner coloring.
+        public bool TintFloorByOwner { get; set; }
+
+        // One material instance per owner (plus one at key -1 for "no
+        // owner"/fallback), lazily created and reused/recolored in place
+        // across every Reinforced wall tile that owner occupies — see
+        // GetOwnerOrbMaterial/ApplyOrbOwnerColor. Never per-tile, so this
+        // stays exactly as cheap (draw-call/batching-wise) per owner as
+        // the old single-shared-material-for-the-whole-grid approach was.
+        private readonly Dictionary<int, Material> _reinforcedOrbMaterialsByOwner = new Dictionary<int, Material>();
+        private Material _reinforcedOrbTemplateMaterial;
+
+        /// The color a Reinforced wall's orb should show for ownerId —
+        /// looked up in OwnerColors when it's a valid index, otherwise the
+        /// same single-owner _playerColor fallback (the old placeholder
+        /// blue default) an unowned/-1 Reinforced wall (e.g. one placed in
+        /// the Level Designer with no owner selected) falls back to.
+        private Color ResolveOwnerColor(int ownerId)
+        {
+            return OwnerColors != null && ownerId >= 0 && ownerId < OwnerColors.Length
+                ? OwnerColors[ownerId]
+                : _playerColor;
+        }
+
+        /// The (cached, reused) orb material for ownerId, recolored in
+        /// place to ResolveOwnerColor(ownerId) on every call so a color
+        /// change (PlayerColor's setter, or the Level Designer's
+        /// RefreshGridOwnerColors) retints every tile sharing that owner's
+        /// material without needing to touch each tile's renderer again.
+        private Material GetOwnerOrbMaterial(int ownerId)
+        {
+            var color = ResolveOwnerColor(ownerId);
+            if (_reinforcedOrbMaterialsByOwner.TryGetValue(ownerId, out var cached))
+            {
+                cached.SetColor(BaseColorId, color);
+                cached.SetColor(EmissionColorId, color);
+                return cached;
+            }
+
+            var template = FindReinforcedOrbTemplate();
+            if (template == null)
+            {
+                return null;
+            }
+
+            var material = new Material(template) { name = "M_ReinforcedOrb" };
+            material.SetColor(BaseColorId, color);
+            material.SetColor(EmissionColorId, color);
+            _reinforcedOrbMaterialsByOwner[ownerId] = material;
+            return material;
+        }
+
+        /// M_ReinforcedOrb by name (not slot index — index order isn't
+        /// worth relying on) among _wallMeshReinforced's own original
+        /// materials — the un-owner-tinted template every owner-specific
+        /// clone (see GetOwnerOrbMaterial) is cloned from, found once and
+        /// cached. Safe to call before _wallMeshReinforced has loaded
+        /// (Resources.Load can run after this in Initialize, or the
+        /// prefab can simply be missing) — returns null until it exists.
+        private Material FindReinforcedOrbTemplate()
+        {
+            if (_reinforcedOrbTemplateMaterial != null)
+            {
+                return _reinforcedOrbTemplateMaterial;
+            }
+
+            if (_wallMeshReinforced == null)
+            {
+                return null;
+            }
+
+            foreach (var renderer in _wallMeshReinforced.GetComponentsInChildren<Renderer>())
+            {
+                foreach (var material in renderer.sharedMaterials)
+                {
+                    if (material != null && material.name == "M_ReinforcedOrb")
+                    {
+                        _reinforcedOrbTemplateMaterial = material;
+                        return material;
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// Swaps a Reinforced wall instance's orb material slot (found by
+        /// name, same reasoning as FindReinforcedOrbTemplate) to
+        /// ownerId's own material — called every RefreshVisual for a
+        /// Reinforced tile (not just when its mesh is freshly
+        /// instantiated), since the owner can change without the mesh
+        /// itself needing to rebuild (see the Level Designer's edit-mode
+        /// reassignment). Reassigning the same already-correct material
+        /// reference when nothing changed is a harmless no-op.
+        private void ApplyOrbOwnerColor(GameObject visualChild, int ownerId)
+        {
+            var orbMaterial = GetOwnerOrbMaterial(ownerId);
+            if (orbMaterial == null)
+            {
+                return;
+            }
+
+            foreach (var renderer in visualChild.GetComponentsInChildren<Renderer>())
+            {
+                var materials = renderer.sharedMaterials;
+                var changed = false;
+                for (int i = 0; i < materials.Length; i++)
+                {
+                    if (materials[i] != null && materials[i].name == "M_ReinforcedOrb")
+                    {
+                        materials[i] = orbMaterial;
+                        changed = true;
+                    }
+                }
+
+                if (changed)
+                {
+                    renderer.sharedMaterials = materials;
+                }
+            }
+        }
 
         /// World-space Y of a dug (Floor) tile's top surface. Floor tiles sit
         /// with their center at y=-0.5 and a height of 0.15 (see RefreshVisual)
@@ -156,9 +405,36 @@ namespace KeepersDomain.Grid
             _tiles = new TileState[_width, _height];
             _visuals = new GameObject[_width, _height];
             _visualChildren = new GameObject[_width, _height];
-            _cachedWallShape = new WallShape?[_width, _height];
+            _currentWallPrefab = new GameObject[_width, _height];
             _wallDecorations = new GameObject[_width, _height];
-            _wallCatalog = Resources.Load<WallMeshCatalog>("Dungeon/WallMeshCatalog");
+            _wallMeshStone = Resources.Load<GameObject>("Dungeon/Wall_Stone");
+            _wallMeshGold = Resources.Load<GameObject>("Dungeon/Wall_Gold");
+            _wallMeshGoldRegen = Resources.Load<GameObject>("Dungeon/Wall_GoldRegen");
+            _wallMeshManaCrystal = Resources.Load<GameObject>("Dungeon/Wall_ManaCrystal");
+            _wallMeshBedrock = Resources.Load<GameObject>("Dungeon/Wall_Bedrock");
+            _wallMeshReinforced = Resources.Load<GameObject>("Dungeon/Wall_Reinforced");
+            _waterMesh = Resources.Load<GameObject>("Dungeon/Tile_Water");
+            _lavaMesh = Resources.Load<GameObject>("Dungeon/Tile_Lava");
+            _plainFloorMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            _floorUnclaimedMaterial = Resources.Load<Material>("Dungeon/Floors/M_FloorUnclaimed");
+            _floorClaimedMaterial = Resources.Load<Material>("Dungeon/Floors/M_FloorClaimed");
+            _claimedTileTextures = new[]
+            {
+                Resources.Load<Texture2D>("Dungeon/Floors/claimed_tile_1"),
+                Resources.Load<Texture2D>("Dungeon/Floors/claimed_tile_2"),
+                Resources.Load<Texture2D>("Dungeon/Floors/claimed_tile_3"),
+                Resources.Load<Texture2D>("Dungeon/Floors/claimed_tile_4"),
+            };
+            _queuedActionIcons = new GameObject[_width, _height];
+            _queuedActionIconKind = new QueuedIcon[_width, _height];
+
+            _selectionOutlineMaterial = new Material(Shader.Find("Universal Render Pipeline/Unlit"));
+            _selectionOutlineMaterial.SetColor(BaseColorId, Color.yellow);
+            // Front-face culled so only the back faces of the scaled-up
+            // duplicate (see SetSelectedWall) show — the classic
+            // "inverted hull" outline trick, since this project has no
+            // custom render-feature/outline shader to reach for instead.
+            _selectionOutlineMaterial.SetFloat("_Cull", (float)UnityEngine.Rendering.CullMode.Front);
 
             for (int x = 0; x < _width; x++)
             {
@@ -173,7 +449,7 @@ namespace KeepersDomain.Grid
 
         /// Carves a square room (halfSize=0 carves just the single center
         /// tile — handy for a one-tile corridor) as Floor+Claimed. Used for
-        /// the fixed starting rooms (Chaos Core, Portal room, the corridor
+        /// the fixed starting rooms (Throne Room, Portal room, the corridor
         /// between them) built directly by GameBootstrap, as opposed to
         /// tiles dug out during play. isBuildable defaults to true for
         /// ordinary rooms; GameBootstrap passes false for rooms that already
@@ -193,7 +469,7 @@ namespace KeepersDomain.Grid
                     _tiles[coord.x, coord.y].Type = TileType.Floor;
                     _tiles[coord.x, coord.y].Ownership = TileOwnership.Claimed;
                     _tiles[coord.x, coord.y].IsBuildable = isBuildable;
-                    RefreshVisualAndWallNeighbors(coord);
+                    RefreshVisual(coord);
                 }
             }
         }
@@ -218,7 +494,7 @@ namespace KeepersDomain.Grid
                     _tiles[coord.x, coord.y].Type = TileType.Floor;
                     _tiles[coord.x, coord.y].Ownership = TileOwnership.Claimed;
                     _tiles[coord.x, coord.y].IsBuildable = isBuildable;
-                    RefreshVisualAndWallNeighbors(coord);
+                    RefreshVisual(coord);
                 }
             }
         }
@@ -301,7 +577,7 @@ namespace KeepersDomain.Grid
             tile.Hp = 0;
             ClearWallDecoration(coord);
 
-            RefreshVisualAndWallNeighbors(coord);
+            RefreshVisual(coord);
 
             if (terrainType == TileType.Chasm)
             {
@@ -385,7 +661,7 @@ namespace KeepersDomain.Grid
         }
 
         /// Marks a Floor tile as off-limits to pathfinding without changing
-        /// its type/ownership — used by ChaosCore to keep its center tile
+        /// its type/ownership — used by ThroneRoom to keep its center tile
         /// (the raised orb pedestal) out of reach for implings while it
         /// stays ordinary Claimed Floor for room-placement purposes.
         public void SetBlocked(Vector2Int coord, bool isBlocked)
@@ -884,7 +1160,7 @@ namespace KeepersDomain.Grid
             tile.WallResourceType = WallResourceType.None;
             ClearWallDecoration(coord);
 
-            RefreshVisualAndWallNeighbors(coord);
+            RefreshVisual(coord);
             FloorNeedsClaim?.Invoke(coord);
         }
 
@@ -974,15 +1250,19 @@ namespace KeepersDomain.Grid
 
             ClearWallDecoration(coord);
             _tiles[coord.x, coord.y] = TileState.Rock;
-            RefreshVisualAndWallNeighbors(coord);
+            RefreshVisual(coord);
         }
 
         /// Paints coord into one of the wall variants the level designer's
         /// Map Design menu offers (see EditorWallVariant) — resets to
         /// plain Rock first, then reuses the same guarded gameplay methods
         /// (SetWallResourceType/SetBedrock) where possible so their
-        /// existing HP/decoration logic doesn't need duplicating.
-        public void EditorPaintWall(Vector2Int coord, EditorWallVariant variant)
+        /// existing HP/decoration logic doesn't need duplicating. ownerId
+        /// only matters for the Reinforced case (see TileState.OwnerId/
+        /// ApplyOrbOwnerColor — a Reinforced wall's orb is tinted by its
+        /// owner) and is otherwise ignored; defaults to -1 ("no owner"),
+        /// same fallback every other Editor* ownership param uses.
+        public void EditorPaintWall(Vector2Int coord, EditorWallVariant variant, int ownerId = -1)
         {
             if (!InBounds(coord))
             {
@@ -997,6 +1277,7 @@ namespace KeepersDomain.Grid
                     ref var tile = ref _tiles[coord.x, coord.y];
                     tile.IsReinforced = true;
                     tile.Hp = TileState.ReinforcedMaxHp;
+                    tile.OwnerId = ownerId;
                     RefreshVisual(coord);
                     break;
                 }
@@ -1053,7 +1334,64 @@ namespace KeepersDomain.Grid
             tile.Ownership = claimed ? TileOwnership.Claimed : TileOwnership.Unclaimed;
             tile.OwnerId = claimed ? ownerId : -1;
             tile.IsBuildable = true;
-            RefreshVisualAndWallNeighbors(coord);
+            RefreshVisual(coord);
+        }
+
+        /// Reassigns coord's owner without touching anything else about
+        /// it — deliberately narrower than EditorPaintFloor/EditorPaintWall,
+        /// which each re-derive other tile state (Ownership/IsReinforced/
+        /// HP/...) alongside ownerId. Used by the Level Designer's edit
+        /// mode to let the author reassign who an already-placed Claimed
+        /// floor tile or Reinforced wall belongs to. No-ops on anything
+        /// that isn't already one of those two — an unowned tile type
+        /// (plain Rock, Unclaimed floor, terrain, ...) has nothing
+        /// meaningful to reassign. A room tile is Claimed Floor too, so
+        /// this works for one — but see EditorReassignRoomOwner for
+        /// reassigning a whole room's footprint at once, which is what
+        /// the edit mode actually calls for a room tile.
+        public void EditorReassignOwner(Vector2Int coord, int ownerId)
+        {
+            if (!InBounds(coord))
+            {
+                return;
+            }
+
+            ref var tile = ref _tiles[coord.x, coord.y];
+            var isReassignable = (tile.Type == TileType.Floor && tile.Ownership == TileOwnership.Claimed) || tile.IsReinforced;
+            if (!isReassignable)
+            {
+                return;
+            }
+
+            tile.OwnerId = ownerId;
+            RefreshVisual(coord);
+        }
+
+        /// Reassigns every tile belonging to roomId to a new owner — a
+        /// room has one owner conceptually, tracked per-tile the same as
+        /// plain Claimed floor (no room manager tracks a per-room owner
+        /// separately — see RestoreRoom/TryAssignRoom), so the Level
+        /// Designer's edit mode reassigns a whole room at once rather than
+        /// just whichever single tile was tapped. Same whole-grid-scan
+        /// shape as RemoveRoomTiles. Returns how many tiles it actually
+        /// reassigned.
+        public int EditorReassignRoomOwner(string roomId, int ownerId)
+        {
+            var count = 0;
+            for (int x = 0; x < _width; x++)
+            {
+                for (int y = 0; y < _height; y++)
+                {
+                    if (_tiles[x, y].RoomId == roomId)
+                    {
+                        _tiles[x, y].OwnerId = ownerId;
+                        RefreshVisual(new Vector2Int(x, y));
+                        count++;
+                    }
+                }
+            }
+
+            return count;
         }
 
         /// Whether the level designer's Rooms menu could stamp a room onto
@@ -1103,8 +1441,28 @@ namespace KeepersDomain.Grid
 
             tile.RoomId = roomId;
             tile.Hp = TileState.RoomMaxHp;
-            RefreshVisualAndWallNeighbors(coord);
+            RefreshVisual(coord);
             return true;
+        }
+
+        /// Re-runs RefreshVisual across every tile — needed whenever
+        /// something that affects a tile's *color* (not its type/shape)
+        /// changes after tiles have already been painted, since
+        /// RefreshVisual only reruns when something explicitly asks it to.
+        /// OwnerColors (see PlayerColor and
+        /// LevelDesignerSession.RefreshGridOwnerColors) qualifies — changing a
+        /// player's color in the Level Designer must retint every already-
+        /// placed Claimed tile of theirs immediately, not just tiles
+        /// painted from then on).
+        public void RefreshAllVisuals()
+        {
+            for (int x = 0; x < _width; x++)
+            {
+                for (int y = 0; y < _height; y++)
+                {
+                    RefreshVisual(new Vector2Int(x, y));
+                }
+            }
         }
 
         private void BuildAllVisuals()
@@ -1145,18 +1503,18 @@ namespace KeepersDomain.Grid
             }
             else if (tile.Type == TileType.Rock)
             {
+                // Queued-for-dig/reinforce no longer get their own color
+                // here — a floating icon communicates that now instead
+                // (see UpdateQueuedActionIcon), so a queued wall just
+                // shows its ordinary type color underneath. Unreachable
+                // is kept as a color, not an icon — it's a warning about
+                // the queue itself (an impling can't path to it), not the
+                // queued action, and stacking a 4th icon meaning on top of
+                // the other 3 wasn't worth it.
                 Color baseColor;
                 if ((tile.IsQueuedForDig || tile.IsQueuedForReinforce) && tile.IsUnreachable)
                 {
                     baseColor = _rockUnreachableColor;
-                }
-                else if (tile.IsQueuedForDig)
-                {
-                    baseColor = _rockQueuedColor;
-                }
-                else if (tile.IsQueuedForReinforce)
-                {
-                    baseColor = _rockQueuedReinforceColor;
                 }
                 else if (tile.IsBedrock)
                 {
@@ -1202,18 +1560,15 @@ namespace KeepersDomain.Grid
             {
                 color = _holyGroundColor;
             }
-            else if (tile.IsQueuedForBuild)
-            {
-                color = _floorQueuedBuildColor;
-            }
             else if (tile.Ownership == TileOwnership.Claimed)
             {
-                // Tinted toward the owning player's color when one's set
-                // (see EditorOwnerColors/TileState.OwnerId) — null/-1 in
-                // ordinary gameplay, where this just falls back to the
-                // plain claimed color exactly as before.
-                color = tile.OwnerId >= 0 && EditorOwnerColors != null && tile.OwnerId < EditorOwnerColors.Length
-                    ? Color.Lerp(_floorClaimedColor, EditorOwnerColors[tile.OwnerId], 0.6f)
+                // Tinted toward the owning player's color when the Level
+                // Designer has opted in (see TintFloorByOwner/OwnerColors/
+                // TileState.OwnerId) — false in ordinary gameplay, where
+                // this just falls back to the plain claimed color exactly
+                // as before.
+                color = TintFloorByOwner && tile.OwnerId >= 0 && OwnerColors != null && tile.OwnerId < OwnerColors.Length
+                    ? Color.Lerp(_floorClaimedColor, OwnerColors[tile.OwnerId], 0.6f)
                     : _floorClaimedColor;
             }
             else
@@ -1221,19 +1576,16 @@ namespace KeepersDomain.Grid
                 color = _floorUnclaimedColor;
             }
 
-            bool needsWallMesh = tile.Type == TileType.Rock && _wallCatalog != null;
-            WallShape? shape = null;
-            float rotation = 0f;
-            if (needsWallMesh)
+            var wallPrefab = GetWallMeshPrefab(tile);
+            GameObject terrainMeshPrefab = tile.Type switch
             {
-                (shape, rotation) = WallAutotiler.Compute(
-                    IsWallNeighbor(coord + Vector2Int.up),
-                    IsWallNeighbor(coord + Vector2Int.right),
-                    IsWallNeighbor(coord + Vector2Int.down),
-                    IsWallNeighbor(coord + Vector2Int.left));
-            }
+                TileType.Water => _waterMesh,
+                TileType.Lava => _lavaMesh,
+                _ => null
+            };
+            var meshPrefab = wallPrefab != null ? wallPrefab : terrainMeshPrefab;
 
-            bool needsRebuild = _visualChildren[coord.x, coord.y] == null || _cachedWallShape[coord.x, coord.y] != shape;
+            bool needsRebuild = _visualChildren[coord.x, coord.y] == null || _currentWallPrefab[coord.x, coord.y] != meshPrefab;
             if (needsRebuild)
             {
                 if (_visualChildren[coord.x, coord.y] != null)
@@ -1242,10 +1594,33 @@ namespace KeepersDomain.Grid
                 }
 
                 GameObject child;
-                if (needsWallMesh)
+                if (wallPrefab != null)
                 {
-                    child = Instantiate(_wallCatalog.GetPrefab(shape.Value), visual.transform, false);
-                    child.transform.localScale = Vector3.one * _wallCatalog.PrefabScale;
+                    // Mesh's own pivot sits at its base (Y=0, see
+                    // DungeonPackWallSetup's bounds log) — dropping it half
+                    // a unit below the tile center lines its base up with
+                    // where the old flat cube's bottom face sat, flush with
+                    // the floor. Full cellSize on X/Z (not the 0.95-margin
+                    // every floor/non-mesh cube still uses) so adjacent
+                    // wall tiles butt up against each other with no gap —
+                    // unlike floor tiles, walls are meant to read as one
+                    // continuous surface.
+                    child = Instantiate(wallPrefab, visual.transform, false);
+                    child.transform.localPosition = Vector3.down * 0.5f;
+                    child.transform.localRotation = Quaternion.identity;
+                    child.transform.localScale = new Vector3(_cellSize, 1f, _cellSize);
+                }
+                else if (terrainMeshPrefab != null)
+                {
+                    // Already an exact 1x1 quad sitting just below its own
+                    // local Y=0 (its "floor plane" per the pack's own
+                    // LIQUID_TILES_README.txt) — putting the root at
+                    // FloorSurfaceY lines that up with where this project's
+                    // floor tiles actually sit, no scale correction needed.
+                    child = Instantiate(terrainMeshPrefab, visual.transform, false);
+                    child.transform.localPosition = new Vector3(0f, FloorSurfaceY, 0f);
+                    child.transform.localRotation = Quaternion.identity;
+                    child.transform.localScale = Vector3.one * _cellSize;
                 }
                 else
                 {
@@ -1255,81 +1630,393 @@ namespace KeepersDomain.Grid
 
                 child.name = "Visual";
                 _visualChildren[coord.x, coord.y] = child;
-                _cachedWallShape[coord.x, coord.y] = shape;
+                _currentWallPrefab[coord.x, coord.y] = meshPrefab;
             }
 
             var visualChild = _visualChildren[coord.x, coord.y];
-            if (needsWallMesh)
+            if (terrainMeshPrefab != null)
             {
-                // Compose on top of the prefab's own authored rotation
-                // rather than replacing it outright — these source meshes
-                // carry a real orientation of their own (e.g. an axis
-                // compensation baked in at import), and overwriting
-                // localRotation wholesale silently discarded it, leaving
-                // every wall lying on its side instead of standing up.
-                var baseRotation = _wallCatalog.GetPrefab(shape.Value).transform.localRotation;
-                visualChild.transform.localPosition = Vector3.zero;
-                visualChild.transform.localRotation = Quaternion.Euler(0f, rotation + _wallCatalog.RotationOffsetDegrees, 0f) * baseRotation;
-                ApplyTint(visualChild, color);
+                // Water/lava textures already carry their own real color —
+                // tinting with the old flat _waterColor/_lavaColor (still
+                // used by the cube fallback below) would just muddy them,
+                // same lesson as the wall meshes.
+                ApplyTint(visualChild, Color.white);
+            }
+            else if (wallPrefab != null)
+            {
+                // The Reinforced mesh's brick/cap/orb are one combined
+                // renderer (see PlayerColor's own comment) — a uniform
+                // property-block tint can't leave the orb's player color
+                // alone while still tinting the brick/cap, so in its
+                // normal resting state (nothing to actually communicate)
+                // this skips tinting entirely and lets each material's own
+                // baked color show: gray brick/cap, player-colored orb.
+                // Queued/damaged states still tint the whole renderer
+                // uniformly (orb included) — an acceptable, rare/transient
+                // exception rather than something worth losing the correct
+                // steady-state look over.
+                bool isPristineReinforced = wallPrefab == _wallMeshReinforced
+                    && !tile.IsQueuedForDig && !tile.IsQueuedForReinforce && tile.Hp >= tile.MaxHp;
+                if (isPristineReinforced)
+                {
+                    ClearTint(visualChild);
+                }
+                else
+                {
+                    ApplyTint(visualChild, color);
+                }
+
+                // Per-owner orb color (see ApplyOrbOwnerColor) — runs
+                // every refresh, independent of isPristineReinforced,
+                // since the orb's own material slot is swapped directly
+                // rather than tinted through the property block either
+                // branch above uses.
+                if (wallPrefab == _wallMeshReinforced)
+                {
+                    ApplyOrbOwnerColor(visualChild, tile.OwnerId);
+                }
             }
             else
             {
                 visualChild.transform.localPosition = Vector3.down * (tile.Type == TileType.Rock ? 0f : (0.5f + tile.PitDepth));
                 visualChild.transform.localScale = new Vector3(_cellSize * 0.95f, tile.Type == TileType.Rock ? 1f : 0.15f, _cellSize * 0.95f);
-                visualChild.GetComponent<Renderer>().material.color = color;
+
+                var renderer = visualChild.GetComponent<Renderer>();
+                // Plain Claimed/Unclaimed floor gets a real dungeon_pack
+                // texture; every other non-mesh case (rooms, chasm/holy
+                // ground, build-queued, or water/lava if their mesh
+                // failed to load) keeps today's flat-colored look.
+                bool isPlainFloor = tile.Type == TileType.Floor && !tile.HasRoom && !tile.IsQueuedForBuild;
+                if (isPlainFloor && tile.Ownership == TileOwnership.Claimed && _floorClaimedMaterial != null)
+                {
+                    renderer.sharedMaterial = _floorClaimedMaterial;
+                    var variantIndex = Mathf.Abs(coord.x * 92821 + coord.y * 68917) % _claimedTileTextures.Length;
+                    ApplyTint(visualChild, color, _claimedTileTextures[variantIndex]);
+                }
+                else if (isPlainFloor && tile.Ownership == TileOwnership.Unclaimed && _floorUnclaimedMaterial != null)
+                {
+                    renderer.sharedMaterial = _floorUnclaimedMaterial;
+                    ApplyTint(visualChild, color);
+                }
+                else
+                {
+                    renderer.sharedMaterial = _plainFloorMaterial;
+                    ApplyTint(visualChild, color);
+                }
+            }
+
+            UpdateQueuedActionIcon(coord, tile);
+
+            // Selection outline is a duplicate of the wall's own current
+            // visual (see SetSelectedWall) — if this tile is the selected
+            // one and its shape/prefab just changed (needsRebuild above),
+            // the outline would otherwise still be duplicating the old,
+            // now-destroyed mesh. Re-running the same selection keeps it
+            // in sync; harmless/cheap on every other call since
+            // SetSelectedWall no-ops when the coord isn't selected.
+            if (_selectedWallCoord == coord)
+            {
+                SetSelectedWall(coord);
             }
 
             TileChanged?.Invoke(coord);
         }
 
-        /// True if coord is out of bounds (map edges read as sealed rather
-        /// than sprouting spurious end-caps) or holds a Rock tile — the
-        /// input WallAutotiler needs for each of a wall tile's 4 cardinal
-        /// neighbors.
-        private bool IsWallNeighbor(Vector2Int coord)
+        /// Ensures/clears the floating icon for a queued Rock/Floor tile —
+        /// see QueuedIcon's own header for why this replaced flat color
+        /// tinting. Only rebuilds when the icon kind actually changes
+        /// (RefreshVisual fires per dig-damage hit).
+        private void UpdateQueuedActionIcon(Vector2Int coord, TileState tile)
         {
-            return !InBounds(coord) || GetTile(coord).Type == TileType.Rock;
+            QueuedIcon icon;
+            if (tile.Type == TileType.Rock && tile.IsQueuedForDig)
+            {
+                icon = QueuedIcon.Pickaxe;
+            }
+            else if (tile.Type == TileType.Rock && tile.IsQueuedForReinforce)
+            {
+                icon = QueuedIcon.Shield;
+            }
+            else if (tile.Type == TileType.Floor && tile.IsQueuedForBuild)
+            {
+                icon = QueuedIcon.Hammer;
+            }
+            else
+            {
+                icon = QueuedIcon.None;
+            }
+
+            if (_queuedActionIconKind[coord.x, coord.y] == icon)
+            {
+                return;
+            }
+
+            _queuedActionIconKind[coord.x, coord.y] = icon;
+
+            var existing = _queuedActionIcons[coord.x, coord.y];
+            if (existing != null)
+            {
+                Destroy(existing);
+                _queuedActionIcons[coord.x, coord.y] = null;
+            }
+
+            if (icon == QueuedIcon.None)
+            {
+                return;
+            }
+
+            var parent = _visuals[coord.x, coord.y].transform;
+            GameObject iconRoot = icon switch
+            {
+                QueuedIcon.Pickaxe => BuildPickaxeIcon(parent),
+                QueuedIcon.Shield => BuildShieldIcon(parent),
+                QueuedIcon.Hammer => BuildConstructIcon(parent),
+                _ => null
+            };
+            _queuedActionIcons[coord.x, coord.y] = iconRoot;
+        }
+
+        /// A diagonal handle crossed by a shorter head near one end —
+        /// read from roughly above (this project's fixed-ish isometric
+        /// angle), same "flat, top-down-legible" convention
+        /// BuildHolyGroundStar already uses rather than a billboard that'd
+        /// need per-frame facing logic.
+        private GameObject BuildPickaxeIcon(Transform parent)
+        {
+            var root = new GameObject("QueuedIcon_Mine");
+            root.transform.SetParent(parent, false);
+            root.transform.localPosition = new Vector3(0f, QueuedIconFloatHeight, 0f);
+
+            var handle = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            handle.name = "Handle";
+            handle.transform.SetParent(root.transform, false);
+            handle.transform.localRotation = Quaternion.Euler(0f, 45f, 0f);
+            handle.transform.localScale = new Vector3(0.06f, 0.06f, 0.5f);
+            handle.GetComponent<Renderer>().material.color = new Color(0.4f, 0.28f, 0.15f);
+            Destroy(handle.GetComponent<Collider>());
+
+            var head = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            head.name = "Head";
+            head.transform.SetParent(root.transform, false);
+            head.transform.localPosition = new Vector3(0.1f, 0f, 0.1f);
+            head.transform.localRotation = Quaternion.Euler(0f, -45f, 0f);
+            head.transform.localScale = new Vector3(0.05f, 0.05f, 0.32f);
+            head.GetComponent<Renderer>().material.color = new Color(0.55f, 0.55f, 0.58f);
+            Destroy(head.GetComponent<Collider>());
+
+            return root;
+        }
+
+        /// A round disc with a small raised boss in the center — same
+        /// flat, top-down-legible convention as the pickaxe icon above.
+        private GameObject BuildShieldIcon(Transform parent)
+        {
+            var root = new GameObject("QueuedIcon_Reinforce");
+            root.transform.SetParent(parent, false);
+            root.transform.localPosition = new Vector3(0f, QueuedIconFloatHeight, 0f);
+
+            var disc = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+            disc.name = "Disc";
+            disc.transform.SetParent(root.transform, false);
+            disc.transform.localScale = new Vector3(0.32f, 0.03f, 0.32f);
+            disc.GetComponent<Renderer>().material.color = new Color(0.55f, 0.6f, 0.68f);
+            Destroy(disc.GetComponent<Collider>());
+
+            var boss = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            boss.name = "Boss";
+            boss.transform.SetParent(root.transform, false);
+            boss.transform.localPosition = Vector3.up * 0.02f;
+            boss.transform.localScale = Vector3.one * 0.12f;
+            boss.GetComponent<Renderer>().material.color = new Color(0.85f, 0.75f, 0.3f);
+            Destroy(boss.GetComponent<Collider>());
+
+            return root;
+        }
+
+        /// "A hammer on an empty yellow frame" — a hollow rectangle
+        /// standing roughly where the future wall will rise (base at the
+        /// floor surface, not floating high like the Mine/Reinforce
+        /// icons), built from 4 thin bars the same way BuildHolyGroundStar/
+        /// JailManager's fence rails already do, plus a small hammer
+        /// shape sitting in the middle of it.
+        private GameObject BuildConstructIcon(Transform parent)
+        {
+            var root = new GameObject("QueuedIcon_Construct");
+            root.transform.SetParent(parent, false);
+            root.transform.localPosition = new Vector3(0f, FloorSurfaceY + ConstructFrameHeight * 0.5f, 0f);
+
+            BuildFrameBar(root.transform, new Vector3(0f, ConstructFrameHeight * 0.5f, 0f), new Vector3(ConstructFrameWidth, ConstructFrameBarThickness, ConstructFrameBarThickness));
+            BuildFrameBar(root.transform, new Vector3(0f, -ConstructFrameHeight * 0.5f, 0f), new Vector3(ConstructFrameWidth, ConstructFrameBarThickness, ConstructFrameBarThickness));
+            BuildFrameBar(root.transform, new Vector3(-ConstructFrameWidth * 0.5f, 0f, 0f), new Vector3(ConstructFrameBarThickness, ConstructFrameHeight, ConstructFrameBarThickness));
+            BuildFrameBar(root.transform, new Vector3(ConstructFrameWidth * 0.5f, 0f, 0f), new Vector3(ConstructFrameBarThickness, ConstructFrameHeight, ConstructFrameBarThickness));
+
+            var handle = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            handle.name = "HammerHandle";
+            handle.transform.SetParent(root.transform, false);
+            handle.transform.localScale = new Vector3(0.05f, 0.4f, 0.05f);
+            handle.GetComponent<Renderer>().material.color = new Color(0.4f, 0.28f, 0.15f);
+            Destroy(handle.GetComponent<Collider>());
+
+            var head = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            head.name = "HammerHead";
+            head.transform.SetParent(root.transform, false);
+            head.transform.localPosition = Vector3.up * 0.2f;
+            head.transform.localScale = new Vector3(0.22f, 0.1f, 0.1f);
+            head.GetComponent<Renderer>().material.color = new Color(0.5f, 0.5f, 0.52f);
+            Destroy(head.GetComponent<Collider>());
+
+            return root;
+        }
+
+        private static void BuildFrameBar(Transform parent, Vector3 localPosition, Vector3 localScale)
+        {
+            var bar = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            bar.name = "FrameBar";
+            bar.transform.SetParent(parent, false);
+            bar.transform.localPosition = localPosition;
+            bar.transform.localScale = localScale;
+            bar.GetComponent<Renderer>().material.color = Color.yellow;
+            Destroy(bar.GetComponent<Collider>());
+        }
+
+        /// Selects coord's tile for the yellow outline highlight, or
+        /// clears the current selection if coord is null / out of bounds
+        /// / has no visual built yet. Only one tile can be selected at a
+        /// time — selecting a new one replaces whatever was selected
+        /// before. The outline itself is an "inverted hull": a duplicate
+        /// of the tile's own current visual (whatever mesh/cube
+        /// _visualChildren currently holds for it — not Rock-specific,
+        /// despite the name/its original gameplay-only use case, see the
+        /// Level Designer's edit mode), scaled up slightly and rendered
+        /// with a front-face-culled flat yellow material (see
+        /// _selectionOutlineMaterial) so only its silhouette margin shows
+        /// around the real mesh.
+        public void SetSelectedWall(Vector2Int? coord)
+        {
+            if (_selectionOutline != null)
+            {
+                Destroy(_selectionOutline);
+                _selectionOutline = null;
+            }
+
+            _selectedWallCoord = null;
+
+            if (coord == null || !InBounds(coord.Value))
+            {
+                return;
+            }
+
+            var source = _visualChildren[coord.Value.x, coord.Value.y];
+            if (source == null)
+            {
+                return;
+            }
+
+            _selectedWallCoord = coord;
+
+            var outline = Instantiate(source, source.transform.parent, false);
+            outline.name = "SelectionOutline";
+            outline.transform.localPosition = source.transform.localPosition;
+            outline.transform.localRotation = source.transform.localRotation;
+            outline.transform.localScale = source.transform.localScale * SelectionOutlineScale;
+
+            foreach (var renderer in outline.GetComponentsInChildren<Renderer>())
+            {
+                var materials = renderer.sharedMaterials;
+                for (int i = 0; i < materials.Length; i++)
+                {
+                    materials[i] = _selectionOutlineMaterial;
+                }
+
+                renderer.sharedMaterials = materials;
+
+                var collider = renderer.GetComponent<Collider>();
+                if (collider != null)
+                {
+                    Destroy(collider);
+                }
+            }
+
+            _selectionOutline = outline;
+        }
+
+        /// Which dungeon_pack wall prefab (if any) a tile should render as
+        /// — null means fall back to the plain colored cube (only
+        /// possible today if a mesh failed to load; every Rock variant
+        /// has a dedicated mesh now). IsBedrock/IsReinforced take
+        /// priority over WallResourceType since TileState keeps them
+        /// mutually exclusive already (see RequestReinforce/SetBedrock).
+        private GameObject GetWallMeshPrefab(TileState tile)
+        {
+            if (tile.Type != TileType.Rock)
+            {
+                return null;
+            }
+
+            if (tile.IsBedrock)
+            {
+                return _wallMeshBedrock;
+            }
+
+            if (tile.IsReinforced)
+            {
+                return _wallMeshReinforced;
+            }
+
+            switch (tile.WallResourceType)
+            {
+                case WallResourceType.GoldWall:
+                    return _wallMeshGold;
+                case WallResourceType.RegeneratingGoldWall:
+                    return _wallMeshGoldRegen;
+                case WallResourceType.ManaCrystalWall:
+                    return _wallMeshManaCrystal;
+                default:
+                    return _wallMeshStone;
+            }
         }
 
         /// Applies a MaterialPropertyBlock color tint to every renderer
         /// under visual, instead of touching .material (which would
         /// instantiate a per-object material copy) — the same shared
-        /// M_DungeonWalls material is reused across every wall tile.
-        private static void ApplyTint(GameObject visual, Color color)
+        /// M_StoneWall material is reused across every wall tile.
+        /// baseMapOverride optionally swaps which texture a shared
+        /// material's _BaseMap shows for this instance (e.g. picking one
+        /// of the 4 claimed-floor texture variants) — always explicitly
+        /// cleared/set from scratch each call (Clear(), not GetPropertyBlock
+        /// first) so a texture override from a tile's previous state (a
+        /// different WallResourceType, a different floor Ownership, ...)
+        /// can never linger on a renderer that's since switched away from
+        /// needing one.
+        /// Removes any per-instance tint override entirely, so a renderer
+        /// falls back to each of its materials' own baked-in color —
+        /// used for the Reinforced wall's pristine state (see its own
+        /// call site) rather than ApplyTint(..., Color.white), since a
+        /// white property-block override would still multiply-blend with
+        /// (and wash out) M_ReinforcedOrb's own colored/emissive look.
+        private static void ClearTint(GameObject visual)
+        {
+            var renderers = visual.GetComponentsInChildren<Renderer>();
+            foreach (var renderer in renderers)
+            {
+                renderer.SetPropertyBlock(null);
+            }
+        }
+
+        private void ApplyTint(GameObject visual, Color color, Texture2D baseMapOverride = null)
         {
             _sharedPropertyBlock ??= new MaterialPropertyBlock();
             var renderers = visual.GetComponentsInChildren<Renderer>();
             foreach (var renderer in renderers)
             {
-                renderer.GetPropertyBlock(_sharedPropertyBlock);
+                _sharedPropertyBlock.Clear();
                 _sharedPropertyBlock.SetColor(BaseColorId, color);
+                if (baseMapOverride != null)
+                {
+                    _sharedPropertyBlock.SetTexture(BaseMapId, baseMapOverride);
+                }
+
                 renderer.SetPropertyBlock(_sharedPropertyBlock);
-            }
-        }
-
-        /// Same as RefreshVisual(coord), but also refreshes its 4 cardinal
-        /// neighbors — needed at every call site where a tile's Type
-        /// actually flips to/from Rock (dig completing, room carving,
-        /// level-designer repainting, ...), since a Rock neighbor's wall
-        /// shape depends on whether coord itself currently reads as a wall.
-        /// Every other call site (damage, queued flags, reinforced,
-        /// bedrock, resource type — none of which change Type) can keep
-        /// calling plain RefreshVisual, since those never change any
-        /// neighbor's wall shape.
-        private void RefreshVisualAndWallNeighbors(Vector2Int coord)
-        {
-            RefreshVisual(coord);
-            RefreshVisualIfInBounds(coord + Vector2Int.up);
-            RefreshVisualIfInBounds(coord + Vector2Int.right);
-            RefreshVisualIfInBounds(coord + Vector2Int.down);
-            RefreshVisualIfInBounds(coord + Vector2Int.left);
-        }
-
-        private void RefreshVisualIfInBounds(Vector2Int coord)
-        {
-            if (InBounds(coord))
-            {
-                RefreshVisual(coord);
             }
         }
 
@@ -1349,10 +2036,24 @@ namespace KeepersDomain.Grid
         /// pattern is seeded from the tile's own coordinate so it's stable
         /// — this only runs once, when SetWallResourceType assigns the
         /// type, not on every RefreshVisual (which fires every hit and
-        /// would otherwise re-randomize/flicker the nuggets).
+        /// would otherwise re-randomize/flicker the nuggets). Skipped
+        /// entirely once a dedicated dungeon_pack mesh exists for the
+        /// type (see GetWallMeshPrefab) — its texture already bakes in
+        /// gold/crystal clusters, so floating procedural nugget cubes on
+        /// top would just look redundant.
         private void RebuildWallDecoration(Vector2Int coord, WallResourceType wallResourceType)
         {
             ClearWallDecoration(coord);
+
+            if (wallResourceType == WallResourceType.GoldWall && _wallMeshGold != null)
+            {
+                return;
+            }
+
+            if (wallResourceType == WallResourceType.RegeneratingGoldWall && _wallMeshGoldRegen != null)
+            {
+                return;
+            }
 
             if (wallResourceType != WallResourceType.GoldWall && wallResourceType != WallResourceType.RegeneratingGoldWall)
             {

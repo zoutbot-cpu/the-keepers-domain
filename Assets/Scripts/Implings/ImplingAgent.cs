@@ -27,15 +27,15 @@ namespace KeepersDomain.Implings
     }
 
     /// Where an impling carrying cargo is headed to unload it — Treasury for
-    /// gold, the Chaos Core for mana crystals, a BaconBeacon storage tile
+    /// gold, the Throne Room for mana crystals, a Tavern storage tile
     /// for hauled-in slimes. Purely internal bookkeeping for
     /// TickDepositing; nothing outside ImplingAgent needs to know which one
     /// is in progress.
     internal enum DepositKind
     {
         Treasury,
-        ChaosCore,
-        BaconBeacon
+        ThroneRoom,
+        Tavern
     }
 
     /// Walks a real A*-planned route (AStarPathfinder) instead of a straight
@@ -141,9 +141,9 @@ namespace KeepersDomain.Implings
         private BuilderJobBoard _jobBoard;
         private DungeonGrid _grid;
         private TreasuryManager _treasuryManager;
-        private ChaosCore _chaosCore;
+        private ThroneRoom _throneRoom;
         private SlimeHatcheryManager _slimeHatchery;
-        private BaconBeaconManager _baconBeacon;
+        private TavernManager _tavern;
         private Vector3 _lairPosition;
         private int _manaReserved;
         private readonly ImplingInventory _inventory = new ImplingInventory();
@@ -185,16 +185,16 @@ namespace KeepersDomain.Implings
             _creature.Skills.Set(CreatureSkillSlots.BasicAttackSlot, "Mine");
         }
 
-        public void Initialize(BuilderJobBoard jobBoard, DungeonGrid grid, Vector3 lairPosition, TreasuryManager treasuryManager, ChaosCore chaosCore, SlimeHatcheryManager slimeHatchery, BaconBeaconManager baconBeacon, int manaReserved)
+        public void Initialize(BuilderJobBoard jobBoard, DungeonGrid grid, Vector3 lairPosition, TreasuryManager treasuryManager, ThroneRoom throneRoom, SlimeHatcheryManager slimeHatchery, TavernManager tavern, int manaReserved)
         {
             _jobBoard = jobBoard;
             _grid = grid;
             _lairPosition = lairPosition;
             _treasuryManager = treasuryManager;
-            _chaosCore = chaosCore;
+            _throneRoom = throneRoom;
             _slimeHatchery = slimeHatchery;
-            _baconBeacon = baconBeacon;
-            // The Chaos Core reservation was already taken by ImplingSpawner
+            _tavern = tavern;
+            // The Throne Room reservation was already taken by ImplingSpawner
             // (before this agent even existed) — just remember how much to
             // hand back in OnDestroy.
             _manaReserved = manaReserved;
@@ -352,7 +352,7 @@ namespace KeepersDomain.Implings
             }
 
             // Truly nothing else to do — opportunistically haul a bred
-            // slime from a Hatchery out to a Beacon rather than just
+            // slime from a Hatchery out to a Tavern rather than just
             // idling in the Lair. Lowest priority of all: construction
             // jobs and banking cargo already in hand both come first.
             if (!_inventory.HasCargo && TryFindHaulTask(out var hatcheryCoord))
@@ -372,7 +372,7 @@ namespace KeepersDomain.Implings
         }
 
         /// Gold goes to the nearest Treasury tile with room; mana crystals
-        /// go to the (single, capacity-less) Chaos Core. Gold is checked
+        /// go to the (single, capacity-less) Throne Room. Gold is checked
         /// first — an impling carrying both only needs one deposit trip's
         /// worth of "what's my target" resolved at a time, since finishing
         /// a Treasury deposit sends it back through TrySeekJob, which will
@@ -386,17 +386,17 @@ namespace KeepersDomain.Implings
                 return true;
             }
 
-            if (_inventory.ManaCrystals > 0 && _chaosCore != null)
+            if (_inventory.ManaCrystals > 0 && _throneRoom != null)
             {
-                coord = GetChaosCoreDepositCoord();
-                kind = DepositKind.ChaosCore;
+                coord = GetThroneRoomDepositCoord();
+                kind = DepositKind.ThroneRoom;
                 return true;
             }
 
-            if (_inventory.Slimes > 0 && _baconBeacon != null && _baconBeacon.TryFindNearestTileWithRoom(_grid.WorldToGrid(transform.position), out var beaconCoord))
+            if (_inventory.Slimes > 0 && _tavern != null && _tavern.TryFindNearestTileWithRoom(_grid.WorldToGrid(transform.position), out var tavernCoord))
             {
-                coord = beaconCoord;
-                kind = DepositKind.BaconBeacon;
+                coord = tavernCoord;
+                kind = DepositKind.Tavern;
                 return true;
             }
 
@@ -405,21 +405,21 @@ namespace KeepersDomain.Implings
             return false;
         }
 
-        /// The Chaos Core's center tile is blocked to pathfinding (it's the
+        /// The Throne Room's center tile is blocked to pathfinding (it's the
         /// raised orb pedestal now, not walkable Floor — see
-        /// DungeonGrid.IsWalkable and ChaosCore.Initialize's SetBlocked
+        /// DungeonGrid.IsWalkable and ThroneRoom.Initialize's SetBlocked
         /// call), so depositing targets the nearest walkable tile on the
-        /// Core's 3x3 platform instead of the center itself.
-        private Vector2Int GetChaosCoreDepositCoord()
+        /// Throne Room's 3x3 platform instead of the center itself.
+        private Vector2Int GetThroneRoomDepositCoord()
         {
-            var coreCoord = _chaosCore.Coord;
+            var throneCoord = _throneRoom.Coord;
             var implingCoord = _grid.WorldToGrid(transform.position);
 
-            var best = coreCoord + GridDirections.Cardinal[0];
+            var best = throneCoord + GridDirections.Cardinal[0];
             var bestDist = int.MaxValue;
             foreach (var offset in GridDirections.Cardinal)
             {
-                var candidate = coreCoord + offset;
+                var candidate = throneCoord + offset;
                 var dist = Mathf.Abs(candidate.x - implingCoord.x) + Mathf.Abs(candidate.y - implingCoord.y);
                 if (dist < bestDist)
                 {
@@ -434,24 +434,24 @@ namespace KeepersDomain.Implings
         /// A ready-to-collect Hatchery is only worth walking to if there's
         /// also somewhere to unload it afterward — otherwise the impling
         /// would just wind up carrying an un-deliverable slime forever
-        /// (TryFindDepositTarget's Beacon check would keep failing).
+        /// (TryFindDepositTarget's Tavern check would keep failing).
         private bool TryFindHaulTask(out Vector2Int hatcheryCoord)
         {
             hatcheryCoord = default;
-            if (_slimeHatchery == null || _baconBeacon == null)
+            if (_slimeHatchery == null || _tavern == null)
             {
                 return false;
             }
 
             var currentCoord = _grid.WorldToGrid(transform.position);
             return _slimeHatchery.TryFindReadyHatchery(currentCoord, out hatcheryCoord)
-                && _baconBeacon.TryFindNearestTileWithRoom(currentCoord, out _);
+                && _tavern.TryFindNearestTileWithRoom(currentCoord, out _);
         }
 
         private void GoToPickupSlime(Vector2Int hatcheryCoord)
         {
             // The coop tile is itself walkable Floor, same as a Treasury/
-            // Chaos Core deposit target — no adjacent-approach step needed.
+            // Throne Room deposit target — no adjacent-approach step needed.
             if (!PlanPathTo(hatcheryCoord, _grid.GridToWorld(hatcheryCoord)))
             {
                 return;
@@ -483,13 +483,13 @@ namespace KeepersDomain.Implings
 
         private void GoToDeposit(Vector2Int coord, DepositKind kind)
         {
-            // Treasury/BaconBeacon targets are themselves walkable Floor
-            // tiles, and the Chaos Core target is already resolved to an
-            // adjacent walkable tile by GetChaosCoreDepositCoord (its
+            // Treasury/Tavern targets are themselves walkable Floor
+            // tiles, and the Throne Room target is already resolved to an
+            // adjacent walkable tile by GetThroneRoomDepositCoord (its
             // actual center is blocked — see that method) — so in every
             // case the impling paths directly onto coord. Treasury targets
             // are reachability-checked by TreasuryManager already; the
-            // Chaos Core isn't, and neither is immune to the world changing
+            // Throne Room isn't, and neither is immune to the world changing
             // after the target was picked (e.g. a wall built across the
             // route) — if planning fails here, just don't move; TrySeekJob
             // retries next frame.
@@ -538,7 +538,7 @@ namespace KeepersDomain.Implings
                 _jobBoard.SetWorkerAvailable(this, false);
             }
 
-            _chaosCore?.ReleaseMana(_manaReserved);
+            _throneRoom?.ReleaseMana(_manaReserved);
         }
 
         /// approachCoord is the walkable tile BuilderJobBoard verified is
@@ -569,8 +569,8 @@ namespace KeepersDomain.Implings
         /// straight line through whatever's blocking the way. Dig/reinforce/
         /// build/claim job targets are pre-verified reachable by
         /// BuilderJobBoard before being assigned, so this should always
-        /// succeed for those; the Lair and deposit targets (Treasury, Chaos
-        /// Core) have no such guarantee — the world can change (e.g. a wall
+        /// succeed for those; the Lair and deposit targets (Treasury, Throne
+        /// Room) have no such guarantee — the world can change (e.g. a wall
         /// built across the only route home) between an impling picking a
         /// destination and getting there.
         private bool PlanPathTo(Vector2Int goalCoord, Vector3 finalWorldPos)
@@ -920,12 +920,12 @@ namespace KeepersDomain.Implings
                     var deposited = _treasuryManager.Deposit(_depositCoord, _inventory.Gold);
                     _inventory.RemoveGold(deposited);
                     break;
-                case DepositKind.ChaosCore:
-                    var used = _chaosCore.DepositManaCrystals(_inventory.ManaCrystals);
+                case DepositKind.ThroneRoom:
+                    var used = _throneRoom.DepositManaCrystals(_inventory.ManaCrystals);
                     _inventory.RemoveManaCrystals(used);
                     break;
-                case DepositKind.BaconBeacon:
-                    var converted = _baconBeacon.ConvertSlimes(_depositCoord, _inventory.Slimes);
+                case DepositKind.Tavern:
+                    var converted = _tavern.ConvertSlimes(_depositCoord, _inventory.Slimes);
                     _inventory.RemoveSlimes(converted);
                     break;
             }

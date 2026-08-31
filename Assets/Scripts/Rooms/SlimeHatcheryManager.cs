@@ -12,9 +12,9 @@ namespace KeepersDomain.Rooms
     /// structure whose position depends on the footprint's shape — see
     /// GetStructureCoord. Bred slimes are real wandering SlimeAgent
     /// instances, not an abstract count — implings haul them out to a
-    /// BaconBeacon (see ImplingAgent's hauling states) rather than anything
+    /// Tavern (see ImplingAgent's hauling states) rather than anything
     /// being consumed here directly.
-    public class SlimeHatcheryManager : MonoBehaviour
+    public class SlimeHatcheryManager : MonoBehaviour, IRestorableRoomManager
     {
         private const int MinFootprintSize = 3;
 
@@ -66,6 +66,14 @@ namespace KeepersDomain.Rooms
 
         private DungeonGrid _grid;
         private TreasuryManager _treasuryManager;
+
+        // Off in the Level Designer (see Initialize's simulateBreeding
+        // param) so placing/loading a Hatchery there never starts spawning
+        // real SlimeAgents while the map is just being edited — breeding
+        // is gameplay simulation, not something a level's saved state
+        // should carry.
+        private bool _simulateBreeding = true;
+
         private int _nextRoomId;
         private readonly Dictionary<string, List<Vector2Int>> _roomTiles = new Dictionary<string, List<Vector2Int>>();
         private readonly Dictionary<string, Vector2Int> _structureCoords = new Dictionary<string, Vector2Int>();
@@ -77,10 +85,11 @@ namespace KeepersDomain.Rooms
         private readonly Dictionary<string, GameObject> _fenceVisuals = new Dictionary<string, GameObject>();
         private readonly List<GameObject> _previewMarkers = new List<GameObject>();
 
-        public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager)
+        public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager, bool simulateBreeding = true)
         {
             _grid = grid;
             _treasuryManager = treasuryManager;
+            _simulateBreeding = simulateBreeding;
             lairManager.RoomSold += OnRoomSold;
         }
 
@@ -102,7 +111,7 @@ namespace KeepersDomain.Rooms
 
         private void Update()
         {
-            if (_roomTiles.Count == 0)
+            if (!_simulateBreeding || _roomTiles.Count == 0)
             {
                 return;
             }
@@ -167,6 +176,14 @@ namespace KeepersDomain.Rooms
         public bool PlaceStartingHatchery(Vector2Int startCoord, Vector2Int endCoord)
         {
             return TryPlaceHatcheryInternal(startCoord, endCoord, chargeGold: false);
+        }
+
+        /// IRestorableRoomManager — see its own header. ownerId is unused
+        /// here; the footprint is expected to already be Claimed Floor
+        /// (owned correctly) by the time this runs.
+        public bool RestoreRoom(Vector2Int start, Vector2Int end, int ownerId)
+        {
+            return PlaceStartingHatchery(start, end);
         }
 
         private bool TryPlaceHatcheryInternal(Vector2Int startCoord, Vector2Int endCoord, bool chargeGold)

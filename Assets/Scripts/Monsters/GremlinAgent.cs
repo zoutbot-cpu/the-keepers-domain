@@ -134,7 +134,7 @@ namespace KeepersDomain.Monsters
 
         private DungeonGrid _grid;
         private LairManager _lairManager;
-        private BaconBeaconManager _baconBeaconManager;
+        private TavernManager _tavernManager;
         private TrainingRoomManager _trainingRoomManager;
         private TreasuryManager _treasuryManager;
         private Portal _portal;
@@ -176,11 +176,11 @@ namespace KeepersDomain.Monsters
             _creature = new Creature(_baseStats, _growthPerLevel, _expPerLevelStep);
         }
 
-        public void Initialize(DungeonGrid grid, LairManager lairManager, BaconBeaconManager baconBeaconManager, TrainingRoomManager trainingRoomManager, TreasuryManager treasuryManager, Portal portal)
+        public void Initialize(DungeonGrid grid, LairManager lairManager, TavernManager tavernManager, TrainingRoomManager trainingRoomManager, TreasuryManager treasuryManager, Portal portal)
         {
             _grid = grid;
             _lairManager = lairManager;
-            _baconBeaconManager = baconBeaconManager;
+            _tavernManager = tavernManager;
             _trainingRoomManager = trainingRoomManager;
             _treasuryManager = treasuryManager;
             _portal = portal;
@@ -207,7 +207,7 @@ namespace KeepersDomain.Monsters
 
         /// Payday — draws this Gremlin's wage (see Pay.WageFor) straight
         /// out of the Treasury, no walking/task involved (unlike eating,
-        /// which needs a Bacon Beacon trip). A successful payment now also
+        /// which needs a Tavern trip). A successful payment now also
         /// bumps Happiness (Happiness.ApplyPaidBonus); going unpaid marks it
         /// unhappy (Pay.IsUnhappy) and dents Happiness instead
         /// (Happiness.ApplyUnpaidPenalty).
@@ -673,7 +673,7 @@ namespace KeepersDomain.Monsters
 
         private bool TryBeginPursueFood()
         {
-            if (_baconBeaconManager == null || !_baconBeaconManager.TryFindNearestTileWithBacon(_grid.WorldToGrid(transform.position), out var coord) || !PlanPathTo(coord, _grid.GridToWorld(coord)))
+            if (_tavernManager == null || !_tavernManager.TryFindNearestTileWithBacon(_grid.WorldToGrid(transform.position), out var coord) || !PlanPathTo(coord, _grid.GridToWorld(coord)))
             {
                 return false;
             }
@@ -685,7 +685,7 @@ namespace KeepersDomain.Monsters
 
         private void ArriveAtFood()
         {
-            if (_baconBeaconManager.TryEatBacon(_foodTargetCoord, BaconBeaconManager.MealBaconAmount))
+            if (_tavernManager.TryEatBacon(_foodTargetCoord, TavernManager.MealBaconAmount))
             {
                 _hunger.Eat();
             }

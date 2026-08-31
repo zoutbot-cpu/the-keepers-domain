@@ -1,5 +1,6 @@
 using System;
 using UnityEngine;
+using KeepersDomain.LevelDesigner;
 
 namespace KeepersDomain.UI
 {
@@ -42,18 +43,31 @@ namespace KeepersDomain.UI
         private const float ButtonWidth = 160f;
         private const float ButtonHeight = 44f;
 
+        private const float LoadPanelWidth = 260f;
+        private const float LoadPanelSpacing = 20f;
+        private const float LoadPanelHeight = 300f;
+
         private Action _onBack;
         private Action<LevelDesignerProperties> _onCreate;
+        private Action<string, LevelData> _onLoad;
 
         private bool _multiplayer;
         private int _playerCount;
         private int _mapWidth;
         private int _mapHeight;
+        private Vector2 _loadScrollPos;
 
-        public void Initialize(Action onBack, Action<LevelDesignerProperties> onCreate)
+        /// onLoad lets this screen skip "configure a new map" entirely and
+        /// jump straight into editing a previously saved one instead — see
+        /// the "Load Existing Level" list drawn alongside the properties
+        /// form. Same (name, LevelData) shape LevelDesignerMenuBar's own
+        /// Save/Load tab already uses (GameBootstrap.
+        /// LoadLevelDesignerWorld), so both entry points share one loader.
+        public void Initialize(Action onBack, Action<LevelDesignerProperties> onCreate, Action<string, LevelData> onLoad)
         {
             _onBack = onBack;
             _onCreate = onCreate;
+            _onLoad = onLoad;
 
             _multiplayer = false;
             _playerCount = SingleplayerStandardPlayers;
@@ -122,6 +136,51 @@ namespace KeepersDomain.UI
                 });
                 Destroy(gameObject);
             }
+
+            DrawLoadPanel(panelX + PanelWidth + LoadPanelSpacing, Screen.height * 0.2f);
+        }
+
+        /// Lists every saved level (see LevelFileIO.ListLevelNames) next to
+        /// the new-map form — clicking one skips property setup entirely
+        /// and loads it straight into the editor via _onLoad, same as
+        /// LevelDesignerMenuBar's own Save/Load tab.
+        private void DrawLoadPanel(float x, float y)
+        {
+            var titleStyle = new GUIStyle(GUI.skin.label) { fontSize = 18, fontStyle = FontStyle.Bold };
+            GUI.Label(new Rect(x, y, LoadPanelWidth, 26f), "Load Existing Level", titleStyle);
+            y += 30f;
+
+            var listRect = new Rect(x, y, LoadPanelWidth, LoadPanelHeight);
+            var levelNames = LevelFileIO.ListLevelNames();
+            var contentHeight = Mathf.Max(LoadPanelHeight, levelNames.Length * 32f);
+            var contentRect = new Rect(0f, 0f, LoadPanelWidth - 20f, contentHeight);
+
+            GUI.Box(listRect, GUIContent.none);
+            _loadScrollPos = GUI.BeginScrollView(listRect, _loadScrollPos, contentRect);
+
+            if (levelNames.Length == 0)
+            {
+                GUI.Label(new Rect(4f, 4f, contentRect.width - 8f, 24f), "No saved levels yet.");
+            }
+            else
+            {
+                var rowY = 4f;
+                foreach (var levelName in levelNames)
+                {
+                    if (GUI.Button(new Rect(4f, rowY, contentRect.width - 8f, 26f), levelName))
+                    {
+                        var data = LevelFileIO.Load(levelName);
+                        if (data != null)
+                        {
+                            _onLoad?.Invoke(levelName, data);
+                            Destroy(gameObject);
+                        }
+                    }
+                    rowY += 32f;
+                }
+            }
+
+            GUI.EndScrollView();
         }
 
         private void GetPlayerCountRange(out int min, out int max, out int standard)

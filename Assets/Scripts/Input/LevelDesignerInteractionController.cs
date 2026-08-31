@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using KeepersDomain.Grid;
 using KeepersDomain.LevelDesigner;
+using KeepersDomain.Rooms;
 using KeepersDomain.UI;
 
 namespace KeepersDomain.Input
@@ -39,11 +40,24 @@ namespace KeepersDomain.Input
         Lair,
         Treasury,
         SlimeHatchery,
-        BaconBeacon,
+        Tavern,
         TrainingRoom,
         Library,
         Jail,
         ConversionClass
+    }
+
+    /// What Edit mode's last tap actually selected — read by
+    /// LevelDesignerMenuBar to decide what to show/label in the Edit
+    /// panel, and by LevelDesignerInteractionController.ReassignSelectedOwner
+    /// to know which underlying data to mutate.
+    public enum EditSelectionKind
+    {
+        None,
+        Tile,
+        Room,
+        Structure,
+        Creature
     }
 
     /// Turns raw pointer input into level-authoring actions — the Level
@@ -67,13 +81,26 @@ namespace KeepersDomain.Input
         private Camera _camera;
         private DungeonGrid _grid;
         private LevelDesignerSession _session;
+        private Dictionary<RoomDesignTool, IRestorableRoomManager> _roomManagers;
 
         private MapDesignTool _mapDesignTool = MapDesignTool.None;
         private RoomDesignTool _roomTool = RoomDesignTool.None;
         private StructureKind? _structureTool;
         private EditorCreatureKind? _creatureTool;
+        private bool _editMode;
         private int _selectedOwnerId = -1;
         private int _nextRoomId;
+
+        // Edit mode's current tap selection — see EditSelectionKind's own
+        // header. Only the fields relevant to _selectionKind are
+        // meaningful at any given time; the rest just sit at their
+        // cleared/default value.
+        private EditSelectionKind _selectionKind = EditSelectionKind.None;
+        private Vector2Int _selectedCoord;
+        private string _selectedRoomId;
+        private int _selectedStructureIndex = -1;
+        private int _selectedCreatureIndex = -1;
+        private int _selectedCurrentOwnerId = -1;
 
         private bool _mirrorX;
         private bool _mirrorY;
@@ -91,8 +118,22 @@ namespace KeepersDomain.Input
         public RoomDesignTool RoomTool => _roomTool;
         public StructureKind? StructureTool => _structureTool;
         public EditorCreatureKind? CreatureTool => _creatureTool;
+        public bool EditMode => _editMode;
         public bool MirrorX => _mirrorX;
         public bool MirrorY => _mirrorY;
+
+        /// What Edit mode's last tap selected, if anything — read by
+        /// LevelDesignerMenuBar to draw the Edit panel's "currently
+        /// selected: ..." readout and owner-reassign control.
+        public EditSelectionKind SelectionKind => _selectionKind;
+        public Vector2Int? SelectedCoord => _selectionKind == EditSelectionKind.None ? (Vector2Int?)null : _selectedCoord;
+        public int SelectedCurrentOwnerId => _selectedCurrentOwnerId;
+
+        /// The grid coordinate currently under the pointer, if any — read
+        /// by LevelDesignerMenuBar to draw a small (x, y) readout next to
+        /// the cursor for troubleshooting. Updated every frame regardless
+        /// of which tool (if any) is active.
+        public Vector2Int? HoveredCoord { get; private set; }
 
         /// While a room placement is being dragged out, the rectangle so
         /// far — read by LevelDesignerMenuBar to show the player what
@@ -102,11 +143,12 @@ namespace KeepersDomain.Input
         public Vector2Int RoomDragStartCoord => _dragStartCoord;
         public Vector2Int RoomDragCurrentCoord => _roomDragCurrentCoord;
 
-        public void Initialize(Camera camera, DungeonGrid grid, LevelDesignerSession session)
+        public void Initialize(Camera camera, DungeonGrid grid, LevelDesignerSession session, Dictionary<RoomDesignTool, IRestorableRoomManager> roomManagers)
         {
             _camera = camera;
             _grid = grid;
             _session = session;
+            _roomManagers = roomManagers;
         }
 
         public void SetMapDesignTool(MapDesignTool tool)
@@ -115,6 +157,7 @@ namespace KeepersDomain.Input
             _roomTool = RoomDesignTool.None;
             _structureTool = null;
             _creatureTool = null;
+            SetEditMode(false);
         }
 
         public void SetRoomTool(RoomDesignTool tool)
@@ -123,6 +166,7 @@ namespace KeepersDomain.Input
             _mapDesignTool = MapDesignTool.None;
             _structureTool = null;
             _creatureTool = null;
+            SetEditMode(false);
         }
 
         public void SetStructureTool(StructureKind? kind)
@@ -131,6 +175,7 @@ namespace KeepersDomain.Input
             _mapDesignTool = MapDesignTool.None;
             _roomTool = RoomDesignTool.None;
             _creatureTool = null;
+            SetEditMode(false);
         }
 
         public void SetCreatureTool(EditorCreatureKind? kind)
@@ -139,6 +184,29 @@ namespace KeepersDomain.Input
             _mapDesignTool = MapDesignTool.None;
             _roomTool = RoomDesignTool.None;
             _structureTool = null;
+            SetEditMode(false);
+        }
+
+        /// A 5th tool category, mutually exclusive with the other four
+        /// same as they already are with each other — lets the author tap
+        /// an already-placed tile/wall/room/structure/creature and
+        /// reassign which player it belongs to (see SelectAt/
+        /// ReassignSelectedOwner), instead of only ever painting/placing
+        /// new things.
+        public void SetEditMode(bool enabled)
+        {
+            _editMode = enabled;
+            if (enabled)
+            {
+                _mapDesignTool = MapDesignTool.None;
+                _roomTool = RoomDesignTool.None;
+                _structureTool = null;
+                _creatureTool = null;
+            }
+            else
+            {
+                ClearSelection();
+            }
         }
 
         public void SetSelectedOwner(int ownerId)
@@ -280,8 +348,11 @@ namespace KeepersDomain.Input
         {
             if (_camera == null || _grid == null || LevelDesignerMenuBar.PointerOverPanel)
             {
+                HoveredCoord = null;
                 return;
             }
+
+            HoveredCoord = TryGetCoordUnderScreenPos(PointerInput.PrimaryPosition, out var hoveredCoord) ? hoveredCoord : (Vector2Int?)null;
 
             if (PointerInput.PrimaryDown)
             {
@@ -323,6 +394,18 @@ namespace KeepersDomain.Input
             }
 
             _dragStartCoord = coord;
+
+            if (_editMode)
+            {
+                // Tap-to-select, not a drag — SelectAt is single-tap
+                // semantics same as Structure/Creature placement below,
+                // so this returns immediately rather than tracking a
+                // gesture. No mirroring: reassigning a mirrored copy too
+                // would silently reassign an unrelated, possibly-
+                // differently-owned tile the author didn't tap.
+                SelectAt(coord);
+                return;
+            }
 
             if (_roomTool != RoomDesignTool.None)
             {
@@ -407,18 +490,59 @@ namespace KeepersDomain.Input
             }
         }
 
+        /// Places one room per mirrored copy of the dragged rectangle (see
+        /// GetMirroredRects) through the real room manager for _roomTool
+        /// (see IRestorableRoomManager) so it gets its actual decoration —
+        /// carpet, nest, bookcases, dummies, coop, shrine, bench, pit/
+        /// fence — instead of a bare placeholder-colored cube. A room
+        /// needs an owner in this game's model (only Structures — Core/
+        /// Portal Room — can be ownerless), the same requirement
+        /// DungeonGrid.TryAssignRoom already enforces (Ownership must be
+        /// Claimed) for every real room manager this now routes through —
+        /// so this no-ops with no owner selected rather than silently
+        /// placing an unowned, undecorated room.
         private void PlaceRoomFootprint(Vector2Int start, Vector2Int end)
         {
-            // Each mirrored copy of the dragged rectangle becomes its own
-            // room (own roomId) — see GetMirroredRects.
+            if (_selectedOwnerId < 0)
+            {
+                return;
+            }
+
+            var manager = _roomManagers != null && _roomManagers.TryGetValue(_roomTool, out var found) ? found : null;
+
             foreach (var rect in GetMirroredRects(start, end))
             {
-                var roomId = $"{_roomTool}_{_nextRoomId++}";
                 var minX = Mathf.Min(rect.start.x, rect.end.x);
                 var maxX = Mathf.Max(rect.start.x, rect.end.x);
                 var minY = Mathf.Min(rect.start.y, rect.end.y);
                 var maxY = Mathf.Max(rect.start.y, rect.end.y);
+                var minCoord = new Vector2Int(minX, minY);
+                var maxCoord = new Vector2Int(maxX, maxY);
 
+                // Claim the footprint first — the real room managers
+                // require Claimed Floor (see DungeonGrid.TryAssignRoom),
+                // same as LevelDesignerSession.PlaceStructure already does
+                // for Core/Portal Room.
+                for (int x = minX; x <= maxX; x++)
+                {
+                    for (int y = minY; y <= maxY; y++)
+                    {
+                        _grid.EditorPaintFloor(new Vector2Int(x, y), claimed: true, ownerId: _selectedOwnerId);
+                    }
+                }
+
+                if (manager != null && manager.RestoreRoom(minCoord, maxCoord, _selectedOwnerId))
+                {
+                    continue;
+                }
+
+                // Fallback — no manager wired for this tool (shouldn't
+                // happen for any real RoomDesignTool value), or
+                // RestoreRoom rejected the footprint (e.g. smaller than a
+                // hard-minimum room type's own size floor) — same bare
+                // placeholder tagging every room used before real
+                // managers were wired in here.
+                var roomId = $"{_roomTool}_{_nextRoomId++}";
                 for (int x = minX; x <= maxX; x++)
                 {
                     for (int y = minY; y <= maxY; y++)
@@ -426,6 +550,107 @@ namespace KeepersDomain.Input
                         _grid.EditorPlaceRoomTile(new Vector2Int(x, y), roomId);
                     }
                 }
+            }
+        }
+
+        /// Edit mode's tap handler — identifies whatever's at coord
+        /// (checking creatures/structures first, since those sit on top
+        /// of a tile, then falling back to the tile itself) and records
+        /// it as the current selection for LevelDesignerMenuBar's Edit
+        /// panel to show and ReassignSelectedOwner to act on. Clears the
+        /// selection instead if coord holds nothing reassignable (plain
+        /// Rock, Unclaimed floor, terrain, ...).
+        private void SelectAt(Vector2Int coord)
+        {
+            if (_session.TryFindCreatureAt(coord, out var creatureIndex))
+            {
+                _selectionKind = EditSelectionKind.Creature;
+                _selectedCoord = coord;
+                _selectedCreatureIndex = creatureIndex;
+                _selectedCurrentOwnerId = _session.Creatures[creatureIndex].OwnerId;
+                _grid.SetSelectedWall(null);
+                return;
+            }
+
+            if (_session.TryFindStructureAt(coord, out var structureIndex))
+            {
+                _selectionKind = EditSelectionKind.Structure;
+                _selectedCoord = coord;
+                _selectedStructureIndex = structureIndex;
+                _selectedCurrentOwnerId = _session.Structures[structureIndex].OwnerId;
+                _grid.SetSelectedWall(null);
+                return;
+            }
+
+            if (!_grid.InBounds(coord))
+            {
+                ClearSelection();
+                return;
+            }
+
+            var tile = _grid.GetTile(coord);
+            if (tile.HasRoom)
+            {
+                _selectionKind = EditSelectionKind.Room;
+                _selectedCoord = coord;
+                _selectedRoomId = tile.RoomId;
+                _selectedCurrentOwnerId = tile.OwnerId;
+                _grid.SetSelectedWall(coord);
+                return;
+            }
+
+            var isReassignableTile = (tile.Type == TileType.Floor && tile.Ownership == TileOwnership.Claimed) || tile.IsReinforced;
+            if (!isReassignableTile)
+            {
+                ClearSelection();
+                return;
+            }
+
+            _selectionKind = EditSelectionKind.Tile;
+            _selectedCoord = coord;
+            _selectedCurrentOwnerId = tile.OwnerId;
+            _grid.SetSelectedWall(coord);
+        }
+
+        private void ClearSelection()
+        {
+            _selectionKind = EditSelectionKind.None;
+            _selectedRoomId = null;
+            _selectedStructureIndex = -1;
+            _selectedCreatureIndex = -1;
+            _selectedCurrentOwnerId = -1;
+            if (_grid != null)
+            {
+                _grid.SetSelectedWall(null);
+            }
+        }
+
+        /// Applies ownerId to whatever Edit mode currently has selected
+        /// (see SelectAt) and updates the readout to match — a no-op if
+        /// nothing is selected. Room reassigns every tile sharing that
+        /// RoomId at once (see DungeonGrid.EditorReassignRoomOwner), not
+        /// just the one tile that happened to be tapped, since a room has
+        /// one owner conceptually.
+        public void ReassignSelectedOwner(int ownerId)
+        {
+            switch (_selectionKind)
+            {
+                case EditSelectionKind.Tile:
+                    _grid.EditorReassignOwner(_selectedCoord, ownerId);
+                    _selectedCurrentOwnerId = ownerId;
+                    break;
+                case EditSelectionKind.Room:
+                    _grid.EditorReassignRoomOwner(_selectedRoomId, ownerId);
+                    _selectedCurrentOwnerId = ownerId;
+                    break;
+                case EditSelectionKind.Structure:
+                    _session.SetStructureOwner(_selectedStructureIndex, ownerId);
+                    _selectedCurrentOwnerId = ownerId;
+                    break;
+                case EditSelectionKind.Creature:
+                    _session.SetCreatureOwner(_selectedCreatureIndex, ownerId);
+                    _selectedCurrentOwnerId = ownerId;
+                    break;
             }
         }
 
@@ -449,7 +674,7 @@ namespace KeepersDomain.Input
                     _grid.EditorPaintWall(coord, EditorWallVariant.Plain);
                     break;
                 case MapDesignTool.ReinforcedWall:
-                    _grid.EditorPaintWall(coord, EditorWallVariant.Reinforced);
+                    _grid.EditorPaintWall(coord, EditorWallVariant.Reinforced, _selectedOwnerId);
                     break;
                 case MapDesignTool.GoldWall:
                     _grid.EditorPaintWall(coord, EditorWallVariant.GoldWall);

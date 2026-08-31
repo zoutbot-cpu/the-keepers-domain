@@ -64,7 +64,7 @@ namespace KeepersDomain.Rooms
     ///   "block" look the wall originally carried now lives on the ring's
     ///   own floor instead (see BuildGrateFloorVisual) — the fence is the
     ///   pit's one real decorated rim marker.
-    public class JailManager : MonoBehaviour
+    public class JailManager : MonoBehaviour, IRestorableRoomManager
     {
         /// Gold cost per tile of a placed Jail — no design-brief value
         /// exists yet, so this matches Training Room/Library's own
@@ -232,6 +232,11 @@ namespace KeepersDomain.Rooms
         private readonly Dictionary<Vector2Int, JailedPrisoner> _prisoners = new Dictionary<Vector2Int, JailedPrisoner>();
         private readonly Dictionary<Vector2Int, GameObject> _prisonerVisuals = new Dictionary<Vector2Int, GameObject>();
 
+        /// jobBoard may be null — the Level Designer wires Jail with no
+        /// BuilderJobBoard at all (it has no dig-job queue and shouldn't
+        /// run one just to host this room), so the one place that uses it
+        /// (auto-dig-and-claim on placement, see TryPlaceJailInternal)
+        /// guards with a null-conditional instead of assuming it exists.
         public void Initialize(DungeonGrid grid, BuilderJobBoard jobBoard, LairManager lairManager, TreasuryManager treasuryManager)
         {
             _grid = grid;
@@ -423,6 +428,14 @@ namespace KeepersDomain.Rooms
             return TryPlaceJailInternal(startCoord, endCoord, chargeGold: false);
         }
 
+        /// IRestorableRoomManager — see its own header. ownerId is unused
+        /// here; the footprint is expected to already be Claimed Floor
+        /// (owned correctly) by the time this runs.
+        public bool RestoreRoom(Vector2Int start, Vector2Int end, int ownerId)
+        {
+            return PlaceStartingJail(start, end);
+        }
+
         private bool TryPlaceJailInternal(Vector2Int startCoord, Vector2Int endCoord, bool chargeGold)
         {
             var footprint = GetFootprint(startCoord, endCoord, out var newWidth, out var newHeight, out var newOrigin);
@@ -475,7 +488,7 @@ namespace KeepersDomain.Rooms
                 if (_grid.GetTile(coord).Type == TileType.Rock)
                 {
                     _grid.CompleteDig(coord);
-                    _jobBoard.ApplyClaim(coord);
+                    _jobBoard?.ApplyClaim(coord);
                 }
 
                 _grid.TryAssignRoom(coord, roomId);
@@ -681,7 +694,7 @@ namespace KeepersDomain.Rooms
 
                 // A prisoner held on a sold tile is simply lost, same
                 // "stored contents don't get refunded" convention
-                // Treasury's gold and Bacon Beacon's bacon already follow.
+                // Treasury's gold and Tavern's bacon already follow.
                 if (_prisoners.ContainsKey(coord))
                 {
                     ReleasePrisonerAt(coord);

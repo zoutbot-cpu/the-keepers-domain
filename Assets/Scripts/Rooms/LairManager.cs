@@ -28,49 +28,51 @@ namespace KeepersDomain.Rooms
     /// TryClaimLair) — decoupled from implings/monsters entirely, same as
     /// before, it only announces RoomPlaced/RoomSold and lets whoever cares
     /// react.
-    public class LairManager : MonoBehaviour
+    public class LairManager : MonoBehaviour, IRestorableRoomManager
     {
         /// Gold cost per tile of a placed Lair — charged out of
         /// TreasuryManager's reserves (see TryPlaceLair).
         public const int CostPerTile = 5;
 
-        // Unclaimed visual: three nested squares — a dark red "carpet" square
-        // inside a lighter red ring inside a darker outer square.
-        [SerializeField] private Color _unclaimedOuterColor = new Color(0.22f, 0.05f, 0.05f);
-        [SerializeField] private Color _unclaimedRingColor = new Color(0.75f, 0.15f, 0.15f);
-        [SerializeField] private Color _unclaimedCarpetColor = new Color(0.45f, 0.08f, 0.08f);
+        // Real dungeon_pack carpet art (Assets/Resources/Dungeon/Lair/
+        // CarpetTiles, see Tools > DungeonPack — these are plain textures,
+        // no prefab/material build step needed, same as DungeonGrid's own
+        // Floors set) — a 4-piece autotile set (center/side/outside-corner,
+        // plus an inside-corner piece unused here — see SelectCarpetMaterial)
+        // replacing the old flat-colored nested-square look. Each is built
+        // into its own real URP/Lit material once in Initialize (see
+        // BuildCarpetMaterial) rather than a texture applied at runtime to
+        // whatever material GameObject.CreatePrimitive happens to hand
+        // back — that implicit default isn't guaranteed URP-shaded and
+        // rendered as Unity's pink/error material for TrainingRoomManager's
+        // own equivalent floor layer.
+        private Material _carpetCenterMaterial;
+        private Material _carpetSideMaterial;
+        private Material _carpetOutsideCornerMaterial;
 
-        // Claimed visual: a yellow "nest" — a bright rim around a duller
-        // basin, same border/fill grammar TreasuryManager uses for its gold
-        // tiles, just recolored so a claimed Lair reads as a bowl for a
-        // monster to sleep in rather than an empty resting spot.
-        [SerializeField] private Color _nestRimColor = new Color(0.85f, 0.7f, 0.15f);
-        [SerializeField] private Color _nestBasinColor = new Color(0.55f, 0.44f, 0.08f);
+        // The claimed "nest" is now a real mesh prop (Assets/Art/DungeonPack/
+        // Lair/NestBed, built by Tools > DungeonPack > Setup Props into
+        // Dungeon/Prop_NestBed) sitting on top of the same carpet floor an
+        // unclaimed tile shows, instead of a separately colored flat shape —
+        // see BuildNestBed. Null (skipped, carpet-only) until that tool has
+        // been run at least once.
+        private GameObject _nestBedPrefab;
 
-        // Footprint fraction of a cell each layer occupies, outermost to
-        // innermost — mirrors TreasuryManager's border(0.95)/fill(0.65)
-        // inset convention, just extended to a third ring for the unclaimed
-        // visual's "carpet inside a square inside a square" look. The outer
-        // layer is a full 1.0 cell (not 0.95, unlike Treasury's border) —
-        // DungeonGrid's own floor tile underneath is 0.95, so matching that
-        // exactly would make the outer layer's side faces perfectly
-        // coplanar with the floor tile's and z-fight/flicker at every tile
-        // edge (that pink/purple flicker was the HasRoom floor color
-        // showing through). A strictly larger footprint fully encloses it
-        // instead, with no shared faces to fight over.
-        private const float OuterFootprintScale = 1.0f;
-        private const float RingFootprintScale = 0.65f;
-        private const float CarpetFootprintScale = 0.35f;
-        private const float NestRimFootprintScale = 1.0f;
-        private const float NestBasinFootprintScale = 0.6f;
+        private const float CarpetFloorHeight = 0.17f;
+        // A full 1.0 cell, not TreasuryManager's usual 0.95 border inset —
+        // DungeonGrid's own (now-hidden) floor tile underneath is 0.95, so
+        // matching that exactly would make this layer's side faces
+        // perfectly coplanar with it and z-fight/flicker at every tile
+        // edge. A strictly larger footprint fully encloses it instead, with
+        // no shared faces to fight over.
+        private const float CarpetFootprintScale = 1.0f;
 
-        // Same grounded-bottom trick TreasuryManager uses (see its
-        // TileVisualHeight/FillHeightMargin): each successive (inner) layer
-        // is HeightStep taller than the last, and raised by half of that
-        // difference, so every layer's bottom lines up while each top clears
-        // the one beneath it instead of z-fighting.
-        private const float LayerBaseHeight = 0.17f;
-        private const float LayerHeightStep = 0.03f;
+        // nest_bed's own raw mesh already measures close to a single cell
+        // (~0.756 units square, see DungeonPackPropSetup's own bounds log)
+        // — scaled up slightly to read as a proper piece of furniture
+        // filling most of its tile, same "scale to fit the footprint"
+        // approach ThroneRoom.BuildThrone uses for the throne prop.
+        private const float NestBedFootprintScale = 0.95f;
 
         // Placement-preview markers shown while a Lair drag is in progress
         // (see UpdatePlacementPreview) — bright, and grounded per-tile (see
@@ -104,6 +106,15 @@ namespace KeepersDomain.Rooms
         private int _nextRoomId;
         private readonly Dictionary<string, List<Vector2Int>> _roomTiles = new Dictionary<string, List<Vector2Int>>();
 
+        /// Each placed Lair's own footprint rectangle — used purely to work
+        /// out which tiles border the room's outer edge, for picking the
+        /// right carpet piece (see TryGetRoomBounds/SelectCarpetTexture). A
+        /// Lair never merges placements (unlike Hatchery/Tavern/Training Room/
+        /// Library/Jail/ConversionClass — TryPlaceLairInternal always mints
+        /// a fresh roomId), so this is always exactly the dragged rectangle,
+        /// no merge-shape bookkeeping needed.
+        private readonly Dictionary<string, RectInt> _roomBounds = new Dictionary<string, RectInt>();
+
         /// Claims are per-tile, not per-room — a multi-tile Lair (e.g. a
         /// 4x4) can house up to one creature per tile, each independently
         /// claiming/releasing its own square, rather than one creature
@@ -127,6 +138,28 @@ namespace KeepersDomain.Rooms
         {
             _grid = grid;
             _treasuryManager = treasuryManager;
+
+            _carpetCenterMaterial = BuildCarpetMaterial("Dungeon/Lair/CarpetTiles/carpet_center");
+            _carpetSideMaterial = BuildCarpetMaterial("Dungeon/Lair/CarpetTiles/carpet_side");
+            _carpetOutsideCornerMaterial = BuildCarpetMaterial("Dungeon/Lair/CarpetTiles/carpet_outside_corner");
+            _nestBedPrefab = Resources.Load<GameObject>("Dungeon/Prop_NestBed");
+        }
+
+        /// A real URP/Lit material with texturePath's texture baked in as
+        /// its _BaseMap — built explicitly via Shader.Find, the same way
+        /// every DungeonPack*Setup Editor tool builds its own materials.
+        /// Null if the texture itself failed to load.
+        private static Material BuildCarpetMaterial(string texturePath)
+        {
+            var texture = Resources.Load<Texture2D>(texturePath);
+            if (texture == null)
+            {
+                return null;
+            }
+
+            var material = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            material.SetTexture("_BaseMap", texture);
+            return material;
         }
 
         /// Places a Lair spanning the rectangle between startCoord and
@@ -149,6 +182,14 @@ namespace KeepersDomain.Rooms
             return TryPlaceLairInternal(startCoord, endCoord, chargeGold: false);
         }
 
+        /// IRestorableRoomManager — see its own header. ownerId is unused
+        /// here; the footprint is expected to already be Claimed Floor
+        /// (owned correctly) by the time this runs.
+        public bool RestoreRoom(Vector2Int start, Vector2Int end, int ownerId)
+        {
+            return PlaceStartingLair(start, end);
+        }
+
         private bool TryPlaceLairInternal(Vector2Int startCoord, Vector2Int endCoord, bool chargeGold)
         {
             var footprint = GetFootprint(startCoord, endCoord);
@@ -164,6 +205,12 @@ namespace KeepersDomain.Rooms
 
             var roomId = $"Lair_{_nextRoomId++}";
             _roomTiles[roomId] = footprint;
+
+            var minX = Mathf.Min(startCoord.x, endCoord.x);
+            var maxX = Mathf.Max(startCoord.x, endCoord.x);
+            var minY = Mathf.Min(startCoord.y, endCoord.y);
+            var maxY = Mathf.Max(startCoord.y, endCoord.y);
+            _roomBounds[roomId] = new RectInt(minX, minY, maxX - minX + 1, maxY - minY + 1);
 
             var centerWorld = Vector3.zero;
             foreach (var coord in footprint)
@@ -213,6 +260,7 @@ namespace KeepersDomain.Rooms
                 }
                 _roomTiles.Remove(roomId);
             }
+            _roomBounds.Remove(roomId);
 
             if (_treasuryManager != null)
             {
@@ -229,13 +277,17 @@ namespace KeepersDomain.Rooms
         /// RoomSold (see e.g. TreasuryManager.OnRoomSold's own comment).
         /// Falls back to 0 for an unrecognized prefix rather than guessing,
         /// so an unknown/future room type just refunds nothing until it's
-        /// added here.
+        /// added here. "BaconBeacon_" is kept alongside "Tavern_" (its
+        /// renamed successor, see TavernManager) purely so a room saved
+        /// under the old name before that rename still refunds correctly
+        /// when sold — new Taverns always mint the "Tavern_" prefix.
         private int GetCostPerTileForRoomId(string roomId)
         {
             if (roomId.StartsWith("Lair_")) return CostPerTile;
             if (roomId.StartsWith("Treasury_")) return TreasuryManager.CostPerTile;
             if (roomId.StartsWith("SlimeHatchery_")) return SlimeHatcheryManager.CostPerTile;
-            if (roomId.StartsWith("BaconBeacon_")) return BaconBeaconManager.CostPerTile;
+            if (roomId.StartsWith("Tavern_")) return TavernManager.CostPerTile;
+            if (roomId.StartsWith("BaconBeacon_")) return TavernManager.CostPerTile;
             if (roomId.StartsWith("TrainingRoom_")) return TrainingRoomManager.CostPerTile;
             if (roomId.StartsWith("Library_")) return LibraryManager.CostPerTile;
             if (roomId.StartsWith("Jail_")) return JailManager.CostPerTile;
@@ -527,9 +579,7 @@ namespace KeepersDomain.Rooms
             container.transform.SetParent(transform, false);
             _tileVisuals[coord] = container;
 
-            CreateInsetLayer(container.transform, coord, "Outer", OuterFootprintScale, 0, _unclaimedOuterColor);
-            CreateInsetLayer(container.transform, coord, "Ring", RingFootprintScale, 1, _unclaimedRingColor);
-            CreateInsetLayer(container.transform, coord, "Carpet", CarpetFootprintScale, 2, _unclaimedCarpetColor);
+            BuildCarpetFloor(container.transform, coord);
         }
 
         private void BuildClaimedVisual(Vector2Int coord)
@@ -539,8 +589,128 @@ namespace KeepersDomain.Rooms
             container.transform.SetParent(transform, false);
             _tileVisuals[coord] = container;
 
-            CreateInsetLayer(container.transform, coord, "Rim", NestRimFootprintScale, 0, _nestRimColor);
-            CreateInsetLayer(container.transform, coord, "Basin", NestBasinFootprintScale, 1, _nestBasinColor);
+            BuildCarpetFloor(container.transform, coord);
+            BuildNestBed(container.transform, coord);
+        }
+
+        /// coord's own placed Lair's footprint rectangle, resolved via the
+        /// grid tile's own RoomId (the same info TryClaimLairTile already
+        /// reads) rather than threading a roomId through every visual call
+        /// site. False if coord isn't currently part of a tracked Lair (e.g.
+        /// mid-placement bookkeeping edge cases) — callers just fall back to
+        /// the plain center tile in that case rather than guessing a shape.
+        private bool TryGetRoomBounds(Vector2Int coord, out RectInt bounds)
+        {
+            var roomId = _grid.GetTile(coord).RoomId;
+            return _roomBounds.TryGetValue(roomId, out bounds);
+        }
+
+        /// The tile's actual floor — one real dungeon_pack carpet quad,
+        /// materialed and rotated per SelectCarpetMaterial, replacing
+        /// RefreshVisual's own now-hidden isPlainFloor look (which never
+        /// applies once a Lair covers the tile) the same way every other
+        /// room manager's own ground layer does.
+        private void BuildCarpetFloor(Transform parent, Vector2Int coord)
+        {
+            var cellSize = _grid.CellSize;
+            var basePosition = _grid.GridToWorld(coord) + Vector3.down * 0.5f;
+            var centerY = basePosition.y + CarpetFloorHeight * 0.5f;
+
+            var material = SelectCarpetMaterial(coord, out var yRotationDegrees);
+
+            var floor = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            floor.name = $"LairCarpet_{coord.x}_{coord.y}";
+            floor.transform.SetParent(parent, false);
+            floor.transform.localPosition = new Vector3(basePosition.x, centerY, basePosition.z);
+            floor.transform.localRotation = Quaternion.Euler(0f, yRotationDegrees, 0f);
+            floor.transform.localScale = new Vector3(cellSize * CarpetFootprintScale, CarpetFloorHeight, cellSize * CarpetFootprintScale);
+
+            if (material != null)
+            {
+                // Shared, pre-built material (see BuildCarpetMaterial).
+                floor.GetComponent<Renderer>().sharedMaterial = material;
+            }
+
+            Destroy(floor.GetComponent<Collider>());
+        }
+
+        /// Which carpet material coord's tile needs, and how far to rotate
+        /// it around Y so its baked-in border faces the right way — a real
+        /// rectangle corner (two perpendicular touching sides) takes
+        /// priority over the plain-edge case. Assumes the source art's
+        /// default (0°) orientation borders the tile's north and west edges
+        /// (carpet_outside_corner) / north edge alone (carpet_side) — that's
+        /// this session's best read of the art with no in-Editor render to
+        /// confirm against, so a systematic off-by-90°/mirrored look is the
+        /// first thing to check here if it doesn't read right once seen.
+        /// A 1-wide/1-tall room's tiles (which can touch two *parallel*
+        /// sides at once, not caught by any of these four cases) fall
+        /// through to whichever single side matches first instead — no
+        /// dedicated art exists for that shape in this set.
+        private Material SelectCarpetMaterial(Vector2Int coord, out float yRotationDegrees)
+        {
+            yRotationDegrees = 0f;
+            if (!TryGetRoomBounds(coord, out var bounds))
+            {
+                return _carpetCenterMaterial;
+            }
+
+            var touchesWest = coord.x == bounds.xMin;
+            var touchesEast = coord.x == bounds.xMax - 1;
+            var touchesSouth = coord.y == bounds.yMin;
+            var touchesNorth = coord.y == bounds.yMax - 1;
+
+            if (touchesNorth && touchesWest) { yRotationDegrees = 0f; return _carpetOutsideCornerMaterial; }
+            if (touchesNorth && touchesEast) { yRotationDegrees = 90f; return _carpetOutsideCornerMaterial; }
+            if (touchesSouth && touchesEast) { yRotationDegrees = 180f; return _carpetOutsideCornerMaterial; }
+            if (touchesSouth && touchesWest) { yRotationDegrees = 270f; return _carpetOutsideCornerMaterial; }
+
+            if (touchesNorth) { yRotationDegrees = 0f; return _carpetSideMaterial; }
+            if (touchesEast) { yRotationDegrees = 90f; return _carpetSideMaterial; }
+            if (touchesSouth) { yRotationDegrees = 180f; return _carpetSideMaterial; }
+            if (touchesWest) { yRotationDegrees = 270f; return _carpetSideMaterial; }
+
+            return _carpetCenterMaterial;
+        }
+
+        /// The real nest_bed prop, scaled to fit within coord's tile and
+        /// sitting on top of the carpet floor BuildCarpetFloor already laid
+        /// down — replaces the old flat-colored "nest" shape entirely. A
+        /// no-op (carpet-only tile, no visible change from unclaimed) until
+        /// Tools > DungeonPack > Setup Props has built Dungeon/Prop_NestBed
+        /// at least once.
+        private void BuildNestBed(Transform parent, Vector2Int coord)
+        {
+            if (_nestBedPrefab == null)
+            {
+                return;
+            }
+
+            var cellSize = _grid.CellSize;
+            var worldPos = _grid.GridToWorld(coord);
+
+            var bed = Instantiate(_nestBedPrefab, parent, false);
+            bed.name = "NestBed";
+
+            var renderers = bed.GetComponentsInChildren<Renderer>();
+            var scale = 1f;
+            if (renderers.Length > 0)
+            {
+                var bounds = renderers[0].bounds;
+                for (int i = 1; i < renderers.Length; i++)
+                {
+                    bounds.Encapsulate(renderers[i].bounds);
+                }
+
+                var footprint = Mathf.Max(bounds.size.x, bounds.size.z);
+                if (footprint > 0.01f)
+                {
+                    scale = (cellSize * NestBedFootprintScale) / footprint;
+                }
+            }
+
+            bed.transform.localScale = Vector3.one * scale;
+            bed.transform.localPosition = new Vector3(worldPos.x, _grid.FloorSurfaceY, worldPos.z);
         }
 
         private void ClearTileVisual(Vector2Int coord)
@@ -550,26 +720,6 @@ namespace KeepersDomain.Rooms
                 Destroy(go);
             }
             _tileVisuals.Remove(coord);
-        }
-
-        /// One flat inset square, grounded against the others built for the
-        /// same tile (see LayerBaseHeight/LayerHeightStep) — layerIndex 0 is
-        /// the outermost/shortest, increasing indices nest further in and
-        /// stack taller so each one's top face clears the last.
-        private void CreateInsetLayer(Transform parent, Vector2Int coord, string label, float footprintScale, int layerIndex, Color color)
-        {
-            var cellSize = _grid.CellSize;
-            var basePosition = _grid.GridToWorld(coord) + Vector3.down * 0.5f;
-            var height = LayerBaseHeight + layerIndex * LayerHeightStep;
-            var centerY = basePosition.y + layerIndex * (LayerHeightStep * 0.5f);
-
-            var layer = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            layer.name = $"Lair{label}_{coord.x}_{coord.y}";
-            layer.transform.SetParent(parent, false);
-            layer.transform.localPosition = new Vector3(basePosition.x, centerY, basePosition.z);
-            layer.transform.localScale = new Vector3(cellSize * footprintScale, height, cellSize * footprintScale);
-            layer.GetComponent<Renderer>().material.color = color;
-            Destroy(layer.GetComponent<Collider>());
         }
     }
 }

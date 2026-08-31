@@ -58,11 +58,11 @@ namespace KeepersDomain.LevelDesigner
         public int OwnerId;
     }
 
-    /// A Core Room or Portal Room — see StructureKind's own header for why
+    /// A Throne Room or Portal Room — see StructureKind's own header for why
     /// these are saved separately from LevelTileData despite also
     /// covering a footprint of tiles (that footprint is saved too, as
     /// ordinary LevelTileData entries; this is only the extra "there's a
-    /// ChaosCore/Portal structure centered here" fact those tiles alone
+    /// ThroneRoom/Portal structure centered here" fact those tiles alone
     /// don't carry).
     [Serializable]
     public class LevelStructureData

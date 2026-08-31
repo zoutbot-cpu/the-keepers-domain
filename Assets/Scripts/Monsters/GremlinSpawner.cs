@@ -29,17 +29,17 @@ namespace KeepersDomain.Monsters
         private LairManager _lairManager;
         private SlimeHatcheryManager _slimeHatcheryManager;
         private TrainingRoomManager _trainingRoomManager;
-        private BaconBeaconManager _baconBeaconManager;
+        private TavernManager _tavernManager;
         private TreasuryManager _treasuryManager;
 
-        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, SlimeHatcheryManager slimeHatcheryManager, TrainingRoomManager trainingRoomManager, BaconBeaconManager baconBeaconManager, TreasuryManager treasuryManager)
+        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, SlimeHatcheryManager slimeHatcheryManager, TrainingRoomManager trainingRoomManager, TavernManager tavernManager, TreasuryManager treasuryManager)
         {
             _grid = grid;
             _portal = portal;
             _lairManager = lairManager;
             _slimeHatcheryManager = slimeHatcheryManager;
             _trainingRoomManager = trainingRoomManager;
-            _baconBeaconManager = baconBeaconManager;
+            _tavernManager = tavernManager;
             _treasuryManager = treasuryManager;
         }
 
@@ -124,7 +124,7 @@ namespace KeepersDomain.Monsters
             Destroy(visual.GetComponent<Collider>());
 
             var agent = visual.AddComponent<GremlinAgent>();
-            agent.Initialize(_grid, _lairManager, _baconBeaconManager, _trainingRoomManager, _treasuryManager, _portal);
+            agent.Initialize(_grid, _lairManager, _tavernManager, _trainingRoomManager, _treasuryManager, _portal);
             GameplayLog.Write($"{agent.Name} joined via the Portal at ({coord.x},{coord.y})");
         }
     }

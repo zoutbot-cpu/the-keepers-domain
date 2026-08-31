@@ -21,15 +21,15 @@ namespace KeepersDomain.Monsters
         private DungeonGrid _grid;
         private Portal _portal;
         private LairManager _lairManager;
-        private BaconBeaconManager _baconBeaconManager;
+        private TavernManager _tavernManager;
         private TreasuryManager _treasuryManager;
 
-        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, BaconBeaconManager baconBeaconManager, TreasuryManager treasuryManager)
+        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, TavernManager tavernManager, TreasuryManager treasuryManager)
         {
             _grid = grid;
             _portal = portal;
             _lairManager = lairManager;
-            _baconBeaconManager = baconBeaconManager;
+            _tavernManager = tavernManager;
             _treasuryManager = treasuryManager;
         }
 
@@ -49,7 +49,7 @@ namespace KeepersDomain.Monsters
             Destroy(visual.GetComponent<Collider>());
 
             var agent = visual.AddComponent<ElfAgent>();
-            agent.Initialize(_grid, _lairManager, _baconBeaconManager, _treasuryManager, _portal);
+            agent.Initialize(_grid, _lairManager, _tavernManager, _treasuryManager, _portal);
             GameplayLog.Write($"{agent.Name} shuffled into existence, weak and worthless, at ({coord.x},{coord.y})");
         }
     }

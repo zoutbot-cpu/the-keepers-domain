@@ -37,7 +37,7 @@ namespace KeepersDomain.Monsters
     }
 
     /// The second non-Imp creature, and the first "intelligent" one per the
-    /// design doc (see Library's design-doc entry — Bacon Beacon's "food
+    /// design doc (see Library's design-doc entry — Tavern's "food
     /// for intelligent creatures" line was written with this creature in
     /// mind). Recruited the same "join via the Portal's pool" way a Gremlin
     /// is (see WarlockSpawner). Behavior is a priority list (see
@@ -139,7 +139,7 @@ namespace KeepersDomain.Monsters
 
         private DungeonGrid _grid;
         private LairManager _lairManager;
-        private BaconBeaconManager _baconBeaconManager;
+        private TavernManager _tavernManager;
         private LibraryManager _libraryManager;
         private TrainingRoomManager _trainingRoomManager;
         private TreasuryManager _treasuryManager;
@@ -188,11 +188,11 @@ namespace KeepersDomain.Monsters
             _creature = new Creature(_baseStats, _growthPerLevel, _expPerLevelStep);
         }
 
-        public void Initialize(DungeonGrid grid, LairManager lairManager, BaconBeaconManager baconBeaconManager, LibraryManager libraryManager, TrainingRoomManager trainingRoomManager, TreasuryManager treasuryManager, Portal portal)
+        public void Initialize(DungeonGrid grid, LairManager lairManager, TavernManager tavernManager, LibraryManager libraryManager, TrainingRoomManager trainingRoomManager, TreasuryManager treasuryManager, Portal portal)
         {
             _grid = grid;
             _lairManager = lairManager;
-            _baconBeaconManager = baconBeaconManager;
+            _tavernManager = tavernManager;
             _libraryManager = libraryManager;
             _trainingRoomManager = trainingRoomManager;
             _treasuryManager = treasuryManager;
@@ -220,7 +220,7 @@ namespace KeepersDomain.Monsters
 
         /// Payday — draws this Warlock's wage (see Pay.WageFor) straight
         /// out of the Treasury, no walking/task involved (unlike eating,
-        /// which needs a Bacon Beacon trip). A successful payment now also
+        /// which needs a Tavern trip). A successful payment now also
         /// bumps Happiness (Happiness.ApplyPaidBonus); going unpaid marks it
         /// unhappy (Pay.IsUnhappy) and dents Happiness instead
         /// (Happiness.ApplyUnpaidPenalty).
@@ -687,7 +687,7 @@ namespace KeepersDomain.Monsters
 
         private bool TryBeginPursueFood()
         {
-            if (_baconBeaconManager == null || !_baconBeaconManager.TryFindNearestTileWithBacon(_grid.WorldToGrid(transform.position), out var coord) || !PlanPathTo(coord, _grid.GridToWorld(coord)))
+            if (_tavernManager == null || !_tavernManager.TryFindNearestTileWithBacon(_grid.WorldToGrid(transform.position), out var coord) || !PlanPathTo(coord, _grid.GridToWorld(coord)))
             {
                 return false;
             }
@@ -699,7 +699,7 @@ namespace KeepersDomain.Monsters
 
         private void ArriveAtFood()
         {
-            if (_baconBeaconManager.TryEatBacon(_foodTargetCoord, BaconBeaconManager.MealBaconAmount))
+            if (_tavernManager.TryEatBacon(_foodTargetCoord, TavernManager.MealBaconAmount))
             {
                 _hunger.Eat();
             }

@@ -34,18 +34,18 @@ namespace KeepersDomain.Monsters
         private LairManager _lairManager;
         private LibraryManager _libraryManager;
         private SlimeHatcheryManager _slimeHatcheryManager;
-        private BaconBeaconManager _baconBeaconManager;
+        private TavernManager _tavernManager;
         private TrainingRoomManager _trainingRoomManager;
         private TreasuryManager _treasuryManager;
 
-        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, LibraryManager libraryManager, SlimeHatcheryManager slimeHatcheryManager, BaconBeaconManager baconBeaconManager, TrainingRoomManager trainingRoomManager, TreasuryManager treasuryManager)
+        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, LibraryManager libraryManager, SlimeHatcheryManager slimeHatcheryManager, TavernManager tavernManager, TrainingRoomManager trainingRoomManager, TreasuryManager treasuryManager)
         {
             _grid = grid;
             _portal = portal;
             _lairManager = lairManager;
             _libraryManager = libraryManager;
             _slimeHatcheryManager = slimeHatcheryManager;
-            _baconBeaconManager = baconBeaconManager;
+            _tavernManager = tavernManager;
             _trainingRoomManager = trainingRoomManager;
             _treasuryManager = treasuryManager;
         }
@@ -69,8 +69,8 @@ namespace KeepersDomain.Monsters
         ///   Slime Hatchery tiles (across every placed Hatchery) — same
         ///   shape as GremlinSpawner's own Hatchery requirement.
         /// - Fewer intelligent creatures already in the domain (only
-        ///   Warlock counts as intelligent so far) than there are Bacon
-        ///   Beacon tiles (across every placed Beacon).
+        ///   Warlock counts as intelligent so far) than there are
+        ///   Tavern tiles (across every placed Tavern).
         public bool MeetsJoinRequirements()
         {
             if (_lairManager == null || _lairManager.TotalTileCount < RequiredLairTiles)
@@ -90,7 +90,7 @@ namespace KeepersDomain.Monsters
             }
 
             var intelligentCount = WarlockAgent.All.Count;
-            if (_baconBeaconManager == null || intelligentCount >= _baconBeaconManager.TotalTileCount)
+            if (_tavernManager == null || intelligentCount >= _tavernManager.TotalTileCount)
             {
                 return false;
             }
@@ -133,7 +133,7 @@ namespace KeepersDomain.Monsters
             Destroy(visual.GetComponent<Collider>());
 
             var agent = visual.AddComponent<WarlockAgent>();
-            agent.Initialize(_grid, _lairManager, _baconBeaconManager, _libraryManager, _trainingRoomManager, _treasuryManager, _portal);
+            agent.Initialize(_grid, _lairManager, _tavernManager, _libraryManager, _trainingRoomManager, _treasuryManager, _portal);
             GameplayLog.Write($"{agent.Name} joined via the Portal at ({coord.x},{coord.y})");
         }
     }

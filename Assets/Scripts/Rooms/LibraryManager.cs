@@ -8,32 +8,35 @@ namespace KeepersDomain.Rooms
     /// studying combat for a smaller trickle of exp when no research is
     /// available — per the design doc. Placed the same drag-a-footprint way
     /// a Lair/Treasury/Training Room is (see TryPlaceLibrary), with no
-    /// minimum size enforced at placement (unlike the Hatchery/Beacon) —
+    /// minimum size enforced at placement (unlike the Hatchery/Tavern) —
     /// Warlock's own join requirement is what actually demands a 3x3, see
     /// WarlockSpawner.MeetsJoinRequirements/HasLibraryAtLeast below.
     ///
     /// A bookcase structure sits on every OTHER interior ("non-edge") row of
     /// the footprint — tiles on the rectangle's own border never get one, so
     /// a room smaller than 3x3 has no interior tiles and ends up with no
-    /// bookcases at all. Within a bookcase row, every tile's bookcase merges
-    /// into a single elongated shelf spanning the whole row ("connect east
-    /// to west" per the brief); the interior row in between two bookcase
-    /// rows is left as plain open floor instead of a third bookcase row —
-    /// that's what makes "a creature should be able to walk between two
-    /// rows of book cases" possible at all, since bookcase tiles themselves
-    /// are blocked to pathfinding (see BuildBookcaseVisual/_grid.SetBlocked)
-    /// while the border ring and these in-between aisle rows stay ordinary
-    /// walkable Library floor.
+    /// bookcases at all. Within a bookcase row, every tile gets its own real
+    /// bookcase_module prop (see BuildBookcaseRow/BuildBookcaseModule) —
+    /// only the primitive fallback (used until Prop_BookcaseModule has been
+    /// built, see BuildBookcaseRowFallback) actually merges the row into one
+    /// elongated shelf ("connect east to west" per the brief). Either way,
+    /// the interior row in between two bookcase rows is left as plain open
+    /// floor instead of a third bookcase row — that's what makes "a
+    /// creature should be able to walk between two rows of book cases"
+    /// possible at all, since bookcase tiles themselves are blocked to
+    /// pathfinding (see BuildBookcaseVisual/_grid.SetBlocked) while the
+    /// border ring and these in-between aisle rows stay ordinary walkable
+    /// Library floor.
     ///
     /// Research now actually runs (see WarlockAgent's Researching state) —
     /// a Warlock alternates between walking to a bookcase-adjacent tile,
     /// pausing there 3-5 seconds (still gaining the usual exp on its own
     /// timer while paused), and moving on to a different one, rather than
     /// standing motionless at a single spot.
-    public class LibraryManager : MonoBehaviour
+    public class LibraryManager : MonoBehaviour, IRestorableRoomManager
     {
         /// Gold cost per tile of a placed Library — charged out of
-        /// TreasuryManager's reserves, same as Hatchery/Beacon/Training Room.
+        /// TreasuryManager's reserves, same as Hatchery/Tavern/Training Room.
         public const int CostPerTile = 20;
 
         /// Research now actually runs (see WarlockAgent) — a Warlock
@@ -43,21 +46,62 @@ namespace KeepersDomain.Rooms
         public const int ResearchExpPerTick = 5;
         public const float ResearchTickSeconds = 2f;
 
-        // Ground overlay on every footprint tile: a dark purple border with
-        // a slightly lighter purple fill in the middle — same border/fill
-        // grammar TrainingRoomManager's ground uses, just recolored.
-        [SerializeField] private Color _groundBorderColor = new Color(0.18f, 0.05f, 0.28f);
+        // Ground overlay on every footprint tile: the real dungeon_pack
+        // parquet floor texture (Assets/Resources/Dungeon/Library/
+        // floor_library_parquet — a plain texture, no prefab/material build
+        // step needed, same as DungeonGrid's own Floors set), built into a
+        // real URP/Lit material once in Initialize (see
+        // TrainingRoomManager.BuildDungeonPackMaterial for why — an
+        // implicit-default-material + runtime SetTexture attempt rendered
+        // pink there), with a slightly lighter purple fill inset on top —
+        // same border/fill footprint convention TreasuryManager's gold
+        // tiles use.
+        private Material _floorParquetMaterial;
         [SerializeField] private Color _groundFillColor = new Color(0.4f, 0.22f, 0.55f);
         private const float GroundTileHeight = 0.17f;
         private const float GroundFillHeightMargin = 0.03f;
         private const float GroundFootprintScale = 0.95f;
         private const float GroundFillFootprintScale = 0.8f;
 
-        // Bookcase: a dark-wood body with a lighter trim cap on top — same
-        // body/roof-cap shape SlimeHatcheryManager's coop uses, just spans
-        // the full length of its row's interior run (see BuildBookcaseRow)
-        // rather than sitting on a single tile like every other room's
-        // structure.
+        // Border's own GroundFootprintScale (0.95) leaves a thin gap at
+        // every tile edge where neighboring tiles don't quite touch — a
+        // full-cell gray Seam layer underneath fills it in, sitting a bit
+        // lower than Border/Fill (SeamHeight, between DungeonGrid's own
+        // 0.15 hidden-tile height and Border's 0.17 — tall enough to fully
+        // hide that tile, short enough that Border/Fill still visibly "pop
+        // out" above it) so adjacent tiles read as flush-fitted floor
+        // panels with a mortar line between them, not a void gap.
+        [SerializeField] private Color _seamColor = new Color(0.32f, 0.32f, 0.32f);
+        private const float SeamFootprintScale = 1.0f;
+        private const float SeamHeight = 0.16f;
+
+        // Real dungeon_pack mesh (Assets/Art/DungeonPack/Library/
+        // BookcaseModule, built by Tools > DungeonPack > Setup Props into
+        // Dungeon/Prop_BookcaseModule) — a dark-wood shelf packed with
+        // colored book spines. Scaled non-uniformly per axis rather than
+        // one uniform factor: Y from its own natural height (see
+        // BookcaseModuleTargetHeight — a uniform scale-to-width would blow
+        // its ~1.92-unit height up to ~3.5 units), X and Z each stretched
+        // by fixed literal factors (tuned in-Editor by eye, not derived
+        // from the mesh's own bounds like Y is) so neighboring modules in a
+        // row read as nearly touching instead of the gaps its true ~0.5-
+        // unit width would otherwise leave. One module centered (and
+        // rotated 180° — its front otherwise faces the wrong way, see
+        // BuildBookcaseModule) per bookcase-row tile, rather than one shape
+        // stretched across the whole row. Falls back to the original
+        // primitive-built stretched body+trim below if Prop_BookcaseModule
+        // hasn't been set up yet, same graceful-degradation pattern
+        // ThroneRoom.BuildThrone uses for the throne prop.
+        private GameObject _bookcaseModulePrefab;
+        private const float BookcaseModuleTargetHeight = 1.4f;
+        private const float BookcaseModuleXScale = 2.6f;
+        private const float BookcaseModuleZScale = 2f;
+
+        // Fallback-only primitive bookcase: a dark-wood body with a lighter
+        // trim cap on top — same body/roof-cap shape SlimeHatcheryManager's
+        // coop uses, spanning the full length of its row's interior run
+        // (unlike the real per-tile modules above), used only if
+        // Prop_BookcaseModule hasn't been set up yet. See BuildBookcaseRow.
         [SerializeField] private Color _bookcaseBodyColor = new Color(0.28f, 0.18f, 0.1f);
         [SerializeField] private Color _bookcaseTrimColor = new Color(0.55f, 0.4f, 0.22f);
         private const float BookcaseBodyHeight = 0.85f;
@@ -88,6 +132,27 @@ namespace KeepersDomain.Rooms
             _grid = grid;
             _treasuryManager = treasuryManager;
             lairManager.RoomSold += OnRoomSold;
+
+            _floorParquetMaterial = BuildDungeonPackMaterial("Dungeon/Library/floor_library_parquet");
+            _bookcaseModulePrefab = Resources.Load<GameObject>("Dungeon/Prop_BookcaseModule");
+        }
+
+        /// A real URP/Lit material with texturePath's texture baked in as
+        /// its _BaseMap — built explicitly via Shader.Find, the same way
+        /// every DungeonPack*Setup Editor tool builds its own materials
+        /// (see TrainingRoomManager's own copy of this method for why).
+        /// Null if the texture itself failed to load.
+        private static Material BuildDungeonPackMaterial(string texturePath)
+        {
+            var texture = Resources.Load<Texture2D>(texturePath);
+            if (texture == null)
+            {
+                return null;
+            }
+
+            var material = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            material.SetTexture("_BaseMap", texture);
+            return material;
         }
 
         /// Total tile count across every placed Library — same convention
@@ -126,7 +191,7 @@ namespace KeepersDomain.Rooms
         /// Places a Library spanning the rectangle between startCoord and
         /// endCoord inclusive. Fails atomically, same as
         /// LairManager.TryPlaceLair — no minimum footprint size, unlike the
-        /// Hatchery/Beacon.
+        /// Hatchery/Tavern.
         public bool TryPlaceLibrary(Vector2Int startCoord, Vector2Int endCoord)
         {
             return TryPlaceLibraryInternal(startCoord, endCoord, chargeGold: true);
@@ -139,6 +204,14 @@ namespace KeepersDomain.Rooms
         public bool PlaceStartingLibrary(Vector2Int startCoord, Vector2Int endCoord)
         {
             return TryPlaceLibraryInternal(startCoord, endCoord, chargeGold: false);
+        }
+
+        /// IRestorableRoomManager — see its own header. ownerId is unused
+        /// here; the footprint is expected to already be Claimed Floor
+        /// (owned correctly) by the time this runs.
+        public bool RestoreRoom(Vector2Int start, Vector2Int end, int ownerId)
+        {
+            return PlaceStartingLibrary(start, end);
         }
 
         private bool TryPlaceLibraryInternal(Vector2Int startCoord, Vector2Int endCoord, bool chargeGold)
@@ -354,14 +427,66 @@ namespace KeepersDomain.Rooms
             return adjacent;
         }
 
-        /// One elongated bookcase spanning every interior tile in a single
-        /// row — this is what makes same-row bookcases "connect east to
-        /// west": tileCount tiles are rendered as a single body scaled
-        /// along the row's length rather than tileCount separate boxes. The
-        /// body's depth (BookcaseDepthScale) stays well short of a full
-        /// tile, so it never touches the next row's body even when the two
-        /// rows sit on directly adjacent tiles ("not north to south").
+        /// A bookcase for every interior tile in a single row — one real
+        /// bookcase_module per tile (see BuildBookcaseModule) once
+        /// Prop_BookcaseModule exists, otherwise the original single
+        /// stretched-primitive fallback spanning the whole row (see
+        /// BuildBookcaseRowFallback).
         private void BuildBookcaseRow(Transform parent, int startX, int y, int tileCount)
+        {
+            if (_bookcaseModulePrefab != null)
+            {
+                for (int x = 0; x < tileCount; x++)
+                {
+                    BuildBookcaseModule(parent, new Vector2Int(startX + x, y));
+                }
+                return;
+            }
+
+            BuildBookcaseRowFallback(parent, startX, y, tileCount);
+        }
+
+        /// The real bookcase_module prop, non-uniformly scaled (see
+        /// BookcaseModuleTargetHeight/XScale/ZScale's own header) and
+        /// centered on coord — rotated 180° on Y since the source mesh's
+        /// front otherwise faces the wrong way.
+        private void BuildBookcaseModule(Transform parent, Vector2Int coord)
+        {
+            var worldPos = _grid.GridToWorld(coord);
+            var basePosition = new Vector3(worldPos.x, _grid.FloorSurfaceY, worldPos.z);
+
+            var module = Instantiate(_bookcaseModulePrefab, parent, false);
+            module.name = $"Bookcase_{coord.x}_{coord.y}";
+
+            var renderers = module.GetComponentsInChildren<Renderer>();
+            var yScale = 1f;
+            if (renderers.Length > 0)
+            {
+                var bounds = renderers[0].bounds;
+                for (int i = 1; i < renderers.Length; i++)
+                {
+                    bounds.Encapsulate(renderers[i].bounds);
+                }
+
+                if (bounds.size.y > 0.01f)
+                {
+                    yScale = BookcaseModuleTargetHeight / bounds.size.y;
+                }
+            }
+
+            module.transform.localRotation = Quaternion.Euler(0f, 180f, 0f);
+            module.transform.localScale = new Vector3(BookcaseModuleXScale, yScale, BookcaseModuleZScale);
+            module.transform.localPosition = basePosition;
+        }
+
+        /// Fallback-only: one elongated bookcase spanning every interior
+        /// tile in a single row — tileCount tiles rendered as a single body
+        /// scaled along the row's length rather than tileCount separate
+        /// boxes. The body's depth (BookcaseDepthScale) stays well short of
+        /// a full tile, so it never touches the next row's body even when
+        /// the two rows sit on directly adjacent tiles ("not north to
+        /// south"). See BuildBookcaseRow.
+        private void BuildBookcaseRowFallback(Transform parent, int startX, int y, int tileCount)
         {
             var cellSize = _grid.CellSize;
             var startWorld = _grid.GridToWorld(new Vector2Int(startX, y));
@@ -570,9 +695,13 @@ namespace KeepersDomain.Rooms
             return _grid.GetTile(coord).Type == TileType.Rock ? RockTopY : _grid.FloorSurfaceY;
         }
 
-        /// Thin dark-purple border with a slightly lighter purple fill in
-        /// the middle — same border/fill footprint convention
-        /// TreasuryManager.CreateTileVisual uses for its gold tiles.
+        /// A real dungeon_pack-textured parquet border (see
+        /// _floorParquetMaterial), with a slightly lighter flat-purple fill
+        /// inset on top — same border/fill footprint convention
+        /// TreasuryManager.CreateTileVisual uses for its gold tiles. A
+        /// full-cell gray Seam sits beneath both (see its own field header)
+        /// so the gap Border's own 0.95 footprint would otherwise leave at
+        /// every tile edge reads as a mortar line instead of a void gap.
         private GameObject BuildGroundVisual(Vector2Int coord)
         {
             var container = new GameObject($"LibraryGround_{coord.x}_{coord.y}");
@@ -581,12 +710,31 @@ namespace KeepersDomain.Rooms
             var cellSize = _grid.CellSize;
             var basePosition = _grid.GridToWorld(coord) + Vector3.down * 0.5f;
 
+            var seam = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            seam.name = "Seam";
+            seam.transform.SetParent(container.transform, false);
+            // Same "position = basePosition, no offset" convention Border
+            // itself uses — SeamHeight sits between DungeonGrid's own
+            // hidden-tile height (0.15) and Border's (0.17), so it wins the
+            // z-fight against the hidden tile the same way Border does,
+            // while still visibly sitting lower than Border/Fill.
+            seam.transform.position = basePosition;
+            seam.transform.localScale = new Vector3(cellSize * SeamFootprintScale, SeamHeight, cellSize * SeamFootprintScale);
+            seam.GetComponent<Renderer>().material.color = _seamColor;
+            Destroy(seam.GetComponent<Collider>());
+
             var border = GameObject.CreatePrimitive(PrimitiveType.Cube);
             border.name = "Border";
             border.transform.SetParent(container.transform, false);
             border.transform.position = basePosition;
             border.transform.localScale = new Vector3(cellSize * GroundFootprintScale, GroundTileHeight, cellSize * GroundFootprintScale);
-            border.GetComponent<Renderer>().material.color = _groundBorderColor;
+            if (_floorParquetMaterial != null)
+            {
+                // Shared, pre-built material (see BuildDungeonPackMaterial)
+                // — no color tint, the parquet art already carries its own
+                // correct look.
+                border.GetComponent<Renderer>().sharedMaterial = _floorParquetMaterial;
+            }
             Destroy(border.GetComponent<Collider>());
 
             var fill = GameObject.CreatePrimitive(PrimitiveType.Cube);

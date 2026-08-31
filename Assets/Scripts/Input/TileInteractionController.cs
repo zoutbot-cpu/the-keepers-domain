@@ -12,12 +12,12 @@ namespace KeepersDomain.Input
     /// A one-shot tool armed from the UI (see BottomMenuBar) — the very next
     /// gesture executes it and clears back to None. For most of these that's
     /// a single tap; PlaceLair, PlaceTreasury, PlaceSlimeHatchery, and
-    /// PlaceBaconBeacon are drags instead (see TileInteractionController.
+    /// PlaceTavern are drags instead (see TileInteractionController.
     /// BeginGesture/EndGesture), sizing the room's footprint to whatever
     /// rectangle gets dragged out — each room manager owns its own
     /// placement/preview logic for its room kind, but they share the same
     /// underlying validity rule (DungeonGrid.CanBuildRoomOn), plus their own
-    /// minimum-size floor for the Hatchery/Beacon. SellLair is also a drag — every room
+    /// minimum-size floor for the Hatchery/Tavern. SellLair is also a drag — every room
     /// tile the drag passes over gets sold, whatever kind of room it is,
     /// same line/square-paint mechanic Mine/Reinforce/Construct queuing
     /// uses (see GestureMode.Sell) — and unlike the others it stays armed
@@ -29,7 +29,7 @@ namespace KeepersDomain.Input
         PlaceLair,
         PlaceTreasury,
         PlaceSlimeHatchery,
-        PlaceBaconBeacon,
+        PlaceTavern,
         PlaceTrainingRoom,
         PlaceLibrary,
         PlaceJail,
@@ -118,7 +118,7 @@ namespace KeepersDomain.Input
         private LairManager _lairManager;
         private TreasuryManager _treasuryManager;
         private SlimeHatcheryManager _slimeHatcheryManager;
-        private BaconBeaconManager _baconBeaconManager;
+        private TavernManager _tavernManager;
         private TrainingRoomManager _trainingRoomManager;
         private LibraryManager _libraryManager;
         private JailManager _jailManager;
@@ -159,8 +159,8 @@ namespace KeepersDomain.Input
         private Vector2Int _treasuryDragCurrentCoord;
         private bool _isPlacingHatchery;
         private Vector2Int _hatcheryDragCurrentCoord;
-        private bool _isPlacingBeacon;
-        private Vector2Int _beaconDragCurrentCoord;
+        private bool _isPlacingTavern;
+        private Vector2Int _tavernDragCurrentCoord;
         private bool _isPlacingTrainingRoom;
         private Vector2Int _trainingRoomDragCurrentCoord;
         private bool _isPlacingLibrary;
@@ -189,10 +189,10 @@ namespace KeepersDomain.Input
         public Vector2Int HatcheryDragStartCoord => _dragStartCoord;
         public Vector2Int HatcheryDragCurrentCoord => _hatcheryDragCurrentCoord;
 
-        /// Same idea again, for a Bacon Beacon placement in progress.
-        public bool IsPlacingBeacon => _isPlacingBeacon;
-        public Vector2Int BeaconDragStartCoord => _dragStartCoord;
-        public Vector2Int BeaconDragCurrentCoord => _beaconDragCurrentCoord;
+        /// Same idea again, for a Tavern placement in progress.
+        public bool IsPlacingTavern => _isPlacingTavern;
+        public Vector2Int TavernDragStartCoord => _dragStartCoord;
+        public Vector2Int TavernDragCurrentCoord => _tavernDragCurrentCoord;
 
         /// Same idea again, for a Training Room placement in progress.
         public bool IsPlacingTrainingRoom => _isPlacingTrainingRoom;
@@ -222,7 +222,13 @@ namespace KeepersDomain.Input
         /// BottomMenuBar to show the right instruction text for Grab mode.
         public bool IsCarryingMinion => _minionGrabController != null && _minionGrabController.IsCarrying;
 
-        public void Initialize(Camera camera, DungeonGrid grid, BuilderJobBoard jobBoard, LairManager lairManager, TreasuryManager treasuryManager, SlimeHatcheryManager slimeHatcheryManager, BaconBeaconManager baconBeaconManager, TrainingRoomManager trainingRoomManager, LibraryManager libraryManager, JailManager jailManager, ConversionClassManager conversionClassManager, BridgeManager bridgeManager, ImplingSpawner implingSpawner, MinionGrabController minionGrabController)
+        /// The grid coordinate currently under the pointer, if any — read
+        /// by BottomMenuBar to draw a small (x, y) readout next to the
+        /// cursor for troubleshooting. Updated every frame regardless of
+        /// BuildMode/PendingPlacementAction.
+        public Vector2Int? HoveredCoord { get; private set; }
+
+        public void Initialize(Camera camera, DungeonGrid grid, BuilderJobBoard jobBoard, LairManager lairManager, TreasuryManager treasuryManager, SlimeHatcheryManager slimeHatcheryManager, TavernManager tavernManager, TrainingRoomManager trainingRoomManager, LibraryManager libraryManager, JailManager jailManager, ConversionClassManager conversionClassManager, BridgeManager bridgeManager, ImplingSpawner implingSpawner, MinionGrabController minionGrabController)
         {
             _camera = camera;
             _grid = grid;
@@ -230,7 +236,7 @@ namespace KeepersDomain.Input
             _lairManager = lairManager;
             _treasuryManager = treasuryManager;
             _slimeHatcheryManager = slimeHatcheryManager;
-            _baconBeaconManager = baconBeaconManager;
+            _tavernManager = tavernManager;
             _trainingRoomManager = trainingRoomManager;
             _libraryManager = libraryManager;
             _jailManager = jailManager;
@@ -281,8 +287,11 @@ namespace KeepersDomain.Input
             {
                 _lairManager?.ClearSellPreview();
                 _minionGrabController?.SetVisible(false);
+                HoveredCoord = null;
                 return;
             }
+
+            HoveredCoord = TryGetCoordUnderScreenPos(PointerInput.PrimaryPosition, out var hoveredCoord) ? hoveredCoord : (Vector2Int?)null;
 
             UpdateSellPreview();
 
@@ -377,11 +386,11 @@ namespace KeepersDomain.Input
                 return;
             }
 
-            if (_pendingPlacementAction == PlacementAction.PlaceBaconBeacon)
+            if (_pendingPlacementAction == PlacementAction.PlaceTavern)
             {
-                _isPlacingBeacon = true;
-                _beaconDragCurrentCoord = coord;
-                _baconBeaconManager?.UpdatePlacementPreview(coord, coord);
+                _isPlacingTavern = true;
+                _tavernDragCurrentCoord = coord;
+                _tavernManager?.UpdatePlacementPreview(coord, coord);
                 return;
             }
 
@@ -520,12 +529,12 @@ namespace KeepersDomain.Input
                 return;
             }
 
-            if (_isPlacingBeacon)
+            if (_isPlacingTavern)
             {
-                if (TryGetCoordUnderScreenPos(screenPos, out var beaconCoord) && beaconCoord != _beaconDragCurrentCoord)
+                if (TryGetCoordUnderScreenPos(screenPos, out var tavernCoord) && tavernCoord != _tavernDragCurrentCoord)
                 {
-                    _beaconDragCurrentCoord = beaconCoord;
-                    _baconBeaconManager?.UpdatePlacementPreview(_dragStartCoord, _beaconDragCurrentCoord);
+                    _tavernDragCurrentCoord = tavernCoord;
+                    _tavernManager?.UpdatePlacementPreview(_dragStartCoord, _tavernDragCurrentCoord);
                 }
                 return;
             }
@@ -653,15 +662,15 @@ namespace KeepersDomain.Input
                 return;
             }
 
-            if (_isPlacingBeacon)
+            if (_isPlacingTavern)
             {
-                _isPlacingBeacon = false;
+                _isPlacingTavern = false;
                 _pendingPlacementAction = PlacementAction.None;
                 if (TryGetCoordUnderScreenPos(screenPos, out var endCoord))
                 {
-                    _baconBeaconManager?.TryPlaceBeacon(_dragStartCoord, endCoord);
+                    _tavernManager?.TryPlaceTavern(_dragStartCoord, endCoord);
                 }
-                _baconBeaconManager?.ClearPlacementPreview();
+                _tavernManager?.ClearPlacementPreview();
                 return;
             }
 
@@ -791,8 +800,14 @@ namespace KeepersDomain.Input
 
         /// Populates InspectedDescription with whatever's at coord — an
         /// impling if one's standing there, otherwise the tile itself.
+        /// Also drives the wall selection outline (see DungeonGrid.
+        /// SetSelectedWall): cleared up front so every non-wall result
+        /// below (a creature, a non-Rock tile) leaves it cleared, and only
+        /// the Rock-tile branches re-select.
         private void Inspect(Vector2Int coord)
         {
+            _grid.SetSelectedWall(null);
+
             foreach (var impling in ImplingAgent.All)
             {
                 if (_grid.WorldToGrid(impling.Position) == coord)
@@ -852,10 +867,12 @@ namespace KeepersDomain.Input
             var tile = _grid.GetTile(coord);
             if (tile.Type == TileType.Rock && tile.IsBedrock)
             {
+                _grid.SetSelectedWall(coord);
                 _inspectedDescription = $"Bedrock ({coord.x},{coord.y})\nUnminable";
             }
             else if (tile.Type == TileType.Rock)
             {
+                _grid.SetSelectedWall(coord);
                 var kind = tile.IsReinforced ? "Reinforced wall" : "Wall";
                 var queued = tile.IsQueuedForDig ? " (queued: mine)" : tile.IsQueuedForReinforce ? " (queued: reinforce)" : "";
                 _inspectedDescription = $"{kind} ({coord.x},{coord.y}){queued}\nHP: {tile.Hp}/{tile.MaxHp}";
@@ -936,9 +953,11 @@ namespace KeepersDomain.Input
                     {
                         case BuildMode.Mine:
                             _grid.RequestDig(coord);
+                            _grid.SetSelectedWall(coord);
                             break;
                         case BuildMode.Reinforce:
                             _grid.RequestReinforce(coord);
+                            _grid.SetSelectedWall(coord);
                             break;
                         case BuildMode.Construct:
                             _grid.RequestBuild(coord);
@@ -958,12 +977,14 @@ namespace KeepersDomain.Input
                             {
                                 _grid.CancelDig(coord);
                             }
+                            _grid.SetSelectedWall(coord);
                             break;
                         case BuildMode.Reinforce:
                             if (_jobBoard.CancelReinforceJob(coord))
                             {
                                 _grid.CancelReinforce(coord);
                             }
+                            _grid.SetSelectedWall(coord);
                             break;
                         case BuildMode.Construct:
                             if (_jobBoard.CancelBuildJob(coord))

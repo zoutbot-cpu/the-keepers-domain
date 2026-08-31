@@ -1,6 +1,10 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using KeepersDomain.Grid;
+using KeepersDomain.Implings;
+using KeepersDomain.Input;
+using KeepersDomain.Monsters;
 using KeepersDomain.Rooms;
 using KeepersDomain.UI;
 
@@ -25,20 +29,20 @@ namespace KeepersDomain.LevelDesigner
     /// The two fixed-footprint "structure" landmarks the level designer's
     /// Rooms menu can place — unlike Lair/Treasury/etc. (a drag-sized,
     /// RoomId-tagged footprint with no live component behind it — see
-    /// EditorPlaceRoomTile), these reuse the real ChaosCore/Portal
+    /// EditorPlaceRoomTile), these reuse the real ThroneRoom/Portal
     /// components directly (see PlaceStructure), since both are already
     /// self-contained (Initialize just needs a coord + the grid) and
     /// building their platform/staircase visuals from scratch here would
     /// only duplicate that code.
     public enum StructureKind
     {
-        CoreRoom,
+        ThroneRoom,
         PortalRoom
     }
 
     /// One structure placed via the level designer's Rooms menu — see
     /// StructureKind's own header for why this reuses the live
-    /// ChaosCore/Portal components rather than being pure authored data
+    /// ThroneRoom/Portal components rather than being pure authored data
     /// like PlacedCreature/EditorPlaceRoomTile.
     public struct PlacedStructure
     {
@@ -95,17 +99,28 @@ namespace KeepersDomain.LevelDesigner
         private const float OwnerRingDiameter = 0.5f;
         private const float OwnerRingThickness = 0.02f;
 
-        // Matches GameBootstrap's own ChaosCoreRoomHalfSize/
+        // Matches GameBootstrap's own ThroneRoomHalfSize/
         // PortalRoomHalfSize exactly, so a structure placed here looks
         // and sizes identically to the fixed starting one BuildWorld
-        // carves — 5x5 for the Core Room, 3x3 for the Portal Room.
-        private const int CoreRoomHalfSize = 2;
+        // carves — 5x5 for the Throne Room, 3x3 for the Portal Room.
+        private const int ThroneRoomHalfSize = 2;
         private const int PortalRoomHalfSize = 1;
 
         private DungeonGrid _grid;
         private readonly List<LevelDesignerPlayer> _players = new List<LevelDesignerPlayer>();
         private readonly List<PlacedCreature> _creatures = new List<PlacedCreature>();
         private readonly List<PlacedStructure> _structures = new List<PlacedStructure>();
+
+        // The 8 player-buildable room managers (see GameBootstrap.
+        // CreateLevelDesignerRoomManagers), keyed by which Rooms-menu tool
+        // owns each — used by ApplyLevelData to rebuild a saved room's real
+        // decoration instead of DungeonGrid.EditorPlaceRoomTile's bare
+        // placeholder cube. Null only if this session predates that wiring
+        // (shouldn't happen outside old/edge-case call sites) — every
+        // dispatch site below falls back to today's placeholder-tagging
+        // behavior when a lookup misses, so a null/empty dictionary just
+        // means every room loads as a placeholder, not a crash.
+        private Dictionary<RoomDesignTool, IRestorableRoomManager> _roomManagers;
 
         public int MapWidth { get; private set; }
         public int MapHeight { get; private set; }
@@ -115,9 +130,10 @@ namespace KeepersDomain.LevelDesigner
         public IReadOnlyList<PlacedCreature> Creatures => _creatures;
         public IReadOnlyList<PlacedStructure> Structures => _structures;
 
-        public void Initialize(DungeonGrid grid, LevelDesignerProperties properties)
+        public void Initialize(DungeonGrid grid, LevelDesignerProperties properties, Dictionary<RoomDesignTool, IRestorableRoomManager> roomManagers)
         {
             _grid = grid;
+            _roomManagers = roomManagers;
             MapWidth = properties.MapWidth;
             MapHeight = properties.MapHeight;
             Multiplayer = properties.Multiplayer;
@@ -131,9 +147,10 @@ namespace KeepersDomain.LevelDesigner
         /// player roster/map info; restoring the grid's actual tiles and
         /// placed creatures is ApplyLevelData's job, called separately
         /// once this session exists.
-        public void InitializeFromSave(DungeonGrid grid, LevelData data)
+        public void InitializeFromSave(DungeonGrid grid, LevelData data, Dictionary<RoomDesignTool, IRestorableRoomManager> roomManagers)
         {
             _grid = grid;
+            _roomManagers = roomManagers;
             MapWidth = data.MapWidth;
             MapHeight = data.MapHeight;
             Multiplayer = data.Multiplayer;
@@ -191,7 +208,16 @@ namespace KeepersDomain.LevelDesigner
             RefreshGridOwnerColors();
         }
 
-        private void RefreshGridOwnerColors()
+        /// Public so LevelDesignerMenuBar can call this the moment a
+        /// player's color swatch is changed — without it, DungeonGrid's
+        /// cached OwnerColors array (and every already-painted Claimed
+        /// tile's baked-in tint) stays stale until the level is reloaded,
+        /// which re-populates it via InitializeFromSave. Sets
+        /// TintFloorByOwner true every time (harmless if already true) —
+        /// this is the one and only place that opts a grid into Claimed-
+        /// floor owner-tinting at all; ordinary gameplay never calls this,
+        /// so its floor stays untinted regardless of OwnerColors.
+        public void RefreshGridOwnerColors()
         {
             var colors = new Color[_players.Count];
             for (int i = 0; i < _players.Count; i++)
@@ -199,7 +225,9 @@ namespace KeepersDomain.LevelDesigner
                 colors[i] = _players[i].Color;
             }
 
-            _grid.EditorOwnerColors = colors;
+            _grid.OwnerColors = colors;
+            _grid.TintFloorByOwner = true;
+            _grid.RefreshAllVisuals();
         }
 
         /// Places a creature marker — authored level data (see
@@ -211,6 +239,15 @@ namespace KeepersDomain.LevelDesigner
         /// without needing to click each one. ownerId < 0 (no owner
         /// selected) just skips the disc.
         public void PlaceCreature(EditorCreatureKind kind, Vector2Int coord, int ownerId)
+        {
+            var visual = BuildCreatureVisual(kind, coord, ownerId);
+            _creatures.Add(new PlacedCreature { Kind = kind, Coord = coord, OwnerId = ownerId, Visual = visual });
+        }
+
+        /// The actual capsule+ring GameObject build PlaceCreature uses —
+        /// pulled out so SetCreatureOwner (edit mode) can rebuild the same
+        /// visual for a reassigned creature without duplicating this.
+        private GameObject BuildCreatureVisual(EditorCreatureKind kind, Vector2Int coord, int ownerId)
         {
             var worldPos = _grid.GridToWorld(coord);
 
@@ -237,21 +274,104 @@ namespace KeepersDomain.LevelDesigner
             body.GetComponent<Renderer>().material.color = SpeciesColors.TryGetValue(kind, out var color) ? color : Color.white;
             Destroy(body.GetComponent<Collider>());
 
-            _creatures.Add(new PlacedCreature { Kind = kind, Coord = coord, OwnerId = ownerId, Visual = root });
+            return root;
         }
 
-        /// Places a Core Room or Portal Room — unlike an ordinary room tool
+        /// Finds the index (into _creatures) of a placed creature at
+        /// coord, if any — used by the Level Designer's edit mode to
+        /// select/reassign an already-placed creature.
+        public bool TryFindCreatureAt(Vector2Int coord, out int index)
+        {
+            for (int i = 0; i < _creatures.Count; i++)
+            {
+                if (_creatures[i].Coord == coord)
+                {
+                    index = i;
+                    return true;
+                }
+            }
+
+            index = -1;
+            return false;
+        }
+
+        /// Reassigns the creature at index to a new owner, rebuilding its
+        /// visual (the owner-ring disc) via the same BuildCreatureVisual
+        /// PlaceCreature itself uses, so the two always stay consistent.
+        public void SetCreatureOwner(int index, int ownerId)
+        {
+            var creature = _creatures[index];
+            if (creature.Visual != null)
+            {
+                Destroy(creature.Visual);
+            }
+
+            creature.OwnerId = ownerId;
+            creature.Visual = BuildCreatureVisual(creature.Kind, creature.Coord, ownerId);
+            _creatures[index] = creature;
+        }
+
+        /// Scans every live creature agent currently in the scene (each
+        /// species' own static All registry — ImplingAgent.All,
+        /// GremlinAgent.All, ...) and adds one PlaceCreature marker per
+        /// instance, so a snapshot taken via BuildLevelData (see
+        /// GameBootstrap.SaveStartingLevelAsLevel1) actually captures
+        /// what's alive on the map instead of only whatever was placed
+        /// through this session's own interactive tool. No agent carries
+        /// an owner/player field today (ownership isn't modeled on
+        /// monster/impling agents at all yet), so every captured creature
+        /// is recorded as OwnerId 0 — the same single-player placeholder
+        /// SaveStartingLevelAsLevel1 already uses for the Throne Room/Portal Room
+        /// structures. Coord is derived from each agent's world Position
+        /// (none of them expose a grid coord directly) via
+        /// _grid.WorldToGrid.
+        public void CaptureLiveCreatures()
+        {
+            const int ownerId = 0;
+
+            foreach (var agent in ImplingAgent.All)
+            {
+                PlaceCreature(EditorCreatureKind.Imp, _grid.WorldToGrid(agent.Position), ownerId);
+            }
+
+            foreach (var agent in GremlinAgent.All)
+            {
+                PlaceCreature(EditorCreatureKind.Gremlin, _grid.WorldToGrid(agent.Position), ownerId);
+            }
+
+            foreach (var agent in WarlockAgent.All)
+            {
+                PlaceCreature(EditorCreatureKind.Warlock, _grid.WorldToGrid(agent.Position), ownerId);
+            }
+
+            foreach (var agent in MazeRattlerAgent.All)
+            {
+                PlaceCreature(EditorCreatureKind.MazeRattler, _grid.WorldToGrid(agent.Position), ownerId);
+            }
+
+            foreach (var agent in BeanCounterAgent.All)
+            {
+                PlaceCreature(EditorCreatureKind.BeanCounter, _grid.WorldToGrid(agent.Position), ownerId);
+            }
+
+            foreach (var agent in ElfAgent.All)
+            {
+                PlaceCreature(EditorCreatureKind.Elf, _grid.WorldToGrid(agent.Position), ownerId);
+            }
+        }
+
+        /// Places a Throne Room or Portal Room — unlike an ordinary room tool
         /// (see EditorPlaceRoomTile), this carves a fixed-size footprint
         /// (matching GameBootstrap's own starting layout) as Claimed floor
         /// owned by ownerId (or Unclaimed if no owner is selected, same
         /// fallback the Claimed Tile tool uses), then drops the real
-        /// ChaosCore/Portal component on top to build its actual
+        /// ThroneRoom/Portal component on top to build its actual
         /// platform/staircase visual — see StructureKind's own header for
         /// why this reuses the live components instead of authoring plain
         /// tile data.
         public void PlaceStructure(StructureKind kind, Vector2Int center, int ownerId)
         {
-            var halfSize = kind == StructureKind.CoreRoom ? CoreRoomHalfSize : PortalRoomHalfSize;
+            var halfSize = kind == StructureKind.ThroneRoom ? ThroneRoomHalfSize : PortalRoomHalfSize;
             var claimed = ownerId >= 0 && ownerId < _players.Count;
 
             for (int x = -halfSize; x <= halfSize; x++)
@@ -265,10 +385,10 @@ namespace KeepersDomain.LevelDesigner
             var structureGO = new GameObject($"{kind}_{center.x}_{center.y}");
             structureGO.transform.SetParent(transform, false);
 
-            if (kind == StructureKind.CoreRoom)
+            if (kind == StructureKind.ThroneRoom)
             {
-                var chaosCore = structureGO.AddComponent<ChaosCore>();
-                chaosCore.Initialize(center, _grid);
+                var throneRoom = structureGO.AddComponent<ThroneRoom>();
+                throneRoom.Initialize(center, _grid);
             }
             else
             {
@@ -277,6 +397,53 @@ namespace KeepersDomain.LevelDesigner
             }
 
             _structures.Add(new PlacedStructure { Kind = kind, Coord = center, OwnerId = ownerId, Visual = structureGO });
+        }
+
+        /// Finds the index (into _structures) of a placed structure at
+        /// coord, if any — used by the Level Designer's edit mode to
+        /// select/reassign an already-placed Core/Portal Room.
+        public bool TryFindStructureAt(Vector2Int coord, out int index)
+        {
+            for (int i = 0; i < _structures.Count; i++)
+            {
+                if (_structures[i].Coord == coord)
+                {
+                    index = i;
+                    return true;
+                }
+            }
+
+            index = -1;
+            return false;
+        }
+
+        /// Reassigns the structure at index to a new owner — re-claims
+        /// its whole footprint (same halfSize/EditorPaintFloor loop
+        /// PlaceStructure itself uses) so the floor underneath stays
+        /// consistent with the structure's own recorded OwnerId. ThroneRoom/
+        /// Portal's own visual doesn't currently re-tint itself after
+        /// Initialize runs (ThroneRoom.PlayerColor is a bare field, only
+        /// read once while building its throne — see its own comment), so
+        /// a reassigned Throne Room's orb keeps showing whatever color it
+        /// was built with until the level reloads — a real fix needs
+        /// ThroneRoom/Portal to support rebuilding their visual post-hoc,
+        /// out of scope here.
+        public void SetStructureOwner(int index, int ownerId)
+        {
+            var structure = _structures[index];
+            var halfSize = structure.Kind == StructureKind.ThroneRoom ? ThroneRoomHalfSize : PortalRoomHalfSize;
+            var claimed = ownerId >= 0 && ownerId < _players.Count;
+
+            for (int x = -halfSize; x <= halfSize; x++)
+            {
+                for (int y = -halfSize; y <= halfSize; y++)
+                {
+                    _grid.EditorPaintFloor(structure.Coord + new Vector2Int(x, y), claimed, ownerId);
+                }
+            }
+
+            structure.OwnerId = ownerId;
+            _structures[index] = structure;
         }
 
         /// Snapshots the current map/players/creatures into a LevelData
@@ -368,10 +535,21 @@ namespace KeepersDomain.LevelDesigner
         /// get rebuilt correctly too instead of just the raw flags.
         public void ApplyLevelData(LevelData data)
         {
+            // Room tiles are deferred rather than tagged immediately (see
+            // RestoreTile) — collected here, grouped by their saved
+            // RoomId, so RestoreRooms can rebuild each one's real
+            // decoration in a single call once every tile's ownership is
+            // painted, instead of the bare placeholder cube every room
+            // used to load as.
+            var roomFootprints = new Dictionary<string, List<Vector2Int>>();
+            var roomOwners = new Dictionary<string, int>();
+
             foreach (var tileData in data.Tiles)
             {
-                RestoreTile(new Vector2Int(tileData.X, tileData.Y), tileData);
+                RestoreTile(new Vector2Int(tileData.X, tileData.Y), tileData, roomFootprints, roomOwners);
             }
+
+            RestoreRooms(roomFootprints, roomOwners);
 
             foreach (var structureData in data.Structures)
             {
@@ -388,7 +566,7 @@ namespace KeepersDomain.LevelDesigner
             }
         }
 
-        private void RestoreTile(Vector2Int coord, LevelTileData data)
+        private void RestoreTile(Vector2Int coord, LevelTileData data, Dictionary<string, List<Vector2Int>> roomFootprints, Dictionary<string, int> roomOwners)
         {
             switch (data.Type)
             {
@@ -402,12 +580,13 @@ namespace KeepersDomain.LevelDesigner
                     _grid.EditorPaintFloor(coord, data.Ownership == TileOwnership.Claimed, data.OwnerId);
                     if (!string.IsNullOrEmpty(data.RoomId))
                     {
-                        // EditorPlaceRoomTile only forces Unclaimed on a
-                        // tile that isn't already Floor (see its own
-                        // header) — since EditorPaintFloor just made it
-                        // Floor with the exact saved ownership, that
-                        // ownership survives the room tag being applied.
-                        _grid.EditorPlaceRoomTile(coord, data.RoomId);
+                        if (!roomFootprints.TryGetValue(data.RoomId, out var footprint))
+                        {
+                            footprint = new List<Vector2Int>();
+                            roomFootprints[data.RoomId] = footprint;
+                            roomOwners[data.RoomId] = data.OwnerId;
+                        }
+                        footprint.Add(coord);
                     }
                     break;
                 case TileType.Rock:
@@ -417,7 +596,7 @@ namespace KeepersDomain.LevelDesigner
                     }
                     else if (data.IsReinforced)
                     {
-                        _grid.EditorPaintWall(coord, EditorWallVariant.Reinforced);
+                        _grid.EditorPaintWall(coord, EditorWallVariant.Reinforced, data.OwnerId);
                     }
                     else if (data.WallResourceType != WallResourceType.None)
                     {
@@ -427,19 +606,19 @@ namespace KeepersDomain.LevelDesigner
             }
         }
 
+        /// Rebuilds every saved room's real decoration from its grouped
+        /// tile footprint (see RestoreTile/ApplyLevelData) — thin wrapper
+        /// over the shared RoomReconstruction.RestoreRooms (also used by
+        /// GameBootstrap's "Start Game loads level1" gameplay path), so
+        /// the two don't drift out of sync with separate copies.
+        private void RestoreRooms(Dictionary<string, List<Vector2Int>> roomFootprints, Dictionary<string, int> roomOwners)
+        {
+            RoomReconstruction.RestoreRooms(_grid, roomFootprints, roomOwners, _roomManagers);
+        }
+
         private static EditorWallVariant ToEditorWallVariant(WallResourceType wallResourceType)
         {
-            switch (wallResourceType)
-            {
-                case WallResourceType.GoldWall:
-                    return EditorWallVariant.GoldWall;
-                case WallResourceType.RegeneratingGoldWall:
-                    return EditorWallVariant.RegeneratingGoldWall;
-                case WallResourceType.ManaCrystalWall:
-                    return EditorWallVariant.ManaCrystalWall;
-                default:
-                    return EditorWallVariant.Plain;
-            }
+            return RoomReconstruction.ToEditorWallVariant(wallResourceType);
         }
     }
 }
