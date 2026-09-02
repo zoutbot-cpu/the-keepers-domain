@@ -40,9 +40,35 @@ Every creature (Imps included) gets a random name at spawn, kept for its whole l
 - One of the 50 Warlock names is "Tim," mixed in among the grandiose ones, per request.
 - Shown in the Creatures debug menu and in Inspect mode (see below) in place of the old generic "Impling#3"/"Gremlin#3" labels.
 
+### Ownership
+Every live creature belongs to a player — `Creature.OwnerId`, the same int player index `TileState.OwnerId` uses (0 is the implicit single player in ordinary gameplay; `DungeonGrid.OwnerColors` maps it to a color). Set once from each agent's `Initialize` via `Creature.SetOwner` (the agent builds its `Creature` in `Awake`, before the owner is known, so it can't be a constructor argument).
+- Recruits (Portal pool), Imp summons, and Conversion Class outcomes all default to owner 0 — the local Keeper. A converted/transformed prisoner "joins the domain," i.e. becomes the Keeper's.
+- Save/load round-trips it: `LevelCreatureData.OwnerId` is written from `Creature.OwnerId` (`LevelDesignerSession.CaptureLiveCreatures`) and restored into the live agent (`GameBootstrap.RestoreWorldCreatures`), instead of the old hard-coded 0.
+- `DungeonGrid` gameplay actions now stamp `TileState.OwnerId`: `ClaimTile(coord, ownerId)`, `CarveRoom`/`CarveRect` (ownerId 0 for fresh geometry), `CompleteReinforce(coord, ownerId)` (wall-orb color), `TryAssignBridgeRoom(coord, roomId, ownerId)`. Before this a live-claimed tile kept `OwnerId` at its Rock default (`-1`) and never tinted even with `TintFloorByOwner` on.
+
+#### Per-keeper systems (`KeeperContext`)
+Each player in the loaded roster gets a full **`KeeperContext`** (`Assets/Scripts/Core/KeeperContext.cs`) — its own `BuilderJobBoard` (task lists), `Portal` + recruit pools, `ThroneRoom` (mana, seeded from `LevelPlayerData.StartingMana`), the nine room managers (`TreasuryManager` holds that keeper's gold), and the six creature spawners. `GameBootstrap.BuildKeeperContext` builds one; `BuildWorld` builds `KeeperContext[]` (exactly one for a freshly generated map — behaves identically to before) and stores it as `KeeperContext.All` (reset on `BuildWorld` entry and in `ReturnToMainMenu`).
+- **Routing**: the shared `DungeonGrid`'s dig/reinforce/build/claim/room-damage events carry the acting owner; each `BuilderJobBoard` early-returns on a mismatch. Territory growth (`BordersClaimedTile(coord, ownerId)`), the auto-reinforce sweep, and `CanBuildRoomOn(coord, ownerId)` are all per-keeper. roomIds are minted in disjoint bands (`ownerId * DungeonGrid.RoomIdOwnerStride`) so one keeper selling a room can't tear down another's tiles. `LairManager.TrySellRoom` rejects tiles that aren't its keeper's; hostile cross-owner room destruction (an unhappy creature) routes through `KeeperContext.TrySellRoomAt` to the owning keeper's manager. `ConversionClassManager` outcomes join the captor.
+- Spawner population caps (`MeetsJoinRequirements`) count only that keeper's creatures via `<Species>Agent.CountForOwner(ownerId)`.
+- No AI drives non-local keepers yet — their autonomous creature agents just run off their own set. This is the systems half of "Multiplayer — Basic".
+
+#### Local player + debug switcher
+Input (`TileInteractionController`), the grab hand (`MinionGrabController`), the HUD (`BottomMenuBar`), and the camera are all built once and bound to the **local player (owner 0)** via `LocalPlayerController`. Grab and Sell are restricted to your own creatures/rooms. On a multi-player level, `BottomMenuBar` shows a **player switcher** (P1..PN, also number keys 1-9) — `LocalPlayerController.SetActivePlayer` aborts any in-progress gesture, repoints all four at that keeper's `KeeperContext`, and recenters the camera on its Throne Room (`IsoCameraController.CenterOn`). Gameplay stays single-player; the switcher is a testing aid.
+- The view opens on the **local player's Throne Room**, not the map's geometric middle: `FindStructureCoordOrDefault` resolves each keeper's `StructureKind.ThroneRoom`/`PortalRoom` by `preferredOwnerId` (falling back to first-of-kind, then a spread-out per-index coord), and `CreateIsoCamera` takes owner 0's as its `focusGroundPoint`.
+- Owner colors: `BuildWorld` populates `grid.OwnerColors` from the roster palette and sets `TintFloorByOwner = true` when `specs.Length > 1`, mirroring `LevelDesignerSession.RefreshGridOwnerColors`. A single-player game keeps the plain green `PlayerColor` with tinting off.
+- Pan bounds are always anchored to the **map center** (`mapCenterCamPos ± panMargin`), never the opening position, so a Throne-Room-focused start still reaches every edge. `panMargin` is `22.5f` for a freshly generated map (unchanged) but scales to `max(W, H) * CellSize / 2 + 10` when a level is loaded — a saved level can be up to 256 tiles per side, and the old fixed `22.5f` left most of a large map unreachable.
+
+#### Health / owner ring
+A flat "donut" at each creature's feet (`CreatureHealthRing`, built from primitive cubes like `DungeonGrid.BuildHolyGroundStar`) that doubles as the ownership marker and the health bar:
+- 8 equal segments, each worth `MaxHP / 8`. `ceil(HP / MaxHP * 8)` segments are lit.
+- Dark-gray track always visible underneath; lit segments fill with the owner's color (`DungeonGrid.GetOwnerColor`).
+- Nothing damages a non-attacking creature yet (no combat), so today it always reads as full, in the owner's color — it's the ownership indicator now and the health bar once combat exists.
+- The ring GameObject isn't parented to the (variably-scaled) capsule — it follows the creature's X/Z at a fixed floor Y each frame so it stays flat on the ground.
+
 ### Inspecting a creature
 View mode's tap-to-inspect (see `TileInteractionController.Inspect`) shows every stat/property a creature has, not just a name and position:
 - Name, current task/state, position.
+- Owner (`Player {OwnerId + 1}`).
 - Full stat block via `Creature.DescribeStats()` — level, exp, HP/regen, Mana/regen, Strength, Movespeed, Attackspeed, Intelligence, Craftmanship, Armor, Lifesteal. Same method for every creature type, so this always stays in sync with whatever the Core stats section (above) actually contains.
 - Imp-specific: carried Gold/Mana Crystals/Slimes (`ImplingInventory`).
 - Gremlin/Warlock-specific: Hunger value (+ "(hungry)" tag), wage + "(unpaid!)" tag, Happiness value and tier.

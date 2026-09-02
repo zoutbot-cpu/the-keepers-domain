@@ -110,6 +110,7 @@ namespace KeepersDomain.Rooms
         private WarlockSpawner _warlockSpawner;
         private MazeRattlerSpawner _mazeRattlerSpawner;
         private ElfSpawner _elfSpawner;
+        private int _ownerId;
 
         private int _nextRoomId;
         private readonly Dictionary<string, List<Vector2Int>> _roomTiles = new Dictionary<string, List<Vector2Int>>();
@@ -120,7 +121,7 @@ namespace KeepersDomain.Rooms
         private readonly Dictionary<string, List<Vector2Int>> _benchAdjacentTiles = new Dictionary<string, List<Vector2Int>>();
         private readonly List<GameObject> _previewMarkers = new List<GameObject>();
 
-        public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager, JailManager jailManager, GremlinSpawner gremlinSpawner, WarlockSpawner warlockSpawner, MazeRattlerSpawner mazeRattlerSpawner, ElfSpawner elfSpawner)
+        public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager, JailManager jailManager, GremlinSpawner gremlinSpawner, WarlockSpawner warlockSpawner, MazeRattlerSpawner mazeRattlerSpawner, ElfSpawner elfSpawner, int ownerId = 0)
         {
             _grid = grid;
             _treasuryManager = treasuryManager;
@@ -129,6 +130,8 @@ namespace KeepersDomain.Rooms
             _warlockSpawner = warlockSpawner;
             _mazeRattlerSpawner = mazeRattlerSpawner;
             _elfSpawner = elfSpawner;
+            _ownerId = ownerId;
+            _nextRoomId = ownerId * DungeonGrid.RoomIdOwnerStride;
             lairManager.RoomSold += OnRoomSold;
         }
 
@@ -568,7 +571,7 @@ namespace KeepersDomain.Rooms
             }
             else
             {
-                _elfSpawner?.SpawnElf(pitCoord);
+                _elfSpawner?.SpawnElf(pitCoord, _ownerId);
                 GameplayLog.Write($"{name} broke down into a weak, worthless Elf at ({pitCoord.x},{pitCoord.y})");
             }
             return true;
@@ -591,23 +594,27 @@ namespace KeepersDomain.Rooms
             return DefaultJoinChance;
         }
 
+        /// A converted/transformed prisoner "joins the domain," i.e. becomes
+        /// this Conversion Class's keeper — the captor, not whoever the
+        /// prisoner used to belong to (the jail doesn't track that). Every
+        /// SpawnX here (and the Elf-failure spawn above) takes _ownerId.
         private void SpawnByKind(string creatureKind, Vector2Int coord)
         {
             if (creatureKind == GremlinAgent.CreatureKind)
             {
-                _gremlinSpawner?.SpawnGremlin(coord);
+                _gremlinSpawner?.SpawnGremlin(coord, _ownerId);
             }
             else if (creatureKind == WarlockAgent.CreatureKind)
             {
-                _warlockSpawner?.SpawnWarlock(coord);
+                _warlockSpawner?.SpawnWarlock(coord, _ownerId);
             }
             else if (creatureKind == MazeRattlerAgent.CreatureKind)
             {
-                _mazeRattlerSpawner?.SpawnMazeRattler(coord);
+                _mazeRattlerSpawner?.SpawnMazeRattler(coord, _ownerId);
             }
             else if (creatureKind == ElfAgent.CreatureKind)
             {
-                _elfSpawner?.SpawnElf(coord);
+                _elfSpawner?.SpawnElf(coord, _ownerId);
             }
         }
 
@@ -693,7 +700,7 @@ namespace KeepersDomain.Rooms
         {
             foreach (var coord in footprint)
             {
-                if (!_grid.CanBuildRoomOn(coord))
+                if (!_grid.CanBuildRoomOn(coord, _ownerId))
                 {
                     return false;
                 }

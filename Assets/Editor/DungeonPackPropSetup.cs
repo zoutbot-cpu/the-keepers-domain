@@ -10,20 +10,37 @@ namespace KeepersDomain.EditorTools
     /// per-room decoration meshes that live alongside their own room's
     /// other art instead (Assets/Art/DungeonPack/Lair/NestBed,
     /// .../TrainingRoom/TrainingDummy, .../Library/BookcaseModule,
-    /// .../Tavern/BaconBeaconMachine, .../Tavern/InnBar). Unlike the wall/
-    /// floor sets, these ship as flat per-slot Kd colors with no diffuse
-    /// textures at all (checked directly against each .mtl), so this
-    /// builds one solid-color URP material per slot instead of wiring up a
-    /// texture. Wraps each source mesh into a prefab and drops it under
-    /// Resources so the owning script can load it with no scene wiring —
-    /// see ThroneRoom, LairManager, TrainingRoomManager, LibraryManager,
-    /// TavernManager.
+    /// .../Tavern/BaconBeaconMachine, .../Tavern/InnBar,
+    /// .../SlimeHatchery/ChickenCoop, .../Jail/WallInside,
+    /// .../Jail/FenceHalf, .../Jail/Gate, .../Jail/StairsWood,
+    /// .../Bridge/EdgePiece, .../Bridge/MiddlePiece,
+    /// .../Bridge/Corner, .../Bridge/TJunction, .../Bridge/FourWay,
+    /// .../Treasury/GoldLevel1-5). Almost all
+    /// of these ship as flat per-slot Kd colors with no diffuse textures
+    /// at all (checked directly against each .mtl), so this builds one
+    /// solid-color URP material per slot by default instead of wiring up
+    /// a texture — DiffuseName opts a slot into a real textured material
+    /// instead (same _BaseMap-only build DungeonPackWallSetup uses for
+    /// its own wall blocks), needed for Jail's retaining wall, the one
+    /// mesh in this whole set that ships a real diffuse map. Wraps each
+    /// source mesh into a prefab and drops it under Resources so the
+    /// owning script can load it with no scene wiring — see ThroneRoom,
+    /// LairManager, TrainingRoomManager, LibraryManager, TavernManager,
+    /// SlimeHatcheryManager, JailManager, TreasuryManager, BridgeManager.
     public static class DungeonPackPropSetup
     {
         private class MaterialSpec
         {
             public string SourceMaterialName; // matches Unity's auto-named material for that .mtl slot (materialName: 0)
             public Color Color;
+
+            // Null for every flat-colored slot (the overwhelming majority
+            // of this set) — set only for a slot whose .mtl carries a real
+            // map_Kd (just Jail's wall_inside today). When set, Color is
+            // ignored and the slot's material gets this texture as its
+            // _BaseMap instead of a flat _BaseColor, loaded from the same
+            // SourceDir the mesh itself lives in.
+            public string DiffuseName;
         }
 
         private class PropVariant
@@ -43,6 +60,25 @@ namespace KeepersDomain.EditorTools
             // existing entry's behavior unchanged.
             public bool HasAuthoredNormals;
         }
+
+        // Kd values copied directly from treasury_gold_1.mtl — byte-for-
+        // byte identical across all 5 gold_level_N.mtl files (a shared
+        // jewel/gold/sack/chest palette: purple/blue/green/red gemstones,
+        // two gold shades, dark wood/cloth/metal), so one shared spec set
+        // covers every TreasuryManager gold-pile tier instead of
+        // repeating it 5 times.
+        private static readonly MaterialSpec[] TreasuryGoldMaterials =
+        {
+            new MaterialSpec { SourceMaterialName = "material_0", Color = new Color(0.54901961f, 0.23529412f, 0.66666667f) },
+            new MaterialSpec { SourceMaterialName = "material_1", Color = new Color(0.13725490f, 0.31372549f, 0.74509804f) },
+            new MaterialSpec { SourceMaterialName = "material_2", Color = new Color(0.11764706f, 0.58823529f, 0.35294118f) },
+            new MaterialSpec { SourceMaterialName = "material_3", Color = new Color(0.74509804f, 0.11764706f, 0.15686275f) },
+            new MaterialSpec { SourceMaterialName = "material_4", Color = new Color(0.96078431f, 0.82352941f, 0.43137255f) },
+            new MaterialSpec { SourceMaterialName = "material_5", Color = new Color(0.87058824f, 0.71372549f, 0.27450980f) },
+            new MaterialSpec { SourceMaterialName = "material_6", Color = new Color(0.24313725f, 0.15686275f, 0.08627451f) },
+            new MaterialSpec { SourceMaterialName = "material_7", Color = new Color(0.27450980f, 0.27450980f, 0.29803922f) },
+            new MaterialSpec { SourceMaterialName = "material_8", Color = new Color(0.37647059f, 0.24313725f, 0.13333333f) },
+        };
 
         private static readonly PropVariant[] Variants =
         {
@@ -233,7 +269,255 @@ namespace KeepersDomain.EditorTools
                     new MaterialSpec { SourceMaterialName = "material_12", Color = new Color(0.92156863f, 0.88235294f, 0.78431373f) },
                 },
             },
+            new PropVariant
+            {
+                // Kd values copied directly from chicken_coop.mtl — a
+                // wood-plank coop with a dark roof, no texture. Roughly a
+                // single-tile footprint already (~1.08 x 1.06 unscaled),
+                // matching SlimeHatcheryManager's single-tile structure
+                // slot — replaces the old primitive box+roof there, see
+                // BuildCoopVisual. Re-exported once already (a user
+                // correction in Blender, re-copied from Downloads/
+                // dungeon_pack/slime_hatchery/chicken_coop/) — that
+                // re-export carries real authored normals unlike the rest
+                // of the pack (see HasAuthoredNormals, same "Blender
+                // 5.2.0 LTS" .mtl header Portal.obj has), so re-copy with
+                // this flag intact if it's updated again.
+                SourceDir = "Assets/Art/DungeonPack/SlimeHatchery/ChickenCoop",
+                ObjName = "chicken_coop",
+                PrefabPath = "Assets/Resources/Dungeon/Prop_ChickenCoop.prefab",
+                MaterialFolder = "Assets/Art/DungeonPack/SlimeHatchery/ChickenCoop/Materials",
+                HasAuthoredNormals = true,
+                Materials = new[]
+                {
+                    new MaterialSpec { SourceMaterialName = "material_0", Color = new Color(0.28235294f, 0.18039216f, 0.10196078f) },
+                    new MaterialSpec { SourceMaterialName = "material_1", Color = new Color(0.46274510f, 0.31372549f, 0.17254902f) },
+                    new MaterialSpec { SourceMaterialName = "material_2", Color = new Color(0.09411765f, 0.06274510f, 0.03921569f) },
+                    new MaterialSpec { SourceMaterialName = "material_3", Color = new Color(0.23529412f, 0.24313725f, 0.22745098f) },
+                    new MaterialSpec { SourceMaterialName = "material_4", Color = new Color(0.15686275f, 0.16470588f, 0.15686275f) },
+                    new MaterialSpec { SourceMaterialName = "material_5", Color = new Color(0.37647059f, 0.12549020f, 0.10980392f) },
+                    new MaterialSpec { SourceMaterialName = "material_6", Color = new Color(0.50196078f, 0.18039216f, 0.15686275f) },
+                    new MaterialSpec { SourceMaterialName = "material_7", Color = new Color(0.58823529f, 0.42352941f, 0.24313725f) },
+                    new MaterialSpec { SourceMaterialName = "material_8", Color = new Color(0.77647059f, 0.65882353f, 0.36078431f) },
+                },
+            },
+            new PropVariant
+            {
+                // Jail's sunken-pit retaining wall (1w x 2h, pivot at the
+                // TOP so Y=0 sits at ground level and the mesh extends
+                // down 2 units to the pit floor — matches JailManager's
+                // own RimWallDepth exactly, no scale correction needed).
+                // The pack's one textured prop (see MaterialSpec.
+                // DiffuseName) — a single grimy stone slot, no flat Kd.
+                // Replaces BuildRimWallVisual's plain dark box, see
+                // JailManager.
+                SourceDir = "Assets/Art/DungeonPack/Jail/WallInside",
+                ObjName = "jail_wall_inside",
+                PrefabPath = "Assets/Resources/Dungeon/Prop_JailWallInside.prefab",
+                MaterialFolder = "Assets/Art/DungeonPack/Jail/WallInside/Materials",
+                Materials = new[]
+                {
+                    new MaterialSpec { SourceMaterialName = "material_0", DiffuseName = "jail_wall_inside_diffuse" },
+                },
+            },
+            new PropVariant
+            {
+                // Kd values copied directly from jail_fence_half.mtl —
+                // three wood-brown shades, no texture. A perimeter rail
+                // (~0.95w x 1h, pivot at the bottom/ground level), placed
+                // along every pit rim edge except the gate one — replaces
+                // BuildFenceRailVisual's plain gray box, see JailManager.
+                SourceDir = "Assets/Art/DungeonPack/Jail/FenceHalf",
+                ObjName = "jail_fence_half",
+                PrefabPath = "Assets/Resources/Dungeon/Prop_JailFenceHalf.prefab",
+                MaterialFolder = "Assets/Art/DungeonPack/Jail/FenceHalf/Materials",
+                Materials = new[]
+                {
+                    new MaterialSpec { SourceMaterialName = "material_0", Color = new Color(0.22745098f, 0.14901961f, 0.08627451f) },
+                    new MaterialSpec { SourceMaterialName = "material_1", Color = new Color(0.36862745f, 0.24313725f, 0.13333333f) },
+                    new MaterialSpec { SourceMaterialName = "material_2", Color = new Color(0.47843137f, 0.32941176f, 0.18823529f) },
+                },
+            },
+            new PropVariant
+            {
+                // Kd values copied directly from jail_gate.mtl — dark
+                // iron-gray bars plus one wood-brown frame accent, no
+                // texture. The barred entrance topper (1w x 2h, pivot at
+                // the bottom/ground level) — replaces BuildGatePostsVisual's
+                // two-post fallback, see JailManager.
+                SourceDir = "Assets/Art/DungeonPack/Jail/Gate",
+                ObjName = "jail_gate",
+                PrefabPath = "Assets/Resources/Dungeon/Prop_JailGate.prefab",
+                MaterialFolder = "Assets/Art/DungeonPack/Jail/Gate/Materials",
+                Materials = new[]
+                {
+                    new MaterialSpec { SourceMaterialName = "material_0", Color = new Color(0.14117647f, 0.14117647f, 0.15686275f) },
+                    new MaterialSpec { SourceMaterialName = "material_1", Color = new Color(0.25882353f, 0.25882353f, 0.28235294f) },
+                    new MaterialSpec { SourceMaterialName = "material_2", Color = new Color(0.38431373f, 0.38431373f, 0.40784314f) },
+                    new MaterialSpec { SourceMaterialName = "material_3", Color = new Color(0.43137255f, 0.25882353f, 0.14117647f) },
+                },
+            },
+            new PropVariant
+            {
+                // Kd values copied directly from jail_stairs_wood.mtl —
+                // three wood-brown shades, no texture. Descends from
+                // ground level (pivot near Y=0) down through the full
+                // 2-unit pit drop over a ~1.6 unit run — replaces
+                // BuildStaircaseVisual's 3-cube fallback, see JailManager.
+                // Re-exported once already (a user correction in Blender,
+                // re-copied from Downloads/dungeon_pack/jail/stairs_wood/)
+                // — that re-export carries real authored normals unlike
+                // the rest of the pack (see HasAuthoredNormals, same
+                // "Blender 5.2.0 LTS" .mtl header Portal.obj has), so
+                // re-copy with this flag intact if it's updated again.
+                SourceDir = "Assets/Art/DungeonPack/Jail/StairsWood",
+                ObjName = "jail_stairs_wood",
+                PrefabPath = "Assets/Resources/Dungeon/Prop_JailStairsWood.prefab",
+                MaterialFolder = "Assets/Art/DungeonPack/Jail/StairsWood/Materials",
+                HasAuthoredNormals = true,
+                Materials = new[]
+                {
+                    new MaterialSpec { SourceMaterialName = "material_0", Color = new Color(0.36862745f, 0.24313725f, 0.13333333f) },
+                    new MaterialSpec { SourceMaterialName = "material_1", Color = new Color(0.22745098f, 0.14901961f, 0.08627451f) },
+                    new MaterialSpec { SourceMaterialName = "material_2", Color = new Color(0.47843137f, 0.32941176f, 0.18823529f) },
+                },
+            },
+            new PropVariant
+            {
+                // Kd values copied directly from bridge_edge.mtl — a
+                // 4-shade wood-plank palette (deck / rail / dark frame /
+                // light trim), no texture. Ships real authored normals
+                // (its .mtl header is "Blender 5.2.0 LTS", same as
+                // Portal / chicken_coop / jail_stairs — see
+                // HasAuthoredNormals). The bridge's land-side end: a
+                // landing flange (local -Z, overhanging to z≈-0.61 onto
+                // the adjacent land tile) + anchor stakes on one side,
+                // hanging trestle legs on the other. Deck sits at local
+                // y=0 — BridgeManager places it at FloorSurfaceY and
+                // rotates local -Z to face the claimed land tile it
+                // touches. See BRIDGE_README.txt / BridgeManager.
+                SourceDir = "Assets/Art/DungeonPack/Bridge/EdgePiece",
+                ObjName = "bridge_edge",
+                PrefabPath = "Assets/Resources/Dungeon/Prop_BridgeEdge.prefab",
+                MaterialFolder = "Assets/Art/DungeonPack/Bridge/EdgePiece/Materials",
+                HasAuthoredNormals = true,
+                Materials = new[]
+                {
+                    new MaterialSpec { SourceMaterialName = "material_0", Color = new Color(0.39215686f, 0.26666667f, 0.14901961f) },
+                    new MaterialSpec { SourceMaterialName = "material_1", Color = new Color(0.50980392f, 0.36078431f, 0.21176471f) },
+                    new MaterialSpec { SourceMaterialName = "material_2", Color = new Color(0.22745098f, 0.14901961f, 0.08627451f) },
+                    new MaterialSpec { SourceMaterialName = "material_3", Color = new Color(0.58823529f, 0.47058824f, 0.27450980f) },
+                },
+            },
+            new PropVariant
+            {
+                // Same 4-shade wood palette as the edge piece (byte-for-
+                // byte identical Kd values — the source .mtl's own
+                // "material_N.001" dedup suffixes are stripped back to
+                // "material_N" on copy so both pieces share one slot
+                // naming). Both ends are the edge piece's "span side"
+                // profile (deck + hanging trestle legs); chained between
+                // the two edge pieces to cross wider gaps. BridgeManager
+                // places it on a bridge tile with no claimed land along
+                // its run axis, rotated to that axis. See BRIDGE_README.txt.
+                SourceDir = "Assets/Art/DungeonPack/Bridge/MiddlePiece",
+                ObjName = "bridge_middle",
+                PrefabPath = "Assets/Resources/Dungeon/Prop_BridgeMiddle.prefab",
+                MaterialFolder = "Assets/Art/DungeonPack/Bridge/MiddlePiece/Materials",
+                HasAuthoredNormals = true,
+                Materials = new[]
+                {
+                    new MaterialSpec { SourceMaterialName = "material_0", Color = new Color(0.39215686f, 0.26666667f, 0.14901961f) },
+                    new MaterialSpec { SourceMaterialName = "material_1", Color = new Color(0.50980392f, 0.36078431f, 0.21176471f) },
+                    new MaterialSpec { SourceMaterialName = "material_2", Color = new Color(0.22745098f, 0.14901961f, 0.08627451f) },
+                    new MaterialSpec { SourceMaterialName = "material_3", Color = new Color(0.58823529f, 0.47058824f, 0.27450980f) },
+                },
+            },
+            new PropVariant
+            {
+                // Same wood palette as the other bridge pieces. Deck + rope
+                // rails bending 90 degrees — the raw mesh is open on -X / +Z
+                // and railed shut on +X / -Z, so (after Unity's OBJ import
+                // negates X) BridgeManager treats it as open on +X / +Z and
+                // rotates it to whichever right-angle pair of sides carries
+                // the two connecting bridge arms. See BridgeManager.
+                SourceDir = "Assets/Art/DungeonPack/Bridge/Corner",
+                ObjName = "bridge_corner",
+                PrefabPath = "Assets/Resources/Dungeon/Prop_BridgeCorner.prefab",
+                MaterialFolder = "Assets/Art/DungeonPack/Bridge/Corner/Materials",
+                HasAuthoredNormals = true,
+                Materials = new[]
+                {
+                    new MaterialSpec { SourceMaterialName = "material_0", Color = new Color(0.39215686f, 0.26666667f, 0.14901961f) },
+                    new MaterialSpec { SourceMaterialName = "material_1", Color = new Color(0.50980392f, 0.36078431f, 0.21176471f) },
+                    new MaterialSpec { SourceMaterialName = "material_2", Color = new Color(0.22745098f, 0.14901961f, 0.08627451f) },
+                    new MaterialSpec { SourceMaterialName = "material_3", Color = new Color(0.58823529f, 0.47058824f, 0.27450980f) },
+                },
+            },
+            new PropVariant
+            {
+                // Same wood palette as the other bridge pieces. Deck +
+                // rope rails connecting three sides — default mesh is open
+                // on +Z / -Z / +X and railed shut on -X, so BridgeManager
+                // rotates its closed (local -X) side to face whichever
+                // cardinal direction has no bridge/land connection. Placed
+                // where three bridge arms meet. See BridgeManager.
+                SourceDir = "Assets/Art/DungeonPack/Bridge/TJunction",
+                ObjName = "bridge_tjunction",
+                PrefabPath = "Assets/Resources/Dungeon/Prop_BridgeTJunction.prefab",
+                MaterialFolder = "Assets/Art/DungeonPack/Bridge/TJunction/Materials",
+                HasAuthoredNormals = true,
+                Materials = new[]
+                {
+                    new MaterialSpec { SourceMaterialName = "material_0", Color = new Color(0.39215686f, 0.26666667f, 0.14901961f) },
+                    new MaterialSpec { SourceMaterialName = "material_1", Color = new Color(0.50980392f, 0.36078431f, 0.21176471f) },
+                    new MaterialSpec { SourceMaterialName = "material_2", Color = new Color(0.22745098f, 0.14901961f, 0.08627451f) },
+                    new MaterialSpec { SourceMaterialName = "material_3", Color = new Color(0.58823529f, 0.47058824f, 0.27450980f) },
+                },
+            },
+            new PropVariant
+            {
+                // Same wood palette (only 3 of the 4 slots are used — no
+                // "material_1"). A flat railless deck plate open on all
+                // four sides; fully symmetric, so BridgeManager places it
+                // at yaw 0. Placed where four bridge arms meet. See
+                // BridgeManager.
+                SourceDir = "Assets/Art/DungeonPack/Bridge/FourWay",
+                ObjName = "bridge_fourway",
+                PrefabPath = "Assets/Resources/Dungeon/Prop_BridgeFourWay.prefab",
+                MaterialFolder = "Assets/Art/DungeonPack/Bridge/FourWay/Materials",
+                HasAuthoredNormals = true,
+                Materials = new[]
+                {
+                    new MaterialSpec { SourceMaterialName = "material_0", Color = new Color(0.39215686f, 0.26666667f, 0.14901961f) },
+                    new MaterialSpec { SourceMaterialName = "material_2", Color = new Color(0.22745098f, 0.14901961f, 0.08627451f) },
+                    new MaterialSpec { SourceMaterialName = "material_3", Color = new Color(0.58823529f, 0.47058824f, 0.27450980f) },
+                },
+            },
+            // Treasury's 5 gold-pile tiers (see TREASURY_README.txt) —
+            // TreasuryManager.GetGoldTier picks which one sits on a given
+            // tile from its own stored gold amount. All 5 are already
+            // sized to a single floor tile and pivoted at y=0 (per the
+            // pack's own readme), so no scale correction is needed at
+            // placement — see TreasuryManager.RefreshGoldPileVisual.
+            GoldLevel(1),
+            GoldLevel(2),
+            GoldLevel(3),
+            GoldLevel(4),
+            GoldLevel(5),
         };
+
+        private static PropVariant GoldLevel(int level)
+        {
+            return new PropVariant
+            {
+                SourceDir = $"Assets/Art/DungeonPack/Treasury/GoldLevel{level}",
+                ObjName = $"treasury_gold_{level}",
+                PrefabPath = $"Assets/Resources/Dungeon/Prop_TreasuryGold{level}.prefab",
+                MaterialFolder = $"Assets/Art/DungeonPack/Treasury/GoldLevel{level}/Materials",
+                Materials = TreasuryGoldMaterials,
+            };
+        }
 
         [MenuItem("Tools/DungeonPack/Setup Props")]
         public static void Run()
@@ -303,7 +587,25 @@ namespace KeepersDomain.EditorTools
                     material.shader = shader;
                 }
 
-                material.SetColor("_BaseColor", spec.Color);
+                if (spec.DiffuseName != null)
+                {
+                    // Textured slot (see MaterialSpec.DiffuseName) — same
+                    // _BaseMap-only build DungeonPackWallSetup uses for its
+                    // own wall blocks.
+                    var texture = AssetDatabase.LoadAssetAtPath<Texture2D>($"{variant.SourceDir}/{spec.DiffuseName}.png");
+                    if (texture == null)
+                    {
+                        Debug.LogError($"[DungeonPackPropSetup] Could not load texture at {variant.SourceDir}/{spec.DiffuseName}.png");
+                    }
+
+                    material.SetTexture("_BaseMap", texture);
+                    material.SetColor("_BaseColor", Color.white);
+                }
+                else
+                {
+                    material.SetColor("_BaseColor", spec.Color);
+                }
+
                 material.SetFloat("_Smoothness", 0.15f);
                 EditorUtility.SetDirty(material);
                 result[spec.SourceMaterialName] = material;

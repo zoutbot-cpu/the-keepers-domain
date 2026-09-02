@@ -82,12 +82,18 @@ namespace KeepersDomain.Input
         private DungeonGrid _grid;
         private LevelDesignerSession _session;
         private Dictionary<RoomDesignTool, IRestorableRoomManager> _roomManagers;
+        // Pulled out of _roomManagers in Initialize — the Remove tool sells
+        // rooms through the same LairManager.TrySellRoom gameplay's Sell
+        // tool uses (fires RoomSold, so every room manager tears down its
+        // own decoration), then the editor resets the footprint to Rock.
+        private LairManager _lairManager;
 
         private MapDesignTool _mapDesignTool = MapDesignTool.None;
         private RoomDesignTool _roomTool = RoomDesignTool.None;
         private StructureKind? _structureTool;
         private EditorCreatureKind? _creatureTool;
         private bool _editMode;
+        private bool _removeMode;
         private int _selectedOwnerId = -1;
         private int _nextRoomId;
 
@@ -119,6 +125,7 @@ namespace KeepersDomain.Input
         public StructureKind? StructureTool => _structureTool;
         public EditorCreatureKind? CreatureTool => _creatureTool;
         public bool EditMode => _editMode;
+        public bool RemoveMode => _removeMode;
         public bool MirrorX => _mirrorX;
         public bool MirrorY => _mirrorY;
 
@@ -149,6 +156,9 @@ namespace KeepersDomain.Input
             _grid = grid;
             _session = session;
             _roomManagers = roomManagers;
+            _lairManager = roomManagers != null && roomManagers.TryGetValue(RoomDesignTool.Lair, out var lair)
+                ? lair as LairManager
+                : null;
         }
 
         public void SetMapDesignTool(MapDesignTool tool)
@@ -157,6 +167,7 @@ namespace KeepersDomain.Input
             _roomTool = RoomDesignTool.None;
             _structureTool = null;
             _creatureTool = null;
+            _removeMode = false;
             SetEditMode(false);
         }
 
@@ -166,6 +177,7 @@ namespace KeepersDomain.Input
             _mapDesignTool = MapDesignTool.None;
             _structureTool = null;
             _creatureTool = null;
+            _removeMode = false;
             SetEditMode(false);
         }
 
@@ -175,6 +187,7 @@ namespace KeepersDomain.Input
             _mapDesignTool = MapDesignTool.None;
             _roomTool = RoomDesignTool.None;
             _creatureTool = null;
+            _removeMode = false;
             SetEditMode(false);
         }
 
@@ -184,6 +197,7 @@ namespace KeepersDomain.Input
             _mapDesignTool = MapDesignTool.None;
             _roomTool = RoomDesignTool.None;
             _structureTool = null;
+            _removeMode = false;
             SetEditMode(false);
         }
 
@@ -202,10 +216,30 @@ namespace KeepersDomain.Input
                 _roomTool = RoomDesignTool.None;
                 _structureTool = null;
                 _creatureTool = null;
+                _removeMode = false;
             }
             else
             {
                 ClearSelection();
+            }
+        }
+
+        /// A 6th tool category, mutually exclusive with the other five —
+        /// tap an already-placed wall/terrain/floor tile, room, structure,
+        /// or creature to delete it (see RemoveAt). Rooms and structures
+        /// take their whole footprint back to plain Rock; a lone tile just
+        /// resets. No mirroring (same reasoning SelectAt gives) and no
+        /// undo, same as every other destructive editor action.
+        public void SetRemoveMode(bool enabled)
+        {
+            _removeMode = enabled;
+            if (enabled)
+            {
+                _mapDesignTool = MapDesignTool.None;
+                _roomTool = RoomDesignTool.None;
+                _structureTool = null;
+                _creatureTool = null;
+                SetEditMode(false);
             }
         }
 
@@ -404,6 +438,15 @@ namespace KeepersDomain.Input
                 // would silently reassign an unrelated, possibly-
                 // differently-owned tile the author didn't tap.
                 SelectAt(coord);
+                return;
+            }
+
+            if (_removeMode)
+            {
+                // Single tap, not a drag — same as Edit's SelectAt above,
+                // and unmirrored for the same reason (a reflected tap could
+                // silently delete something unrelated the author wants).
+                RemoveAt(coord);
                 return;
             }
 
@@ -612,6 +655,41 @@ namespace KeepersDomain.Input
             _grid.SetSelectedWall(coord);
         }
 
+        /// Remove mode's tap handler — deletes whatever's at coord, checking
+        /// creatures/structures first (they sit on top of a tile), then the
+        /// tile's room, then the bare tile itself. Rooms are torn down
+        /// through LairManager.TrySellRoom (the same path gameplay's Sell
+        /// tool uses, so every room manager cleans up its own decoration
+        /// via RoomSold) and their footprint is then reset to plain Rock,
+        /// which TrySellRoom on its own doesn't do (it leaves bare Claimed
+        /// Floor). A no-op on untouched Rock / empty tiles.
+        private void RemoveAt(Vector2Int coord)
+        {
+            if (!_grid.InBounds(coord))
+            {
+                return;
+            }
+
+            if (_session.RemoveCreatureAt(coord) || _session.RemoveStructureAt(coord))
+            {
+                return;
+            }
+
+            var tile = _grid.GetTile(coord);
+            if (tile.HasRoom)
+            {
+                var footprint = _grid.GetRoomFootprint(tile.RoomId);
+                _lairManager?.TrySellRoom(coord);
+                foreach (var footprintCoord in footprint)
+                {
+                    _grid.EditorResetToRock(footprintCoord);
+                }
+                return;
+            }
+
+            _grid.EditorResetToRock(coord);
+        }
+
         private void ClearSelection()
         {
             _selectionKind = EditSelectionKind.None;
@@ -630,7 +708,9 @@ namespace KeepersDomain.Input
         /// nothing is selected. Room reassigns every tile sharing that
         /// RoomId at once (see DungeonGrid.EditorReassignRoomOwner), not
         /// just the one tile that happened to be tapped, since a room has
-        /// one owner conceptually.
+        /// one owner conceptually. ownerId < 0 is the "Unclaimed" pseudo-
+        /// player: valid for a tile/structure/creature (which just become
+        /// unowned), ignored for a Room since a room must belong to someone.
         public void ReassignSelectedOwner(int ownerId)
         {
             switch (_selectionKind)
@@ -640,6 +720,10 @@ namespace KeepersDomain.Input
                     _selectedCurrentOwnerId = ownerId;
                     break;
                 case EditSelectionKind.Room:
+                    if (ownerId < 0)
+                    {
+                        return;
+                    }
                     _grid.EditorReassignRoomOwner(_selectedRoomId, ownerId);
                     _selectedCurrentOwnerId = ownerId;
                     break;
@@ -704,7 +788,11 @@ namespace KeepersDomain.Input
                     _grid.EditorPaintFloor(coord, claimed: false, ownerId: -1);
                     break;
                 case MapDesignTool.ClaimedFloor:
-                    _grid.EditorPaintFloor(coord, claimed: true, ownerId: _selectedOwnerId);
+                    // "Unclaimed" picked in the owner selector (ownerId < 0)
+                    // means exactly that — paint plain unclaimed floor, same
+                    // as the dedicated Unclaimed tool, rather than a
+                    // contradictory claimed-but-unowned tile.
+                    _grid.EditorPaintFloor(coord, claimed: _selectedOwnerId >= 0, ownerId: _selectedOwnerId);
                     break;
             }
         }

@@ -33,8 +33,9 @@ namespace KeepersDomain.Monsters
         private TavernManager _tavernManager;
         private TrainingRoomManager _trainingRoomManager;
         private TreasuryManager _treasuryManager;
+        private int _ownerId;
 
-        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, JailManager jailManager, TavernManager tavernManager, TrainingRoomManager trainingRoomManager, TreasuryManager treasuryManager)
+        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, JailManager jailManager, TavernManager tavernManager, TrainingRoomManager trainingRoomManager, TreasuryManager treasuryManager, int ownerId = 0)
         {
             _grid = grid;
             _portal = portal;
@@ -43,6 +44,7 @@ namespace KeepersDomain.Monsters
             _tavernManager = tavernManager;
             _trainingRoomManager = trainingRoomManager;
             _treasuryManager = treasuryManager;
+            _ownerId = ownerId;
         }
 
         /// How many Maze Rattlers are still available to recruit from the
@@ -69,7 +71,7 @@ namespace KeepersDomain.Monsters
                 return false;
             }
 
-            if (_jailManager == null || MazeRattlerAgent.All.Count >= _jailManager.RoomCount * MazeRattlersPerJail)
+            if (_jailManager == null || MazeRattlerAgent.CountForOwner(_ownerId) >= _jailManager.RoomCount * MazeRattlersPerJail)
             {
                 return false;
             }
@@ -90,7 +92,7 @@ namespace KeepersDomain.Monsters
                 return false;
             }
 
-            SpawnMazeRattler(_portal.Coord);
+            SpawnMazeRattler(_portal.Coord, _ownerId);
             return true;
         }
 
@@ -98,7 +100,7 @@ namespace KeepersDomain.Monsters
         /// Initialize" spawn code when a tormented Maze Rattler prisoner
         /// wins its conversion roll and rejoins the domain, instead of
         /// duplicating it.
-        public void SpawnMazeRattler(Vector2Int coord)
+        public void SpawnMazeRattler(Vector2Int coord, int ownerId = 0)
         {
             var worldPos = _grid.GridToWorld(coord);
 
@@ -113,7 +115,7 @@ namespace KeepersDomain.Monsters
             Destroy(visual.GetComponent<Collider>());
 
             var agent = visual.AddComponent<MazeRattlerAgent>();
-            agent.Initialize(_grid, _lairManager, _tavernManager, _trainingRoomManager, _jailManager, _treasuryManager, _portal);
+            agent.Initialize(_grid, _lairManager, _tavernManager, _trainingRoomManager, _jailManager, _treasuryManager, _portal, ownerId);
             GameplayLog.Write($"{agent.Name} joined via the Portal at ({coord.x},{coord.y})");
         }
     }

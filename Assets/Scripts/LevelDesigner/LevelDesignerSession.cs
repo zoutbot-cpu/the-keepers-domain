@@ -311,52 +311,68 @@ namespace KeepersDomain.LevelDesigner
             _creatures[index] = creature;
         }
 
+        /// Deletes the placed creature at coord (see the Level Designer's
+        /// Remove tool) — tears down its visual marker and drops it from
+        /// the authored roster. No-ops if nothing's there.
+        public bool RemoveCreatureAt(Vector2Int coord)
+        {
+            if (!TryFindCreatureAt(coord, out var index))
+            {
+                return false;
+            }
+
+            var creature = _creatures[index];
+            if (creature.Visual != null)
+            {
+                Destroy(creature.Visual);
+            }
+            _creatures.RemoveAt(index);
+            return true;
+        }
+
         /// Scans every live creature agent currently in the scene (each
         /// species' own static All registry — ImplingAgent.All,
         /// GremlinAgent.All, ...) and adds one PlaceCreature marker per
         /// instance, so a snapshot taken via BuildLevelData (see
         /// GameBootstrap.SaveStartingLevelAsLevel1) actually captures
         /// what's alive on the map instead of only whatever was placed
-        /// through this session's own interactive tool. No agent carries
-        /// an owner/player field today (ownership isn't modeled on
-        /// monster/impling agents at all yet), so every captured creature
-        /// is recorded as OwnerId 0 — the same single-player placeholder
-        /// SaveStartingLevelAsLevel1 already uses for the Throne Room/Portal Room
-        /// structures. Coord is derived from each agent's world Position
-        /// (none of them expose a grid coord directly) via
-        /// _grid.WorldToGrid.
+        /// through this session's own interactive tool. Each agent's owning
+        /// player is read straight off its Creature.OwnerId (see
+        /// Creature.SetOwner) — in ordinary single-player gameplay that's 0
+        /// for everything, the same value SaveStartingLevelAsLevel1 records
+        /// for the Throne Room/Portal Room structures. Coord is derived from
+        /// each agent's world Position (none of them expose a grid coord
+        /// directly) via _grid.WorldToGrid.
         public void CaptureLiveCreatures()
         {
-            const int ownerId = 0;
-
             foreach (var agent in ImplingAgent.All)
             {
-                PlaceCreature(EditorCreatureKind.Imp, _grid.WorldToGrid(agent.Position), ownerId);
+                PlaceCreature(EditorCreatureKind.Imp, _grid.WorldToGrid(agent.Position), agent.Creature.OwnerId);
             }
 
             foreach (var agent in GremlinAgent.All)
             {
-                PlaceCreature(EditorCreatureKind.Gremlin, _grid.WorldToGrid(agent.Position), ownerId);
+                PlaceCreature(EditorCreatureKind.Gremlin, _grid.WorldToGrid(agent.Position), agent.Creature.OwnerId);
             }
 
             foreach (var agent in WarlockAgent.All)
             {
-                PlaceCreature(EditorCreatureKind.Warlock, _grid.WorldToGrid(agent.Position), ownerId);
+                PlaceCreature(EditorCreatureKind.Warlock, _grid.WorldToGrid(agent.Position), agent.Creature.OwnerId);
             }
 
             foreach (var agent in MazeRattlerAgent.All)
             {
-                PlaceCreature(EditorCreatureKind.MazeRattler, _grid.WorldToGrid(agent.Position), ownerId);
+                PlaceCreature(EditorCreatureKind.MazeRattler, _grid.WorldToGrid(agent.Position), agent.Creature.OwnerId);
             }
 
             foreach (var agent in BeanCounterAgent.All)
             {
-                PlaceCreature(EditorCreatureKind.BeanCounter, _grid.WorldToGrid(agent.Position), ownerId);
+                PlaceCreature(EditorCreatureKind.BeanCounter, _grid.WorldToGrid(agent.Position), agent.Creature.OwnerId);
             }
 
             foreach (var agent in ElfAgent.All)
             {
-                PlaceCreature(EditorCreatureKind.Elf, _grid.WorldToGrid(agent.Position), ownerId);
+                PlaceCreature(EditorCreatureKind.Elf, _grid.WorldToGrid(agent.Position), agent.Creature.OwnerId);
             }
         }
 
@@ -371,7 +387,7 @@ namespace KeepersDomain.LevelDesigner
         /// tile data.
         public void PlaceStructure(StructureKind kind, Vector2Int center, int ownerId)
         {
-            var halfSize = kind == StructureKind.ThroneRoom ? ThroneRoomHalfSize : PortalRoomHalfSize;
+            var halfSize = StructureHalfSize(kind);
             var claimed = ownerId >= 0 && ownerId < _players.Count;
 
             for (int x = -halfSize; x <= halfSize; x++)
@@ -431,7 +447,7 @@ namespace KeepersDomain.LevelDesigner
         public void SetStructureOwner(int index, int ownerId)
         {
             var structure = _structures[index];
-            var halfSize = structure.Kind == StructureKind.ThroneRoom ? ThroneRoomHalfSize : PortalRoomHalfSize;
+            var halfSize = StructureHalfSize(structure.Kind);
             var claimed = ownerId >= 0 && ownerId < _players.Count;
 
             for (int x = -halfSize; x <= halfSize; x++)
@@ -444,6 +460,50 @@ namespace KeepersDomain.LevelDesigner
 
             structure.OwnerId = ownerId;
             _structures[index] = structure;
+        }
+
+        private static int StructureHalfSize(StructureKind kind)
+        {
+            return kind == StructureKind.ThroneRoom ? ThroneRoomHalfSize : PortalRoomHalfSize;
+        }
+
+        /// Deletes the placed structure whose fixed footprint covers coord
+        /// (see the Level Designer's Remove tool) — unlike TryFindStructureAt
+        /// (edit mode, exact-centre only) a tap anywhere on the Throne/Portal
+        /// Room's tiles counts, since the author is pointing at the whole
+        /// object, not one tile of it. Destroys the live ThroneRoom/Portal
+        /// GameObject (its platform/staircase visuals are all parented to
+        /// it, so they go with it) and resets the footprint back to plain
+        /// Rock. No-ops if no structure covers coord.
+        public bool RemoveStructureAt(Vector2Int coord)
+        {
+            for (int i = 0; i < _structures.Count; i++)
+            {
+                var structure = _structures[i];
+                var halfSize = StructureHalfSize(structure.Kind);
+                if (Mathf.Abs(coord.x - structure.Coord.x) > halfSize || Mathf.Abs(coord.y - structure.Coord.y) > halfSize)
+                {
+                    continue;
+                }
+
+                if (structure.Visual != null)
+                {
+                    Destroy(structure.Visual);
+                }
+
+                for (int x = -halfSize; x <= halfSize; x++)
+                {
+                    for (int y = -halfSize; y <= halfSize; y++)
+                    {
+                        _grid.EditorResetToRock(structure.Coord + new Vector2Int(x, y));
+                    }
+                }
+
+                _structures.RemoveAt(i);
+                return true;
+            }
+
+            return false;
         }
 
         /// Snapshots the current map/players/creatures into a LevelData

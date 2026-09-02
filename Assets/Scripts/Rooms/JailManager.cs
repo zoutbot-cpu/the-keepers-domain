@@ -51,19 +51,24 @@ namespace KeepersDomain.Rooms
     ///   DungeonGrid.IsWalkable checks Type/IsBlocked, never Y — so a Jail
     ///   tile is exactly as walkable as any other Floor tile despite
     ///   sitting visually in a pit; prisoners/implings can path across it
-    ///   like any room. The pit's own rim is a short, plain dark wall
-    ///   (see BuildRimWallVisual) just deep enough to close the gap under
-    ///   the light gray fence — deliberately NOT a slab under the whole
-    ///   tile: a full-footprint column reaching up to ground level would
-    ///   sit physically in front of (above) the sunk floor from any
-    ///   downward-looking angle and bury it, which is exactly the "solid
-    ///   black box" bug an earlier, much deeper version of this wall had.
-    ///   Interior pit tiles have no elevation seam against their
-    ///   neighbors and don't need a wall at all, same as ordinary
-    ///   DungeonGrid floor never does. The black-panel-with-a-gray-cross
-    ///   "block" look the wall originally carried now lives on the ring's
-    ///   own floor instead (see BuildGrateFloorVisual) — the fence is the
-    ///   pit's one real decorated rim marker.
+    ///   like any room. The pit's own rim is the real dungeon_pack
+    ///   jail_wall_inside mesh (see BuildRimWallVisual), just deep enough
+    ///   to close the gap under the fence — deliberately NOT a slab under
+    ///   the whole tile: a full-footprint column reaching up to ground
+    ///   level would sit physically in front of (above) the sunk floor
+    ///   from any downward-looking angle and bury it, which is exactly
+    ///   the "solid black box" bug an earlier, much deeper version of
+    ///   this wall had. Interior pit tiles have no elevation seam against
+    ///   their neighbors and don't need a wall at all, same as ordinary
+    ///   DungeonGrid floor never does.
+    ///
+    /// Real dungeon_pack art now throughout (Assets/Art/DungeonPack/Jail —
+    /// wall_inside/fence_half/gate/stairs_wood meshes, see
+    /// DungeonPackPropSetup; floor_gravel_dirty/floor_grate_floor
+    /// textures, see DungeonPackRoomArt), each with the same graceful
+    /// fallback to this class's original flat-colored primitives every
+    /// other room's real-mesh integration uses, in case a prop hasn't
+    /// been set up yet (Tools > DungeonPack > Setup Props).
     public class JailManager : MonoBehaviour, IRestorableRoomManager
     {
         /// Gold cost per tile of a placed Jail — no design-brief value
@@ -100,30 +105,40 @@ namespace KeepersDomain.Rooms
         // faces don't coplanar-z-fight with each other.
         private const float RimWallEdgeInset = 0.49f;
 
-        // Plain dark fill, no cross texture — the wall itself is
-        // deliberately unstyled now that the fence is the pit's one real
-        // rim marker. Also reused as the ring floor grate's own panel
-        // color (see BuildGrateFloorVisual) so the two still read as the
-        // same material.
+        // Real dungeon_pack retaining-wall mesh (Assets/Art/DungeonPack/
+        // Jail/WallInside, built by Tools > DungeonPack > Setup Props into
+        // Dungeon/Prop_JailWallInside) — grimy stone, 1w x 2h with its
+        // pivot at the TOP (Y=0 = ground level, extends down 2 units —
+        // matches RimWallDepth exactly, no scale correction needed).
+        // Falls back to the original plain dark box below if the prop
+        // hasn't been set up yet, same graceful-degradation pattern every
+        // other room's real-mesh prop uses. _rimWallColor is fallback-only
+        // now, but still doubles as the ring floor grate's own fallback
+        // panel color (see BuildGrateFloorVisual) so the two still read as
+        // the same material when neither real asset has loaded.
+        private GameObject _jailWallInsidePrefab;
         [SerializeField] private Color _rimWallColor = new Color(0.05f, 0.05f, 0.05f);
 
-        // Light gray rim fence — the pit's only decorated rim marker now.
-        // Short rails along every outward-facing edge of the pit except
-        // the one gate tile/edge, grounded at ordinary FloorSurfaceY
-        // (ground level) regardless of the pit's own sunk floor, since
-        // it's a guard rail marking the rim, not something that spans
-        // the pit's depth.
+        // Real dungeon_pack perimeter-rail mesh (Assets/Art/DungeonPack/
+        // Jail/FenceHalf, built into Dungeon/Prop_JailFenceHalf) — light
+        // wood-brown, ~0.95w x 1h with its pivot at the bottom (ground
+        // level). The pit's only decorated rim marker along every
+        // outward-facing edge except the one gate tile/edge, grounded at
+        // ordinary FloorSurfaceY regardless of the pit's own sunk floor,
+        // since it's a guard rail marking the rim, not something that
+        // spans the pit's depth. Falls back to the original plain gray
+        // box below if the prop hasn't been set up yet.
+        private GameObject _jailFenceHalfPrefab;
         [SerializeField] private Color _fenceColor = new Color(0.75f, 0.75f, 0.75f);
         private const float FenceRailHeight = 0.35f;
         private const float FenceRailThickness = 0.06f;
         private const float FenceEdgeInset = 0.42f;
 
-        // Ring floor "grate" — every walkway tile around the pit gets a
-        // black panel with a light gray plus/cross centered on it, arms
-        // reaching to the middle of each of the tile's four sides. The
-        // same block pattern the rim wall used to carry, moved onto the
-        // ring's own floor instead (see BuildGrateFloorVisual) now that
-        // the wall itself is plain.
+        // Ring floor "grate" — every walkway tile around the pit gets the
+        // real dungeon_pack grate floor texture (see _floorGrateMaterial)
+        // now; _grateCrossColor/GrateCrossBarThickness/
+        // GrateCrossReliefOffset are fallback-only, used only if that
+        // texture failed to load — see BuildGrateFloorVisual.
         [SerializeField] private Color _grateCrossColor = new Color(0.75f, 0.75f, 0.75f);
         private const float GrateFloorHeight = 0.17f;
         private const float GrateFloorFootprintScale = 0.95f;
@@ -131,34 +146,74 @@ namespace KeepersDomain.Rooms
 
         // How far the cross bars sit proud of the panel beneath them —
         // without this they'd sit exactly coplanar with the panel and
-        // z-fight/flicker.
+        // z-fight/flicker. Fallback-only, same as the cross itself.
         private const float GrateCrossReliefOffset = 0.02f;
 
         // Staircase + gate — one designated boundary tile (the south
         // edge's middle tile — always a real boundary edge regardless of
         // footprint size, since origin is the rectangle's min corner)
-        // descends from ground level down to the pit floor, same
-        // ascending-cube trick Portal.BuildStaircaseVisual uses for its
-        // own staircase, just spanning PitDepth instead of Portal's
-        // stylized rise. Flanked by two gate posts framing the opening.
+        // descends from ground level down to the pit floor. Real
+        // dungeon_pack meshes now (Assets/Art/DungeonPack/Jail/
+        // StairsWood + .../Gate, built into Dungeon/Prop_JailStairsWood +
+        // Dungeon/Prop_JailGate) — the stairs' own pivot sits near ground
+        // level and descends ~1.6 units into the room as it drops the
+        // full PitDepth, positioned at the gate tile's own outward edge
+        // (best-guess placement, no in-Editor render to confirm against,
+        // same honesty this session's other per-room props carry); the
+        // gate is a barred 1w x 2h topper, pivot at the bottom, sitting at
+        // that same edge. Both only ever get built for the one hardcoded
+        // south-facing gate edge, same as the primitive fallbacks below
+        // (StepCount ascending cubes + two gate posts) they replace when
+        // the prop hasn't been set up yet.
+        private GameObject _jailStairsWoodPrefab;
+        private GameObject _jailGatePrefab;
         [SerializeField] private Color _stepColor = new Color(0.42f, 0.38f, 0.32f);
         [SerializeField] private Color _gatePostColor = new Color(0.3f, 0.26f, 0.2f);
         private const int StepCount = 3;
         private const float GatePostHeight = 0.6f;
         private const float GatePostRadius = 0.05f;
 
-        // Dirt floor overlay — sits flush on top of DungeonGrid's own
-        // (purple, HasRoom-colored) floor cube for every pit tile, same
-        // "colored floor overlay flush on the base tile" convention
-        // TrainingRoomManager/LibraryManager use for their own floor
-        // colors (taller than DungeonGrid's own 0.15 floor height so its
-        // top face wins the z-fight instead of flickering). Persists
-        // across a merge same as the base pit sink does — only
-        // fence/rim wall/gate get torn down and rebuilt for a bigger
-        // shape.
+        // Real dungeon_pack pit-floor texture (Assets/Resources/Dungeon/
+        // Jail/floor_gravel_dirty — a plain texture, no prefab/material
+        // build step needed, same as DungeonGrid's own Floors set), built
+        // into a real URP/Lit material once in Initialize (see
+        // DungeonPackRoomArt.BuildMaterial). Sits flush on top of
+        // DungeonGrid's own (purple, HasRoom-colored) floor cube for
+        // every pit tile, same "textured floor overlay flush on the base
+        // tile" convention every other room's own floor uses (taller than
+        // DungeonGrid's own 0.15 floor height so its top face wins the
+        // z-fight instead of flickering). A full-cell gray Seam sits
+        // beneath it (see its own field header below) so the gap this
+        // overlay's own 0.95 footprint would otherwise leave at every
+        // tile edge — previously showing DungeonGrid's own untextured
+        // floor cube through, rendering pink — reads as a mortar line
+        // instead, same fix already applied to every other room this
+        // session. _dirtFloorColor is fallback-only now, used only if the
+        // texture itself failed to load. Persists across a merge same as
+        // the base pit sink does — only fence/rim wall/gate get torn down
+        // and rebuilt for a bigger shape.
+        private Material _floorGravelMaterial;
         [SerializeField] private Color _dirtFloorColor = new Color(0.36f, 0.27f, 0.17f);
         private const float DirtFloorHeight = 0.17f;
         private const float DirtFloorFootprintScale = 0.95f;
+
+        // Real dungeon_pack ring-floor texture (Assets/Resources/Dungeon/
+        // Jail/floor_grate_floor), built the same way as
+        // _floorGravelMaterial above — replaces the old procedural black-
+        // panel-with-a-gray-cross look (still built as the fallback if
+        // this texture failed to load, see BuildGrateFloorVisual).
+        private Material _floorGrateMaterial;
+
+        // Both floor overlays' own 0.95 footprint leaves the same thin
+        // edge gap every other room's Seam layer already fixes — shared
+        // here since DirtFloorHeight and GrateFloorHeight are the same
+        // 0.17, so one Seam height/color works for both. Sits between
+        // DungeonGrid's own 0.15 hidden-tile height and the overlay's own
+        // 0.17 (tall enough to fully hide that tile, short enough that
+        // the overlay still visibly "pops out" above it).
+        [SerializeField] private Color _seamColor = new Color(0.32f, 0.32f, 0.32f);
+        private const float SeamFootprintScale = 1.0f;
+        private const float SeamHeight = 0.16f;
 
         [SerializeField] private Color _previewValidColor = new Color(0.35f, 0.95f, 0.4f);
         [SerializeField] private Color _previewInvalidColor = new Color(0.95f, 0.25f, 0.25f);
@@ -170,6 +225,7 @@ namespace KeepersDomain.Rooms
         private DungeonGrid _grid;
         private BuilderJobBoard _jobBoard;
         private TreasuryManager _treasuryManager;
+        private int _ownerId;
         private int _nextRoomId;
         private readonly Dictionary<string, List<Vector2Int>> _roomTiles = new Dictionary<string, List<Vector2Int>>();
 
@@ -189,6 +245,34 @@ namespace KeepersDomain.Rooms
         // tiles are boundary vs. interior — and where the gate lands —
         // depends on the room's overall shape.
         private readonly Dictionary<string, List<GameObject>> _rimStructures = new Dictionary<string, List<GameObject>>();
+
+        // "Half wall" display mode — the counterpart to DungeonGrid.
+        // SetHalfWalls for ordinary Rock walls, wired to the same Settings
+        // toggle (see BottomMenuBar). The pit's rim wall and fence rail get
+        // squashed to half height about the *pit floor* — not the normal
+        // floor surface everything else sits on, which is the whole reason
+        // the Jail needs its own handling — pressing their tops down so an
+        // isometric camera can see over the rim into the pit. Purely
+        // cosmetic; the pit stays exactly as deep and as walkable as before.
+        // _rimFullTransforms remembers each affected structure's untouched
+        // world position + local scale so the toggle is exactly reversible
+        // however many times it's flipped.
+        private bool _halfWalls;
+        private const float HalfWallHeightScale = 0.5f;
+        private readonly Dictionary<GameObject, (Vector3 Position, Vector3 Scale)> _rimFullTransforms =
+            new Dictionary<GameObject, (Vector3, Vector3)>();
+
+        // The squash-toward-pit-floor math above (position moves toward
+        // pitFloorY as scale shrinks) only keeps the right edge fixed for
+        // a CENTER-pivoted object, like the fallback fence/wall's own
+        // primitive cubes. The real jail_fence_half mesh is bottom-
+        // pivoted instead (see BuildFenceRailVisual) — for that one,
+        // ApplyHalfWallState squashes by scale alone and leaves position
+        // untouched, so its own bottom stays flush with the ground (and
+        // the gate's own bottom) in both full and half mode, rather than
+        // sinking into the pit. Populated only for the real-mesh fence
+        // instance, never the fallback box.
+        private readonly HashSet<GameObject> _bottomPivotHalfWallStructures = new HashSet<GameObject>();
 
         // Per-room snapshot of that room's current pit tiles — recomputed
         // alongside _rimStructures every placement/merge (see
@@ -237,12 +321,21 @@ namespace KeepersDomain.Rooms
         /// run one just to host this room), so the one place that uses it
         /// (auto-dig-and-claim on placement, see TryPlaceJailInternal)
         /// guards with a null-conditional instead of assuming it exists.
-        public void Initialize(DungeonGrid grid, BuilderJobBoard jobBoard, LairManager lairManager, TreasuryManager treasuryManager)
+        public void Initialize(DungeonGrid grid, BuilderJobBoard jobBoard, LairManager lairManager, TreasuryManager treasuryManager, int ownerId = 0)
         {
             _grid = grid;
             _jobBoard = jobBoard;
             _treasuryManager = treasuryManager;
+            _ownerId = ownerId;
+            _nextRoomId = ownerId * DungeonGrid.RoomIdOwnerStride;
             lairManager.RoomSold += OnRoomSold;
+
+            _jailWallInsidePrefab = Resources.Load<GameObject>("Dungeon/Prop_JailWallInside");
+            _jailFenceHalfPrefab = Resources.Load<GameObject>("Dungeon/Prop_JailFenceHalf");
+            _jailGatePrefab = Resources.Load<GameObject>("Dungeon/Prop_JailGate");
+            _jailStairsWoodPrefab = Resources.Load<GameObject>("Dungeon/Prop_JailStairsWood");
+            _floorGravelMaterial = DungeonPackRoomArt.BuildMaterial("Dungeon/Jail/floor_gravel_dirty");
+            _floorGrateMaterial = DungeonPackRoomArt.BuildMaterial("Dungeon/Jail/floor_grate_floor");
         }
 
         /// How many prisoners are currently held across every placed Jail —
@@ -487,7 +580,7 @@ namespace KeepersDomain.Rooms
                 // Tasks list.
                 if (_grid.GetTile(coord).Type == TileType.Rock)
                 {
-                    _grid.CompleteDig(coord);
+                    _grid.CompleteDig(coord, _ownerId);
                     _jobBoard?.ApplyClaim(coord);
                 }
 
@@ -633,10 +726,89 @@ namespace KeepersDomain.Rooms
             {
                 if (go != null)
                 {
+                    _rimFullTransforms.Remove(go);
+                    _bottomPivotHalfWallStructures.Remove(go);
                     Destroy(go);
                 }
             }
             structures.Clear();
+        }
+
+        /// Toggles "half wall" display mode for every placed Jail — see the
+        /// _halfWalls field comment. Squashes each pit's rim wall and fence
+        /// rail to half height about the pit floor (tops pressed down),
+        /// leaving the staircase and gate posts alone so the entrance still
+        /// reads as reaching ground level. Wired to BottomMenuBar's Settings
+        /// menu alongside DungeonGrid.SetHalfWalls.
+        public void SetHalfWalls(bool enabled)
+        {
+            if (_halfWalls == enabled)
+            {
+                return;
+            }
+
+            _halfWalls = enabled;
+
+            foreach (var structures in _rimStructures.Values)
+            {
+                foreach (var go in structures)
+                {
+                    if (go != null && IsHalfWallStructure(go))
+                    {
+                        ApplyHalfWallState(go);
+                    }
+                }
+            }
+        }
+
+        /// Only the rim wall and fence rail follow the half-wall toggle —
+        /// the staircase/gate-post containers (JailStair_/JailGate_) are
+        /// left full height.
+        private static bool IsHalfWallStructure(GameObject go)
+        {
+            return go.name.StartsWith("JailRimWall_") || go.name.StartsWith("JailFence_");
+        }
+
+        /// Sets go to its half-height or full-height transform for the
+        /// current _halfWalls state, scaling about the pit floor. Records
+        /// the structure's original (full) world position + local scale on
+        /// first sight so repeated toggles always rebuild from the true
+        /// values rather than compounding. Called both by SetHalfWalls (for
+        /// structures that already exist) and by the rim builders (for
+        /// structures raised while the mode is already on).
+        private void ApplyHalfWallState(GameObject go)
+        {
+            if (!_rimFullTransforms.TryGetValue(go, out var full))
+            {
+                full = (go.transform.position, go.transform.localScale);
+                _rimFullTransforms[go] = full;
+            }
+
+            if (!_halfWalls)
+            {
+                go.transform.position = full.Position;
+                go.transform.localScale = full.Scale;
+                return;
+            }
+
+            if (_bottomPivotHalfWallStructures.Contains(go))
+            {
+                // Bottom-pivoted real mesh (see this field's own header
+                // above) — squashing by scale alone keeps its bottom
+                // exactly at full.Position, unlike the center-pivoted
+                // fallback box below, which needs its position pulled
+                // toward the pit floor too to keep ITS OWN bottom fixed
+                // while its center (the actual pivot) comes down.
+                go.transform.position = full.Position;
+                go.transform.localScale = new Vector3(full.Scale.x, full.Scale.y * HalfWallHeightScale, full.Scale.z);
+                return;
+            }
+
+            var pitFloorY = _grid.FloorSurfaceY - PitDepth;
+            var pos = full.Position;
+            pos.y = pitFloorY + (pos.y - pitFloorY) * HalfWallHeightScale;
+            go.transform.position = pos;
+            go.transform.localScale = new Vector3(full.Scale.x, full.Scale.y * HalfWallHeightScale, full.Scale.z);
         }
 
         /// Whether footprint could become a Jail right now. Unlike every
@@ -664,7 +836,7 @@ namespace KeepersDomain.Rooms
                     continue;
                 }
 
-                if (!_grid.CanBuildRoomOn(coord))
+                if (!_grid.CanBuildRoomOn(coord, _ownerId))
                 {
                     return false;
                 }
@@ -749,34 +921,63 @@ namespace KeepersDomain.Rooms
             return true;
         }
 
-        /// A flat dirt-colored slab sitting flush on top of DungeonGrid's
-        /// own floor cube for coord (which stays the shared purple
-        /// HasRoom color underneath, same as every other room) — grounded
-        /// at the sunk pit level (FloorSurfaceY - PitDepth), not ordinary
-        /// FloorSurfaceY, so it lands on the actual pit floor rather than
-        /// floating at the surrounding ground's height.
+        /// A real dungeon_pack-textured gravel floor (falls back to a flat
+        /// dirt-colored slab if _floorGravelMaterial failed to load)
+        /// sitting flush on top of DungeonGrid's own floor cube for coord
+        /// (which stays the shared purple HasRoom color underneath, same
+        /// as every other room) — grounded at the sunk pit level
+        /// (FloorSurfaceY - PitDepth), not ordinary FloorSurfaceY, so it
+        /// lands on the actual pit floor rather than floating at the
+        /// surrounding ground's height. A full-cell gray Seam sits
+        /// beneath it (see its own field header) so the gap this floor's
+        /// own 0.95 footprint would otherwise leave at every tile edge
+        /// reads as a mortar line instead of a void gap showing
+        /// DungeonGrid's own floor cube through.
         private GameObject BuildDirtFloorVisual(Vector2Int coord)
         {
+            var container = new GameObject($"JailDirtFloor_{coord.x}_{coord.y}");
+            container.transform.SetParent(transform, false);
+
             var cellSize = _grid.CellSize;
             var basePosition = _grid.GridToWorld(coord) + Vector3.down * (0.5f + PitDepth);
 
+            var seam = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            seam.name = "Seam";
+            seam.transform.SetParent(container.transform, false);
+            seam.transform.position = basePosition;
+            seam.transform.localScale = new Vector3(cellSize * SeamFootprintScale, SeamHeight, cellSize * SeamFootprintScale);
+            seam.GetComponent<Renderer>().material.color = _seamColor;
+            Destroy(seam.GetComponent<Collider>());
+
             var floor = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            floor.name = $"JailDirtFloor_{coord.x}_{coord.y}";
-            floor.transform.SetParent(transform, false);
+            floor.name = "Floor";
+            floor.transform.SetParent(container.transform, false);
             floor.transform.position = basePosition;
             floor.transform.localScale = new Vector3(cellSize * DirtFloorFootprintScale, DirtFloorHeight, cellSize * DirtFloorFootprintScale);
-            floor.GetComponent<Renderer>().material.color = _dirtFloorColor;
+            if (_floorGravelMaterial != null)
+            {
+                // Shared, pre-built material (see DungeonPackRoomArt.
+                // BuildMaterial) — no color tint, the gravel art already
+                // carries its own correct look.
+                floor.GetComponent<Renderer>().sharedMaterial = _floorGravelMaterial;
+            }
+            else
+            {
+                floor.GetComponent<Renderer>().material.color = _dirtFloorColor;
+            }
             Destroy(floor.GetComponent<Collider>());
-            return floor;
+
+            return container;
         }
 
-        /// The ring's own floor treatment — a black panel with a light
-        /// gray plus/cross centered on it, arms reaching to the middle of
-        /// each of the tile's four sides, laid flat on the ground rather
-        /// than standing upright the way the rim wall's blocks used to
-        /// (see this class's own header comment). Sits flush on top of
-        /// DungeonGrid's own floor cube at ordinary FloorSurfaceY — the
-        /// ring is never sunk, unlike BuildDirtFloorVisual's pit tiles.
+        /// The ring's own floor treatment — the real dungeon_pack grate
+        /// floor texture (falls back to the original black panel with a
+        /// light gray plus/cross centered on it, arms reaching to the
+        /// middle of each of the tile's four sides, if _floorGrateMaterial
+        /// failed to load). Sits flush on top of DungeonGrid's own floor
+        /// cube at ordinary FloorSurfaceY — the ring is never sunk, unlike
+        /// BuildDirtFloorVisual's pit tiles. Same full-cell gray Seam
+        /// underneath as BuildDirtFloorVisual, for the same reason.
         private GameObject BuildGrateFloorVisual(Vector2Int coord)
         {
             var container = new GameObject($"JailGrateFloor_{coord.x}_{coord.y}");
@@ -785,17 +986,36 @@ namespace KeepersDomain.Rooms
             var cellSize = _grid.CellSize;
             var basePosition = _grid.GridToWorld(coord) + Vector3.down * 0.5f;
 
+            var seam = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            seam.name = "Seam";
+            seam.transform.SetParent(container.transform, false);
+            seam.transform.position = basePosition;
+            seam.transform.localScale = new Vector3(cellSize * SeamFootprintScale, SeamHeight, cellSize * SeamFootprintScale);
+            seam.GetComponent<Renderer>().material.color = _seamColor;
+            Destroy(seam.GetComponent<Collider>());
+
             var panel = GameObject.CreatePrimitive(PrimitiveType.Cube);
             panel.name = "Panel";
             panel.transform.SetParent(container.transform, false);
             panel.transform.position = basePosition;
             panel.transform.localScale = new Vector3(cellSize * GrateFloorFootprintScale, GrateFloorHeight, cellSize * GrateFloorFootprintScale);
+            if (_floorGrateMaterial != null)
+            {
+                // Shared, pre-built material (see DungeonPackRoomArt.
+                // BuildMaterial) — no color tint, the grate art already
+                // carries its own correct look.
+                panel.GetComponent<Renderer>().sharedMaterial = _floorGrateMaterial;
+                Destroy(panel.GetComponent<Collider>());
+                return container;
+            }
+
             panel.GetComponent<Renderer>().material.color = _rimWallColor;
             Destroy(panel.GetComponent<Collider>());
 
             // The cross sits proud of the panel (raised further up by
             // GrateCrossReliefOffset) so it never coplanar-z-fights with
-            // the panel beneath it.
+            // the panel beneath it. Fallback-only, same as the panel's
+            // own flat color above.
             var crossY = basePosition.y + GrateFloorHeight * 0.5f + GrateCrossReliefOffset;
 
             var barX = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -848,19 +1068,22 @@ namespace KeepersDomain.Rooms
             }
         }
 
-        /// A short, plain dark wall standing right at one outward-facing
-        /// edge of coord, from ordinary ground level (FloorSurfaceY — the
-        /// walkway ring's own floor height, not Rock's taller top face;
-        /// using Rock's height here used to poke a visible black slab up
-        /// above the ring's floor surface, since the ring is walkable
-        /// Floor now, not Rock) down RimWallDepth (2 tile-heights) — just
-        /// enough to close the immediate gap under the fence without any
-        /// void showing through below ground, now that the pit's real rim
-        /// marker is the light gray fence rather than a deep textured wall
-        /// (see this class's own header comment). Inset to the tile's
-        /// true edge like the fence rail rather than covering the tile's
-        /// own footprint, so it never sits in front of (and hides) the
-        /// sunk floor.
+        /// The real jail_wall_inside mesh standing right at one outward-
+        /// facing edge of coord (falls back to the original plain dark
+        /// box below if the prop hasn't been set up yet) — from ordinary
+        /// ground level (FloorSurfaceY — the walkway ring's own floor
+        /// height, not Rock's taller top face; using Rock's height here
+        /// used to poke a visible black slab up above the ring's floor
+        /// surface, since the ring is walkable Floor now, not Rock) down
+        /// RimWallDepth (2 tile-heights, matching the real mesh's own
+        /// natural 2-unit depth exactly — see this class's own field
+        /// header) — just enough to close the immediate gap under the
+        /// fence without any void showing through below ground, now that
+        /// the pit's real rim marker is the light gray fence rather than
+        /// a deep textured wall (see this class's own header comment).
+        /// Inset to the tile's true edge like the fence rail rather than
+        /// covering the tile's own footprint, so it never sits in front
+        /// of (and hides) the sunk floor.
         private GameObject BuildRimWallVisual(Vector2Int coord, Vector2Int direction)
         {
             var cellSize = _grid.CellSize;
@@ -869,24 +1092,49 @@ namespace KeepersDomain.Rooms
             var basePosition = worldPos + outward * (cellSize * RimWallEdgeInset);
             var isEastWestEdge = direction.x != 0;
             var wallTopY = _grid.FloorSurfaceY;
-            var centerY = wallTopY - RimWallDepth * 0.5f;
 
-            var wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            GameObject wall;
+            if (_jailWallInsidePrefab != null)
+            {
+                wall = Instantiate(_jailWallInsidePrefab, transform, false);
+                // Pivot sits at the mesh's own top (Y=0 = ground, extends
+                // down RimWallDepth on its own), so no extra Y offset is
+                // needed the way the fallback box below needs (its pivot
+                // is at its own center).
+                wall.transform.position = new Vector3(basePosition.x, wallTopY, basePosition.z);
+                // The mesh's own local X axis is its 1-unit width, already
+                // aligned with a north/south-facing edge (direction along
+                // Z) — rotate 90 degrees for an east/west-facing edge
+                // instead.
+                wall.transform.rotation = isEastWestEdge ? Quaternion.Euler(0f, 90f, 0f) : Quaternion.identity;
+            }
+            else
+            {
+                wall = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                wall.transform.SetParent(transform, false);
+                var centerY = wallTopY - RimWallDepth * 0.5f;
+                wall.transform.position = new Vector3(basePosition.x, centerY, basePosition.z);
+                wall.transform.localScale = isEastWestEdge
+                    ? new Vector3(RimWallThickness, RimWallDepth, cellSize * 0.98f)
+                    : new Vector3(cellSize * 0.98f, RimWallDepth, RimWallThickness);
+                wall.GetComponent<Renderer>().material.color = _rimWallColor;
+                Destroy(wall.GetComponent<Collider>());
+            }
+
             wall.name = $"JailRimWall_{coord.x}_{coord.y}_{direction.x}_{direction.y}";
-            wall.transform.SetParent(transform, false);
-            wall.transform.position = new Vector3(basePosition.x, centerY, basePosition.z);
-            wall.transform.localScale = isEastWestEdge
-                ? new Vector3(RimWallThickness, RimWallDepth, cellSize * 0.98f)
-                : new Vector3(cellSize * 0.98f, RimWallDepth, RimWallThickness);
-            wall.GetComponent<Renderer>().material.color = _rimWallColor;
-            Destroy(wall.GetComponent<Collider>());
+            if (_halfWalls)
+            {
+                ApplyHalfWallState(wall);
+            }
             return wall;
         }
 
-        /// One low fence rail along a single outward-facing edge of coord
-        /// — grounded at ordinary FloorSurfaceY (ground level) regardless
-        /// of how deep the pit itself sits, since it's a rim guard rail,
-        /// not a wall spanning the drop.
+        /// The real jail_fence_half mesh along a single outward-facing
+        /// edge of coord (falls back to the original plain gray box below
+        /// if the prop hasn't been set up yet) — grounded at ordinary
+        /// FloorSurfaceY (ground level) regardless of how deep the pit
+        /// itself sits, since it's a rim guard rail, not a wall spanning
+        /// the drop.
         private GameObject BuildFenceRailVisual(Vector2Int coord, Vector2Int direction)
         {
             var cellSize = _grid.CellSize;
@@ -894,35 +1142,89 @@ namespace KeepersDomain.Rooms
             var edgeOffset = new Vector3(direction.x, 0f, direction.y) * (cellSize * FenceEdgeInset);
             var basePosition = worldPos + edgeOffset;
             var groundY = _grid.FloorSurfaceY;
-
-            var rail = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            rail.name = $"JailFence_{coord.x}_{coord.y}_{direction.x}_{direction.y}";
-            rail.transform.SetParent(transform, false);
-            rail.transform.position = new Vector3(basePosition.x, groundY + FenceRailHeight * 0.5f, basePosition.z);
-
             // A rail runs along the edge, perpendicular to `direction` —
             // an east/west-facing edge (direction along X) is long in Z,
             // a north/south-facing edge (direction along Z) is long in X.
             var isEastWestEdge = direction.x != 0;
-            rail.transform.localScale = isEastWestEdge
-                ? new Vector3(FenceRailThickness, FenceRailHeight, cellSize * 0.9f)
-                : new Vector3(cellSize * 0.9f, FenceRailHeight, FenceRailThickness);
-            rail.GetComponent<Renderer>().material.color = _fenceColor;
-            Destroy(rail.GetComponent<Collider>());
+
+            GameObject rail;
+            if (_jailFenceHalfPrefab != null)
+            {
+                rail = Instantiate(_jailFenceHalfPrefab, transform, false);
+                // Pivot sits at the mesh's own bottom (Y=0 = ground
+                // level, matching the source .obj's own vertex bounds —
+                // y: 0 to 1 — and JAIL_README.txt's own "y = 0 to 1...
+                // -> perimeter"), so no extra Y offset is needed: this
+                // lands its bottom flush with the gate mesh's own bottom
+                // (see BuildGatePostsVisual), confirmed in-Editor. Half-
+                // wall mode needs its own bottom-anchored squash instead
+                // of the generic center-pivot one — see
+                // _bottomPivotHalfWallStructures below.
+                rail.transform.position = new Vector3(basePosition.x, groundY, basePosition.z);
+                // The mesh's own local X axis is its ~0.95-unit width,
+                // already aligned with a north/south-facing edge —
+                // rotate 90 degrees for an east/west-facing edge instead,
+                // same as the rim wall above.
+                rail.transform.rotation = isEastWestEdge ? Quaternion.Euler(0f, 90f, 0f) : Quaternion.identity;
+                _bottomPivotHalfWallStructures.Add(rail);
+            }
+            else
+            {
+                rail = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                rail.transform.SetParent(transform, false);
+                rail.transform.position = new Vector3(basePosition.x, groundY + FenceRailHeight * 0.5f, basePosition.z);
+                rail.transform.localScale = isEastWestEdge
+                    ? new Vector3(FenceRailThickness, FenceRailHeight, cellSize * 0.9f)
+                    : new Vector3(cellSize * 0.9f, FenceRailHeight, FenceRailThickness);
+                rail.GetComponent<Renderer>().material.color = _fenceColor;
+                Destroy(rail.GetComponent<Collider>());
+            }
+
+            rail.name = $"JailFence_{coord.x}_{coord.y}_{direction.x}_{direction.y}";
+            if (_halfWalls)
+            {
+                ApplyHalfWallState(rail);
+            }
             return rail;
         }
 
-        /// Three ascending step cubes from the pit floor up to ground
-        /// level, running along the tile's south (Vector2Int.down) edge —
-        /// the one fixed direction BuildRimStructures ever calls this
-        /// for.
+        /// The real jail_stairs_wood mesh descending from ground level
+        /// down to the pit floor, running along the tile's south
+        /// (Vector2Int.down) edge — the one fixed direction
+        /// BuildRimStructures ever calls this for (falls back to the
+        /// original 3-ascending-step-cube version below if the prop
+        /// hasn't been set up yet).
         private GameObject BuildStaircaseVisual(Vector2Int coord)
         {
+            var cellSize = _grid.CellSize;
+            var worldPos = _grid.GridToWorld(coord);
+
+            if (_jailStairsWoodPrefab != null)
+            {
+                var stairs = Instantiate(_jailStairsWoodPrefab, transform, false);
+                stairs.name = $"JailStair_{coord.x}_{coord.y}";
+                // Pivot sits near ground level at the ramp's own top end
+                // (local Z=0) — positioned at the tile's true south/
+                // outward edge, matching the "right at the tile's true
+                // edge" convention BuildRimWallVisual's own inset uses.
+                // The mesh's local +Z axis already runs toward the room's
+                // interior (matching this hardcoded south-gate case,
+                // where +world-Z is "into the room"), so no rotation is
+                // needed. The mesh's own authored drop is 2 units (this
+                // pack's stated pit depth), but this project's own pit is
+                // only PitDepth (1 unit) — Y-only scale down to match, X/Z
+                // (the tile-width and the ramp's own run) stay natural
+                // scale. Best-guess placement, no in-Editor render to
+                // confirm the run reads right at this shallower depth.
+                stairs.transform.position = new Vector3(worldPos.x, _grid.FloorSurfaceY, worldPos.z - cellSize * 0.5f);
+                stairs.transform.localScale = new Vector3(1f, PitDepth / 2f, 1f);
+                return stairs;
+            }
+
             var container = new GameObject($"JailStair_{coord.x}_{coord.y}");
             container.transform.SetParent(transform, false);
-            container.transform.position = _grid.GridToWorld(coord);
+            container.transform.position = worldPos;
 
-            var cellSize = _grid.CellSize;
             var pitFloorY = _grid.FloorSurfaceY - PitDepth;
             var stepDepth = cellSize / StepCount;
 
@@ -947,19 +1249,34 @@ namespace KeepersDomain.Rooms
             return container;
         }
 
-        /// Two posts framing the staircase opening at coord's south edge
-        /// — the "gate" half of "one staircase with a gate." Cosmetic
-        /// only, same as the staircase itself: the tile stays fully
-        /// walkable underneath.
+        /// The real jail_gate mesh framing the staircase opening at
+        /// coord's south edge (falls back to the original two-post
+        /// version below if the prop hasn't been set up yet) — the "gate"
+        /// half of "one staircase with a gate." Cosmetic only, same as
+        /// the staircase itself: the tile stays fully walkable
+        /// underneath.
         private GameObject BuildGatePostsVisual(Vector2Int coord)
         {
-            var container = new GameObject($"JailGate_{coord.x}_{coord.y}");
-            container.transform.SetParent(transform, false);
-
             var cellSize = _grid.CellSize;
             var worldPos = _grid.GridToWorld(coord);
             var edgeZ = worldPos.z - cellSize * FenceEdgeInset;
             var groundY = _grid.FloorSurfaceY;
+
+            if (_jailGatePrefab != null)
+            {
+                var gate = Instantiate(_jailGatePrefab, transform, false);
+                gate.name = $"JailGate_{coord.x}_{coord.y}";
+                // Pivot sits at the mesh's own bottom (Y=0 = ground
+                // level) — no extra Y offset needed. Only ever built for
+                // the one hardcoded south-facing gate edge (see
+                // BuildRimStructures), so no per-direction rotation is
+                // needed here.
+                gate.transform.position = new Vector3(worldPos.x, groundY, edgeZ);
+                return gate;
+            }
+
+            var container = new GameObject($"JailGate_{coord.x}_{coord.y}");
+            container.transform.SetParent(transform, false);
 
             foreach (var side in new[] { -1f, 1f })
             {

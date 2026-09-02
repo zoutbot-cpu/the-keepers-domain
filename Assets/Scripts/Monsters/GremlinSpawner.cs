@@ -31,8 +31,9 @@ namespace KeepersDomain.Monsters
         private TrainingRoomManager _trainingRoomManager;
         private TavernManager _tavernManager;
         private TreasuryManager _treasuryManager;
+        private int _ownerId;
 
-        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, SlimeHatcheryManager slimeHatcheryManager, TrainingRoomManager trainingRoomManager, TavernManager tavernManager, TreasuryManager treasuryManager)
+        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, SlimeHatcheryManager slimeHatcheryManager, TrainingRoomManager trainingRoomManager, TavernManager tavernManager, TreasuryManager treasuryManager, int ownerId = 0)
         {
             _grid = grid;
             _portal = portal;
@@ -41,6 +42,7 @@ namespace KeepersDomain.Monsters
             _trainingRoomManager = trainingRoomManager;
             _tavernManager = tavernManager;
             _treasuryManager = treasuryManager;
+            _ownerId = ownerId;
         }
 
         /// How many Gremlins are still available to recruit from the
@@ -74,7 +76,7 @@ namespace KeepersDomain.Monsters
                 return false;
             }
 
-            var nonImpCount = GremlinAgent.All.Count + WarlockAgent.All.Count + MazeRattlerAgent.All.Count + BeanCounterAgent.All.Count;
+            var nonImpCount = GremlinAgent.CountForOwner(_ownerId) + WarlockAgent.CountForOwner(_ownerId) + MazeRattlerAgent.CountForOwner(_ownerId) + BeanCounterAgent.CountForOwner(_ownerId);
             if (_slimeHatcheryManager == null || nonImpCount >= _slimeHatcheryManager.TotalTileCount)
             {
                 return false;
@@ -100,7 +102,7 @@ namespace KeepersDomain.Monsters
                 return false;
             }
 
-            SpawnGremlin(_portal.Coord);
+            SpawnGremlin(_portal.Coord, _ownerId);
             return true;
         }
 
@@ -109,7 +111,7 @@ namespace KeepersDomain.Monsters
         /// its conversion roll and rejoins the domain (see
         /// ConversionClassManager.TryTormentRandomPrisoner), instead of
         /// duplicating it.
-        public void SpawnGremlin(Vector2Int coord)
+        public void SpawnGremlin(Vector2Int coord, int ownerId = 0)
         {
             var worldPos = _grid.GridToWorld(coord);
 
@@ -124,7 +126,7 @@ namespace KeepersDomain.Monsters
             Destroy(visual.GetComponent<Collider>());
 
             var agent = visual.AddComponent<GremlinAgent>();
-            agent.Initialize(_grid, _lairManager, _tavernManager, _trainingRoomManager, _treasuryManager, _portal);
+            agent.Initialize(_grid, _lairManager, _tavernManager, _trainingRoomManager, _treasuryManager, _portal, ownerId);
             GameplayLog.Write($"{agent.Name} joined via the Portal at ({coord.x},{coord.y})");
         }
     }

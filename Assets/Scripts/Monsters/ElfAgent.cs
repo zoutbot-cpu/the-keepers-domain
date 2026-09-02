@@ -136,13 +136,15 @@ namespace KeepersDomain.Monsters
         /// other creature's Initialize, purely for TickLeaving's "walk to
         /// the Portal and leave" behavior — an unhappy Elf should still be
         /// able to leave the domain the normal way.
-        public void Initialize(DungeonGrid grid, LairManager lairManager, TavernManager tavernManager, TreasuryManager treasuryManager, Portal portal)
+        public void Initialize(DungeonGrid grid, LairManager lairManager, TavernManager tavernManager, TreasuryManager treasuryManager, Portal portal, int ownerId)
         {
             _grid = grid;
             _lairManager = lairManager;
             _tavernManager = tavernManager;
             _treasuryManager = treasuryManager;
             _portal = portal;
+            _creature.SetOwner(ownerId);
+            CreatureHealthRing.Attach(gameObject, _creature, grid);
             _lairManager.RoomSold += OnLairSold;
         }
 
@@ -475,7 +477,7 @@ namespace KeepersDomain.Monsters
             var destroyed = _grid.ApplyRoomDamage(_attackTargetCoord, AttackHitDamage);
             if (destroyed)
             {
-                _lairManager.TrySellRoom(_attackTargetCoord);
+                KeepersDomain.Core.KeeperContext.TrySellRoomAt(_grid, _attackTargetCoord);
                 GameplayLog.Write($"{Name} ({_happiness.Tier}) destroyed a room at ({_attackTargetCoord.x},{_attackTargetCoord.y})");
                 SetTask(ElfTask.Idle);
             }
@@ -496,7 +498,7 @@ namespace KeepersDomain.Monsters
             }
 
             _attackHitTimer -= AttackHitInterval;
-            var destroyed = _grid.ApplyDigDamage(_attackTargetCoord, AttackHitDamage, out _, out _);
+            var destroyed = _grid.ApplyDigDamage(_attackTargetCoord, AttackHitDamage, out _, out _, _creature.OwnerId);
             if (destroyed)
             {
                 GameplayLog.Write($"{Name} ({_happiness.Tier}) smashed a wall at ({_attackTargetCoord.x},{_attackTargetCoord.y})");
@@ -600,7 +602,7 @@ namespace KeepersDomain.Monsters
             var candidates = new List<Vector2Int>();
             foreach (var candidate in distances.Keys)
             {
-                if (_grid.CanBuildRoomOn(candidate))
+                if (_grid.CanBuildRoomOn(candidate, _creature.OwnerId))
                 {
                     candidates.Add(candidate);
                 }

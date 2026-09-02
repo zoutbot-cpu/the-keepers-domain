@@ -103,6 +103,8 @@ namespace KeepersDomain.Core
         /// state that outlives its GameObject.
         public static void ReturnToMainMenu()
         {
+            KeeperContext.All = null;
+
             foreach (var root in UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects())
             {
                 Object.Destroy(root);
@@ -361,7 +363,8 @@ namespace KeepersDomain.Core
             interactionController.Initialize(camera, grid, session, roomManagers);
 
             var menuBar = CreateComponent<LevelDesignerMenuBar>("LevelDesignerMenuBar");
-            menuBar.Initialize(session, interactionController, LoadLevelDesignerWorld, initialLevelName);
+            var jailManager = (JailManager)roomManagers[RoomDesignTool.Jail];
+            menuBar.Initialize(session, interactionController, grid, jailManager, LoadLevelDesignerWorld, initialLevelName);
         }
 
         /// Everything that used to run directly out of Init() — deferred
@@ -384,6 +387,11 @@ namespace KeepersDomain.Core
         /// before.
         private static void BuildWorld(LevelData data = null)
         {
+            // Drop any stale KeeperContext references from a previous
+            // session (a "Main Menu -> Start Game" bounce) before anything
+            // can read the static registry.
+            KeeperContext.All = null;
+
             // Clears out the menu camera created by ShowMainMenu — the real
             // iso camera below replaces it.
             RemoveStrayCameras();
@@ -391,11 +399,47 @@ namespace KeepersDomain.Core
 
             var grid = CreateComponent<DungeonGrid>("DungeonGrid");
             grid.Initialize(data != null ? data.MapWidth : GridWidth, data != null ? data.MapHeight : GridHeight, CellSize);
-            // Placeholder until a real player-color selection screen
-            // exists — green for now. Visible on the Reinforced wall
-            // orb (DungeonGrid.PlayerColor) and ThroneRoom's own fallback
-            // orb (ThroneRoom.PlayerColor, set below), kept in sync.
-            grid.PlayerColor = Color.green;
+
+            // One PlayerSpec per keeper — a single default for a
+            // from-scratch map, one per entry for a loaded roster.
+            var specs = SynthesizePlayerSpecs(data);
+
+            if (specs.Length > 1)
+            {
+                // A multi-player level: every owner past 0 has real
+                // ownership in the save (tiles/walls/rooms/creatures all
+                // keep their OwnerId), but gameplay used to populate only a
+                // single-entry OwnerColors array via the PlayerColor setter
+                // — so DungeonGrid.ResolveOwnerColor collapsed every other
+                // owner's Reinforced-wall orbs and CreatureHealthRing
+                // collapsed their rings onto that one color, and
+                // TintFloorByOwner stayed false so their claimed floor was
+                // untinted too. Populate the real per-owner palette
+                // (mirroring LevelDesignerSession.RefreshGridOwnerColors) so
+                // each roster stays visually its own.
+                var ownerColors = new Color[specs.Length];
+                for (int i = 0; i < ownerColors.Length; i++)
+                {
+                    ownerColors[i] = specs[i].Color;
+                }
+                // PlayerColor first (fallback for -1/out-of-range owners),
+                // then override the array it just collapsed to one entry —
+                // the grid has no tiles yet, so the setter's
+                // RefreshAllVisuals is a no-op and per-tile RefreshVisual
+                // during RestoreWorldTiles picks up the full array.
+                grid.PlayerColor = ownerColors[0];
+                grid.OwnerColors = ownerColors;
+                grid.TintFloorByOwner = true;
+            }
+            else
+            {
+                // Single player — green placeholder for a fresh map (see
+                // SynthesizePlayerSpecs), or the one loaded player's own
+                // color. Visible on the Reinforced wall orb and ThroneRoom's
+                // fallback orb; TintFloorByOwner stays off so plain claimed
+                // floor renders exactly as before.
+                grid.PlayerColor = specs[0].Color;
+            }
 
             // Drives the dungeon_pack water/lava tiles' scroll/pulse —
             // see LiquidAnimator's own header for what it does and
@@ -410,16 +454,17 @@ namespace KeepersDomain.Core
             Dictionary<string, List<Vector2Int>> roomFootprints = null;
             Dictionary<string, int> roomOwners = null;
 
-            Vector2Int throneRoomCenter;
-            Vector2Int portalCoord;
+            // One Throne/Portal coord per keeper. Fresh: only [0] is set
+            // (and carved). Loaded: resolved per player from data.Structures.
+            var throneCoords = new Vector2Int[specs.Length];
+            var portalCoords = new Vector2Int[specs.Length];
 
             // Declared here (rather than only inside the else branch
             // below) so they're still in scope for the PlaceStartingX
-            // calls further down, each individually guarded by
-            // `data == null` — left at their default, unused value when
-            // data != null, since that branch reconstructs every room
-            // through RestoreWorldTiles + the RoomReconstruction dispatch
-            // near the bottom of this method instead.
+            // calls further down, run only on the fresh (data == null)
+            // path — left at their default, unused value when data != null,
+            // since that branch reconstructs every room through
+            // RestoreWorldTiles + RestoreWorldRoomsPerOwner instead.
             var treasuryCoord = default(Vector2Int);
             var libraryRoomOrigin = default(Vector2Int);
             var libraryRoomEndCoord = default(Vector2Int);
@@ -436,18 +481,23 @@ namespace KeepersDomain.Core
             {
                 RestoreWorldTiles(grid, data, out roomFootprints, out roomOwners);
 
-                var fallbackThroneRoomCenter = new Vector2Int(grid.Width / 2, grid.Height / 2);
-                throneRoomCenter = FindStructureCoordOrDefault(data, StructureKind.ThroneRoom, fallbackThroneRoomCenter);
-                portalCoord = FindStructureCoordOrDefault(data, StructureKind.PortalRoom,
-                    fallbackThroneRoomCenter + new Vector2Int(ThroneRoomHalfSize + PortalRoomHalfSize + 2, 0));
+                for (int i = 0; i < specs.Length; i++)
+                {
+                    var fallback = SpreadFallbackCoord(grid, i);
+                    throneCoords[i] = FindStructureCoordOrDefault(data, StructureKind.ThroneRoom, fallback, preferredOwnerId: i);
+                    portalCoords[i] = FindStructureCoordOrDefault(data, StructureKind.PortalRoom,
+                        fallback + new Vector2Int(ThroneRoomHalfSize + PortalRoomHalfSize + 2, 0), preferredOwnerId: i);
+                }
             }
             else
             {
                 // Throne Room sits at the grid center; the portal gets its own
                 // room to the east, joined by a single one-tile corridor.
-                throneRoomCenter = new Vector2Int(GridWidth / 2, GridHeight / 2);
+                var throneRoomCenter = new Vector2Int(GridWidth / 2, GridHeight / 2);
                 var corridorCoord = throneRoomCenter + new Vector2Int(ThroneRoomHalfSize + 1, 0);
-                portalCoord = corridorCoord + new Vector2Int(PortalRoomHalfSize + 1, 0);
+                var portalCoord = corridorCoord + new Vector2Int(PortalRoomHalfSize + 1, 0);
+                throneCoords[0] = throneRoomCenter;
+                portalCoords[0] = portalCoord;
 
                 // Both rooms carve buildable by default, then re-carve just the
                 // footprint that actually has a fixed structure on it (Throne
@@ -509,228 +559,104 @@ namespace KeepersDomain.Core
                 ScatterResourceWalls(grid);
             }
 
-            var throneRoom = CreateComponent<ThroneRoom>("ThroneRoom");
-            throneRoom.PlayerColor = grid.PlayerColor;
-            throneRoom.Initialize(throneRoomCenter, grid);
-
-            var portal = CreateComponent<Portal>("Portal");
-            portal.Initialize(portalCoord, grid);
-
-            var jobBoard = CreateComponent<BuilderJobBoard>("BuilderJobBoard");
-            jobBoard.Initialize(grid);
-
-            // LairManager and TreasuryManager each need a reference to the
-            // other (Treasury subscribes to LairManager.RoomSold to clean
-            // up a sold Treasury's gold/visuals; Lair charges its placement
-            // cost out of TreasuryManager's reserves — see
-            // LairManager.TryPlaceLair) — both components are created first,
-            // then wired up in whichever order, since C# events and plain
-            // field assignment don't require the other side's Initialize to
-            // have run yet.
-            var lairManager = CreateComponent<LairManager>("LairManager");
-            var treasuryManager = CreateComponent<TreasuryManager>("TreasuryManager");
-            treasuryManager.Initialize(grid, lairManager);
-            lairManager.Initialize(grid, treasuryManager);
-
-            if (data == null)
+            // Build one full gameplay stack per keeper (see
+            // BuildKeeperContext) — job board, Portal + recruit pools,
+            // Throne mana, the nine room managers, the six spawners, all
+            // owner-scoped. Fresh game = exactly one.
+            var contexts = new KeeperContext[specs.Length];
+            for (int i = 0; i < specs.Length; i++)
             {
-                // The starting Treasury is placed exactly like a player-built
-                // one — PlaceStartingTreasury, not a direct tile-registration
-                // loop — so it's a real, sellable room from the moment the game
-                // starts, not a permanent landmark. Unlike TryPlaceTreasury,
-                // this skips the gold cost — it's terrain generation, not a
-                // purchase, and there'd be no gold to pay it with yet anyway.
-                // When data != null, the Treasury (like every other room) is
-                // reconstructed instead by the RoomReconstruction dispatch
-                // below, once every room manager exists.
-                treasuryManager.PlaceStartingTreasury(
-                    treasuryCoord - new Vector2Int(TreasuryRoomHalfSize, TreasuryRoomHalfSize),
-                    treasuryCoord + new Vector2Int(TreasuryRoomHalfSize, TreasuryRoomHalfSize));
+                var keeperParent = new GameObject($"Keeper P{i + 1}").transform;
+                contexts[i] = BuildKeeperContext(grid, specs[i], throneCoords[i], portalCoords[i], keeperParent);
             }
+            KeeperContext.All = contexts;
 
-            // Starting gold, spread across every tile the starting Treasury
-            // just registered (AddGold, not Deposit — Deposit targets one
-            // specific tile and caps at GoldCapacityPerTile, which silently
-            // dropped everything past 500 when StartingGold grew past a
-            // single tile's capacity). Read from the save's own player data
-            // when loading one, falling back to the StartingGold constant
-            // if that's somehow missing.
-            var startingGold = data != null && data.Players.Count > 0 ? data.Players[0].StartingGold : StartingGold;
-            treasuryManager.AddGold(startingGold);
-
-            // Slime Hatchery/Tavern get a starting instance too (see
-            // PlaceStartingHatchery/PlaceStartingTavern below, once the
-            // utility-room footprints are carved) on top of being
-            // player-placeable like Lair/Treasury — both subscribe to
-            // LairManager.RoomSold the same way TreasuryManager does, and
-            // charge their own per-tile cost out of TreasuryManager same as
-            // LairManager, so they need both to exist first.
-            var slimeHatcheryManager = CreateComponent<SlimeHatcheryManager>("SlimeHatcheryManager");
-            slimeHatcheryManager.Initialize(grid, lairManager, treasuryManager);
-
-            var tavernManager = CreateComponent<TavernManager>("TavernManager");
-            tavernManager.Initialize(grid, lairManager, treasuryManager);
-
-            // Training Room follows the same "player-placed, subscribes to
-            // RoomSold" wiring as Hatchery/Tavern — placement and visuals
-            // only for now, see TrainingRoomManager's own header comment.
-            var trainingRoomManager = CreateComponent<TrainingRoomManager>("TrainingRoomManager");
-            trainingRoomManager.Initialize(grid, lairManager, treasuryManager);
-
-            // Library follows the same "player-placed, subscribes to
-            // RoomSold" wiring as Hatchery/Tavern/Training Room — placement
-            // and visuals only for now, see LibraryManager's own header
-            // comment.
-            var libraryManager = CreateComponent<LibraryManager>("LibraryManager");
-            libraryManager.Initialize(grid, lairManager, treasuryManager);
-
-            if (data == null)
-            {
-                // Both starting rooms are placed exactly like the starting
-                // Treasury — PlaceStartingLibrary/PlaceStartingTrainingRoom, not
-                // a direct tile-registration loop — so each is a real, sellable
-                // room from the moment the game starts, filling the claimed
-                // floor carved above with actual Library/Training Room tiles
-                // rather than leaving it empty. Same as PlaceStartingTreasury,
-                // both skip their usual gold cost — terrain generation, not a
-                // purchase.
-                libraryManager.PlaceStartingLibrary(libraryRoomOrigin, libraryRoomEndCoord);
-                trainingRoomManager.PlaceStartingTrainingRoom(trainingRoomStartOrigin, trainingRoomStartEndCoord);
-            }
-
-            // Jail follows the same "player-placed, subscribes to
-            // RoomSold" wiring as Hatchery/Tavern/Training Room/Library —
-            // placement and visuals only for now (no Maze Rattler/capture
-            // mechanic exists yet, see JailManager's own header comment).
-            // No starting instance — unlike Library/Training Room, there's
-            // no reason yet to force one into the starting domain.
-            var jailManager = CreateComponent<JailManager>("JailManager");
-            jailManager.Initialize(grid, jobBoard, lairManager, treasuryManager);
-
-            if (data == null)
-            {
-                // Same "real, sellable room from the moment the game starts"
-                // treatment as Treasury/Library/Training Room — placed into the
-                // three utility-room footprints carved above (see
-                // CarveStartingUtilityRooms), no gold cost since this is
-                // terrain generation, not a purchase. The starting Lair is left
-                // unclaimed, same as a player-placed one — nothing auto-claims
-                // it — but its mere existence satisfies Gremlin's "at least one
-                // free Lair" join requirement from the very start.
-                lairManager.PlaceStartingLair(lairRoomOrigin, lairRoomEndCoord);
-                slimeHatcheryManager.PlaceStartingHatchery(hatcheryRoomOrigin, hatcheryRoomEndCoord);
-                tavernManager.PlaceStartingTavern(tavernRoomOrigin, tavernRoomEndCoord);
-            }
-
-            var implingSpawner = CreateComponent<ImplingSpawner>("ImplingSpawner");
-            implingSpawner.Initialize(jobBoard, grid, treasuryManager, throneRoom, slimeHatcheryManager, tavernManager);
-
-            // First non-Imp creature — recruited out of the Portal's pool
-            // (see Portal.SeedPool/TryTakeFromPool), not placed freely; see
-            // GremlinAgent/GremlinSpawner's own header comments for its
-            // join requirements and priority-list AI.
-            var gremlinSpawner = CreateComponent<GremlinSpawner>("GremlinSpawner");
-            gremlinSpawner.Initialize(grid, portal, lairManager, slimeHatcheryManager, trainingRoomManager, tavernManager, treasuryManager);
-            portal.SeedPool(GremlinAgent.CreatureKind, StartingGremlinPoolCount);
-
-            // Second non-Imp creature, and the first "intelligent" one — see
-            // WarlockAgent/WarlockSpawner's own header comments for its
-            // extra join requirements (a Lair tile, a 3x3+ Library, and
-            // Hatchery/Tavern capacity) on top of pool availability.
-            var warlockSpawner = CreateComponent<WarlockSpawner>("WarlockSpawner");
-            warlockSpawner.Initialize(grid, portal, lairManager, libraryManager, slimeHatcheryManager, tavernManager, trainingRoomManager, treasuryManager);
-            portal.SeedPool(WarlockAgent.CreatureKind, StartingWarlockPoolCount);
-
-            // Third non-Imp creature — see MazeRattlerAgent/MazeRattlerSpawner's
-            // own header comments for its join requirement (a placed Jail,
-            // 5 Maze Rattlers per Jail room) and its "haunt the prisoners"
-            // idle-tier behavior.
-            var mazeRattlerSpawner = CreateComponent<MazeRattlerSpawner>("MazeRattlerSpawner");
-            mazeRattlerSpawner.Initialize(grid, portal, lairManager, jailManager, tavernManager, trainingRoomManager, treasuryManager);
-            portal.SeedPool(MazeRattlerAgent.CreatureKind, StartingMazeRattlerPoolCount);
-
-            // Elf is never recruited through the Portal (see ElfSpawner's
-            // own header) — only ever created as Conversion Class's
-            // torment-failure outcome — so it's created here with no
-            // SeedPool call, just wired up so ConversionClassManager has
-            // something to call SpawnElf on.
-            var elfSpawner = CreateComponent<ElfSpawner>("ElfSpawner");
-            elfSpawner.Initialize(grid, portal, lairManager, tavernManager, treasuryManager);
-
-            // Conversion Class follows the same "player-placed, subscribes
-            // to RoomSold" wiring as every other room — see
-            // ConversionClassManager's own header for the bench/wall-board
-            // visuals and the torment mechanic it owns.
-            var conversionClassManager = CreateComponent<ConversionClassManager>("ConversionClassManager");
-            conversionClassManager.Initialize(grid, lairManager, treasuryManager, jailManager, gremlinSpawner, warlockSpawner, mazeRattlerSpawner, elfSpawner);
-
-            if (data != null && roomFootprints != null)
-            {
-                // Every room manager but Bridge now exists — reconstruct
-                // every saved room (Treasury included, in place of
-                // PlaceStartingTreasury above) through the same
-                // IRestorableRoomManager dispatch the Level Designer's own
-                // load path uses (see RoomReconstruction), so a loaded
-                // game gets the exact same real decoration a fresh one
-                // does, not a placeholder.
-                var roomManagers = new Dictionary<RoomDesignTool, IRestorableRoomManager>
-                {
-                    { RoomDesignTool.Lair, lairManager },
-                    { RoomDesignTool.Treasury, treasuryManager },
-                    { RoomDesignTool.SlimeHatchery, slimeHatcheryManager },
-                    { RoomDesignTool.Tavern, tavernManager },
-                    { RoomDesignTool.TrainingRoom, trainingRoomManager },
-                    { RoomDesignTool.Library, libraryManager },
-                    { RoomDesignTool.Jail, jailManager },
-                    { RoomDesignTool.ConversionClass, conversionClassManager },
-                };
-                RoomReconstruction.RestoreRooms(grid, roomFootprints, roomOwners, roomManagers);
-            }
-
-            // Bridge follows the same "player-placed, subscribes to
-            // RoomSold" wiring as every other room manager — see
-            // BridgeManager's own header for its line-paint placement and
-            // Lava-decay mechanic.
-            var bridgeManager = CreateComponent<BridgeManager>("BridgeManager");
-            bridgeManager.Initialize(grid, lairManager, treasuryManager);
-
-            // Fourth non-Imp creature — see BeanCounterAgent/
-            // BeanCounterSpawner's own header comments for its join
-            // requirement (a placed Conversion Class) and its "teach"
-            // idle-tier behavior.
-            var beanCounterSpawner = CreateComponent<BeanCounterSpawner>("BeanCounterSpawner");
-            beanCounterSpawner.Initialize(grid, portal, lairManager, conversionClassManager, jailManager, tavernManager, treasuryManager);
-            portal.SeedPool(BeanCounterAgent.CreatureKind, StartingBeanCounterPoolCount);
-
-            // Every spawner now exists — restore each saved creature as a
-            // real live agent (not the Level Designer's inert marker, see
-            // RoomReconstruction's own header — this is actual gameplay),
-            // or fall back to the fixed starting-Impling spawn when
-            // there's no save to restore from.
             if (data != null)
             {
-                RestoreWorldCreatures(data, implingSpawner, gremlinSpawner, warlockSpawner, mazeRattlerSpawner, beanCounterSpawner, elfSpawner);
+                // Reconstruct every saved room through its owner's managers
+                // (see RestoreWorldRoomsPerOwner), then hand each keeper its
+                // starting gold — after that keeper's Treasury tiles exist
+                // (rebuilt just now), same ordering rationale the single-
+                // manager version used.
+                if (roomFootprints != null)
+                {
+                    RestoreWorldRoomsPerOwner(grid, roomFootprints, roomOwners, contexts);
+                }
+
+                for (int i = 0; i < contexts.Length; i++)
+                {
+                    contexts[i].Treasury.AddGold(specs[i].StartingGold);
+                }
             }
             else
             {
-                SpawnStartingImplings(implingSpawner, throneRoomCenter);
+                // Fresh map: the local keeper (owner 0) gets the starting
+                // domain — Treasury/Library/Training Room/Lair/Hatchery/
+                // Tavern placed via each manager's PlaceStartingX (real,
+                // sellable rooms, gold-free — terrain generation, not a
+                // purchase), same coords as before. Then its starting gold,
+                // after the Treasury tiles exist.
+                var c0 = contexts[0];
+                c0.Treasury.PlaceStartingTreasury(
+                    treasuryCoord - new Vector2Int(TreasuryRoomHalfSize, TreasuryRoomHalfSize),
+                    treasuryCoord + new Vector2Int(TreasuryRoomHalfSize, TreasuryRoomHalfSize));
+                c0.Library.PlaceStartingLibrary(libraryRoomOrigin, libraryRoomEndCoord);
+                c0.TrainingRoom.PlaceStartingTrainingRoom(trainingRoomStartOrigin, trainingRoomStartEndCoord);
+                c0.Lair.PlaceStartingLair(lairRoomOrigin, lairRoomEndCoord);
+                c0.SlimeHatchery.PlaceStartingHatchery(hatcheryRoomOrigin, hatcheryRoomEndCoord);
+                c0.Tavern.PlaceStartingTavern(tavernRoomOrigin, tavernRoomEndCoord);
+                c0.Treasury.AddGold(specs[0].StartingGold);
             }
 
-            // Pan margin scaled by the same +50% as GridWidth/GridHeight
-            // (15f base -> 22.5f), so the camera can still reach the whole
-            // enlarged map instead of the old grid's bounds.
-            var camera = CreateIsoCamera(grid, 22.5f);
+            // Floor authored as Unclaimed in the Level Designer is loaded
+            // straight in — it never gets dug, so it never fires
+            // FloorNeedsClaim and imps would otherwise ignore it forever.
+            // Queue a claim job for every such tile on every keeper's board;
+            // each board's own frontier rule still gates when its imps act.
+            QueuePreplacedClaimJobs(grid, contexts);
 
+            // Restore each saved creature as a real live agent through its
+            // own keeper's spawner (see RestoreWorldCreatures), or spawn the
+            // fixed four starting Implings for the local keeper on a fresh
+            // map.
+            if (data != null)
+            {
+                RestoreWorldCreatures(data, contexts);
+            }
+            else
+            {
+                SpawnStartingImplings(contexts[0].ImplingSpawner, throneCoords[0]);
+            }
+
+            const int localPlayerIndex = 0;
+
+            // Pan margin: 22.5f for a freshly generated map (the +50%-scaled
+            // gameplay grid — 15f base -> 22.5f — kept exactly as tuned), but
+            // a loaded level can be any size up to the Level Designer's 256,
+            // so scale to the actual footprint the same way
+            // SetUpLevelDesignerWorld does. Opens centered on the local
+            // player's Throne Room (see CreateIsoCamera's focusGroundPoint).
+            var panMargin = data != null
+                ? Mathf.Max(grid.Width, grid.Height) * CellSize * 0.5f + 10f
+                : 22.5f;
+            var camera = CreateIsoCamera(grid, panMargin, grid.GridToWorld(throneCoords[localPlayerIndex]));
+
+            // Input / grab hand / HUD are built once and bound to the local
+            // keeper's context; the debug player switcher (BottomMenuBar,
+            // only shown when contexts.Length > 1) repoints all three plus
+            // the camera through LocalPlayerController.SetActivePlayer.
             var minionGrabController = CreateComponent<MinionGrabController>("MinionGrabController");
-            minionGrabController.Initialize(camera, grid, trainingRoomManager, jailManager);
+            minionGrabController.Initialize(camera, grid, contexts, localPlayerIndex);
 
             var interactionController = CreateComponent<TileInteractionController>("TileInteractionController");
-            interactionController.Initialize(camera, grid, jobBoard, lairManager, treasuryManager, slimeHatcheryManager, tavernManager, trainingRoomManager, libraryManager, jailManager, conversionClassManager, bridgeManager, implingSpawner, minionGrabController);
+            interactionController.Initialize(camera, grid, contexts, minionGrabController, localPlayerIndex);
 
+            var localPlayerController = CreateComponent<LocalPlayerController>("LocalPlayerController");
             var bottomMenuBar = CreateComponent<BottomMenuBar>("BottomMenuBar");
-            bottomMenuBar.Initialize(grid, jobBoard, interactionController, treasuryManager, throneRoom, tavernManager, trainingRoomManager, libraryManager, jailManager, conversionClassManager, gremlinSpawner, warlockSpawner, mazeRattlerSpawner, beanCounterSpawner);
+            bottomMenuBar.Initialize(grid, contexts, interactionController, localPlayerController, localPlayerIndex);
+            localPlayerController.Initialize(camera, grid, contexts, interactionController, minionGrabController, bottomMenuBar, localPlayerIndex);
 
-            SaveStartingLevelAsLevel1(grid, throneRoomCenter, portalCoord);
+            SaveStartingLevelAsLevel1(grid, contexts[0].ThroneCoord, contexts[0].PortalCoord);
         }
 
         /// Snapshots the freshly-built starting world into a "level1" save
@@ -778,16 +704,28 @@ namespace KeepersDomain.Core
 
             var data = session.BuildLevelData();
 
-            // OwnerId 0, not -1 — CarveRoom claims both footprints as
-            // Ownership.Claimed but leaves TileState.OwnerId at its
-            // default (0), so that's what the tile-scanning loop above
-            // actually captured into data.Tiles for every one of these
-            // tiles. LevelDesignerSession.PlaceStructure re-paints its
-            // whole footprint as Claimed floor using THIS OwnerId on
-            // every load (see its own comment) — recording -1 here made
-            // it re-paint the footprint Unclaimed on every load, silently
-            // undoing the correct Claimed/OwnerId=0 state the tile loop
-            // had just restored a moment earlier.
+            // Pin the snapshot's economy to what the fresh build actually
+            // used (StartingGold constant, 100 starting mana) rather than
+            // LevelDesignerSession's own StartingGoldDefault/
+            // StartingManaDefault — so "fresh -> auto-save -> reload level1"
+            // comes up with the identical gold/mana it had on the fresh
+            // run. A hand-edited level1 keeps whatever the designer set.
+            if (data.Players.Count > 0)
+            {
+                data.Players[0].StartingGold = StartingGold;
+                data.Players[0].StartingMana = 100;
+            }
+
+            // OwnerId 0 — CarveRoom now explicitly stamps its footprint
+            // OwnerId 0 (the local keeper) alongside Ownership.Claimed, so
+            // that's what the tile-scanning loop above captured into
+            // data.Tiles for every one of these tiles.
+            // LevelDesignerSession.PlaceStructure re-paints its whole
+            // footprint as Claimed floor using THIS OwnerId on every load
+            // (see its own comment) — recording -1 here made it re-paint the
+            // footprint Unclaimed on every load, silently undoing the
+            // correct Claimed/OwnerId=0 state the tile loop had just
+            // restored a moment earlier.
             data.Structures.Add(new LevelStructureData { Kind = StructureKind.ThroneRoom, X = throneRoomCenter.x, Y = throneRoomCenter.y, OwnerId = 0 });
             data.Structures.Add(new LevelStructureData { Kind = StructureKind.PortalRoom, X = portalCoord.x, Y = portalCoord.y, OwnerId = 0 });
 
@@ -843,7 +781,16 @@ namespace KeepersDomain.Core
         /// side — see LevelDesignerPropertiesMenu), so its own caller
         /// (BuildLevelDesignerWorld) scales the margin to the actual map
         /// footprint instead of reusing gameplay's fixed 22.5.
-        private static Camera CreateIsoCamera(DungeonGrid grid, float panMargin)
+        ///
+        /// focusGroundPoint is the ground position the view opens centered
+        /// on — the local player's Throne Room in gameplay (see BuildWorld),
+        /// so each player starts looking at their own dungeon rather than
+        /// the geometric middle of the map, which on a multi-player level
+        /// is nobody's. Null centers on the map middle, the original
+        /// behavior (still used by the Level Designer preview). Pan bounds
+        /// stay anchored to the map middle either way, so opening off-center
+        /// never shrinks how far the camera can roam.
+        private static Camera CreateIsoCamera(DungeonGrid grid, float panMargin, Vector3? focusGroundPoint = null)
         {
             var cameraGO = new GameObject("Main Camera");
             cameraGO.tag = "MainCamera";
@@ -854,15 +801,26 @@ namespace KeepersDomain.Core
             camera.backgroundColor = new Color(0.05f, 0.05f, 0.07f);
             cameraGO.AddComponent<AudioListener>();
 
-            var target = new Vector3(grid.Width * grid.CellSize * 0.5f, 0f, grid.Height * grid.CellSize * 0.5f);
+            var mapCenter = new Vector3(grid.Width * grid.CellSize * 0.5f, 0f, grid.Height * grid.CellSize * 0.5f);
+            var target = focusGroundPoint ?? mapCenter;
             var rotation = Quaternion.Euler(45f, 45f, 0f);
             const float distance = 20f;
             cameraGO.transform.rotation = rotation;
             cameraGO.transform.position = target - rotation * Vector3.forward * distance;
 
             var isoCam = cameraGO.AddComponent<IsoCameraController>();
-            var camPos = cameraGO.transform.position;
-            isoCam.SetPanBounds(new Vector2(camPos.x - panMargin, camPos.z - panMargin), new Vector2(camPos.x + panMargin, camPos.z + panMargin));
+            // Bounds are anchored to the map-center camera position, never
+            // the (possibly off-center) opening position — panMargin is
+            // sized by the caller to be at least half the map footprint
+            // plus slack (see both call sites), so center ± panMargin
+            // already reaches every edge tile no matter where the view
+            // opens. Deriving bounds from the opening position instead
+            // would let a Throne-Room-focused start cut off the far side of
+            // the map.
+            var mapCenterCamPos = mapCenter - rotation * Vector3.forward * distance;
+            isoCam.SetPanBounds(
+                new Vector2(mapCenterCamPos.x - panMargin, mapCenterCamPos.z - panMargin),
+                new Vector2(mapCenterCamPos.x + panMargin, mapCenterCamPos.z + panMargin));
 
             return camera;
         }
@@ -1013,22 +971,36 @@ namespace KeepersDomain.Core
             }
         }
 
-        /// The saved coord of the first Structure of kind in data, or
-        /// fallback if none is saved (shouldn't happen for a level1 born
-        /// from SaveStartingLevelAsLevel1, which always appends both — but
-        /// don't hard-crash BuildWorld over a hand-edited/stale save
+        /// The saved coord of the Structure of kind owned by
+        /// preferredOwnerId (the local player, 0, in gameplay — so a
+        /// multi-player level's single ThroneRoom/Portal component and the
+        /// opening camera focus both track the local Keeper's, not
+        /// whichever the designer happened to place first). Falls back to
+        /// the first Structure of that kind regardless of owner, then to
+        /// fallback if none is saved at all (shouldn't happen for a level1
+        /// born from SaveStartingLevelAsLevel1, which always appends both —
+        /// but don't hard-crash BuildWorld over a hand-edited/stale save
         /// that's missing one).
-        private static Vector2Int FindStructureCoordOrDefault(LevelData data, StructureKind kind, Vector2Int fallback)
+        private static Vector2Int FindStructureCoordOrDefault(LevelData data, StructureKind kind, Vector2Int fallback, int preferredOwnerId = 0)
         {
+            Vector2Int? firstOfKind = null;
             foreach (var structure in data.Structures)
             {
-                if (structure.Kind == kind)
+                if (structure.Kind != kind)
                 {
-                    return new Vector2Int(structure.X, structure.Y);
+                    continue;
                 }
+
+                var coord = new Vector2Int(structure.X, structure.Y);
+                if (structure.OwnerId == preferredOwnerId)
+                {
+                    return coord;
+                }
+
+                firstOfKind ??= coord;
             }
 
-            return fallback;
+            return firstOfKind ?? fallback;
         }
 
         /// BuildWorld's "data != null" creature-restoration step — unlike
@@ -1037,39 +1009,267 @@ namespace KeepersDomain.Core
         /// matching spawner's existing "spawn one at this coord, no cost/
         /// join-requirement checks" primitive, since this is actual
         /// gameplay. EditorCreatureKind maps 1:1 onto the 6 species (see
-        /// LevelDesignerSession.CaptureLiveCreatures' own header).
-        private static void RestoreWorldCreatures(LevelData data, ImplingSpawner implingSpawner, GremlinSpawner gremlinSpawner, WarlockSpawner warlockSpawner, MazeRattlerSpawner mazeRattlerSpawner, BeanCounterSpawner beanCounterSpawner, ElfSpawner elfSpawner)
+        /// LevelDesignerSession.CaptureLiveCreatures' own header). Each
+        /// creature is spawned through the spawner belonging to its own
+        /// keeper's context (clamped in case of a stray/out-of-range
+        /// OwnerId), so it comes up wired to that player's job board /
+        /// managers.
+        private static void RestoreWorldCreatures(LevelData data, KeeperContext[] contexts)
         {
             foreach (var creatureData in data.Creatures)
             {
                 var coord = new Vector2Int(creatureData.X, creatureData.Y);
+                var ownerId = Mathf.Clamp(creatureData.OwnerId, 0, contexts.Length - 1);
+                var ctx = contexts[ownerId];
                 switch (creatureData.Kind)
                 {
                     case EditorCreatureKind.Imp:
-                        implingSpawner.SpawnImplingAt(coord);
+                        ctx.ImplingSpawner.SpawnImplingAt(coord);
                         break;
                     case EditorCreatureKind.Gremlin:
-                        gremlinSpawner.SpawnGremlin(coord);
+                        ctx.GremlinSpawner.SpawnGremlin(coord, ownerId);
                         break;
                     case EditorCreatureKind.Warlock:
-                        warlockSpawner.SpawnWarlock(coord);
+                        ctx.WarlockSpawner.SpawnWarlock(coord, ownerId);
                         break;
                     case EditorCreatureKind.MazeRattler:
-                        mazeRattlerSpawner.SpawnMazeRattler(coord);
+                        ctx.MazeRattlerSpawner.SpawnMazeRattler(coord, ownerId);
                         break;
                     case EditorCreatureKind.BeanCounter:
-                        beanCounterSpawner.SpawnBeanCounter(coord);
+                        ctx.BeanCounterSpawner.SpawnBeanCounter(coord, ownerId);
                         break;
                     case EditorCreatureKind.Elf:
-                        elfSpawner.SpawnElf(coord);
+                        ctx.ElfSpawner.SpawnElf(coord, ownerId);
                         break;
                 }
             }
         }
 
+        /// One keeper's initial roster/economy config, synthesized from the
+        /// loaded level's player list (or a single default for a freshly
+        /// generated map). See BuildKeeperContext.
+        private struct PlayerSpec
+        {
+            public int OwnerId;
+            public bool IsAI;
+            public Color Color;
+            public int StartingGold;
+            public int StartingMana;
+        }
+
+        /// One PlayerSpec per player in the loaded roster — or a single
+        /// default (owner 0, human, green, the StartingGold constant, 100
+        /// mana) for a from-scratch map or an old/hand-edited save with an
+        /// empty player list. Matches the pre-multiplayer behavior exactly
+        /// when there's only one player.
+        private static PlayerSpec[] SynthesizePlayerSpecs(LevelData data)
+        {
+            if (data == null || data.Players.Count == 0)
+            {
+                return new[]
+                {
+                    new PlayerSpec { OwnerId = 0, IsAI = false, Color = Color.green, StartingGold = StartingGold, StartingMana = 100 },
+                };
+            }
+
+            var specs = new PlayerSpec[data.Players.Count];
+            for (int i = 0; i < specs.Length; i++)
+            {
+                var p = data.Players[i];
+                specs[i] = new PlayerSpec
+                {
+                    OwnerId = i,
+                    IsAI = p.IsAI,
+                    Color = LevelDesignerColors.Palette[p.ColorIndex % LevelDesignerColors.Palette.Length],
+                    StartingGold = p.StartingGold,
+                    StartingMana = p.StartingMana > 0 ? p.StartingMana : 100,
+                };
+            }
+            return specs;
+        }
+
+        /// Builds one keeper's entire gameplay stack — the exact same
+        /// CreateComponent + Initialize wiring BuildWorld used to run once
+        /// inline, now scoped to a single player and with spec.OwnerId
+        /// threaded into every Initialize so the job board only reacts to
+        /// this player's grid actions, rooms/creatures spawn as this
+        /// player's, and roomIds land in this owner's disjoint band (see
+        /// DungeonGrid.RoomIdOwnerStride). The mutual LairManager /
+        /// TreasuryManager reference and every room manager's RoomSold
+        /// subscription stay within this one context. Portal recruit pools
+        /// are seeded per keeper.
+        private static KeeperContext BuildKeeperContext(DungeonGrid grid, PlayerSpec spec, Vector2Int throneCoord, Vector2Int portalCoord, Transform parent)
+        {
+            var ctx = new KeeperContext
+            {
+                OwnerId = spec.OwnerId,
+                IsAI = spec.IsAI,
+                Color = spec.Color,
+                ThroneCoord = throneCoord,
+                PortalCoord = portalCoord,
+            };
+
+            var owner = spec.OwnerId;
+
+            ctx.Throne = CreateComponent<ThroneRoom>($"ThroneRoom P{owner + 1}", parent);
+            ctx.Throne.PlayerColor = spec.Color;
+            ctx.Throne.Initialize(throneCoord, grid, spec.StartingMana);
+
+            ctx.Portal = CreateComponent<Portal>($"Portal P{owner + 1}", parent);
+            ctx.Portal.Initialize(portalCoord, grid);
+
+            ctx.JobBoard = CreateComponent<BuilderJobBoard>($"BuilderJobBoard P{owner + 1}", parent);
+            ctx.JobBoard.Initialize(grid, owner);
+
+            // LairManager <-> TreasuryManager mutual reference — created
+            // first, then wired in either order (C# events / field
+            // assignment don't need the other's Initialize to have run).
+            ctx.Lair = CreateComponent<LairManager>($"LairManager P{owner + 1}", parent);
+            ctx.Treasury = CreateComponent<TreasuryManager>($"TreasuryManager P{owner + 1}", parent);
+            ctx.Treasury.Initialize(grid, ctx.Lair, owner);
+            ctx.Lair.Initialize(grid, ctx.Treasury, owner);
+
+            ctx.SlimeHatchery = CreateComponent<SlimeHatcheryManager>($"SlimeHatcheryManager P{owner + 1}", parent);
+            ctx.SlimeHatchery.Initialize(grid, ctx.Lair, ctx.Treasury, simulateBreeding: true, ownerId: owner);
+
+            ctx.Tavern = CreateComponent<TavernManager>($"TavernManager P{owner + 1}", parent);
+            ctx.Tavern.Initialize(grid, ctx.Lair, ctx.Treasury, owner);
+
+            ctx.TrainingRoom = CreateComponent<TrainingRoomManager>($"TrainingRoomManager P{owner + 1}", parent);
+            ctx.TrainingRoom.Initialize(grid, ctx.Lair, ctx.Treasury, owner);
+
+            ctx.Library = CreateComponent<LibraryManager>($"LibraryManager P{owner + 1}", parent);
+            ctx.Library.Initialize(grid, ctx.Lair, ctx.Treasury, owner);
+
+            ctx.Jail = CreateComponent<JailManager>($"JailManager P{owner + 1}", parent);
+            ctx.Jail.Initialize(grid, ctx.JobBoard, ctx.Lair, ctx.Treasury, owner);
+
+            ctx.Bridge = CreateComponent<BridgeManager>($"BridgeManager P{owner + 1}", parent);
+            ctx.Bridge.Initialize(grid, ctx.Lair, ctx.Treasury, owner);
+
+            ctx.ImplingSpawner = CreateComponent<ImplingSpawner>($"ImplingSpawner P{owner + 1}", parent);
+            ctx.ImplingSpawner.Initialize(ctx.JobBoard, grid, ctx.Treasury, ctx.Throne, ctx.SlimeHatchery, ctx.Tavern, owner);
+
+            ctx.GremlinSpawner = CreateComponent<GremlinSpawner>($"GremlinSpawner P{owner + 1}", parent);
+            ctx.GremlinSpawner.Initialize(grid, ctx.Portal, ctx.Lair, ctx.SlimeHatchery, ctx.TrainingRoom, ctx.Tavern, ctx.Treasury, owner);
+            ctx.Portal.SeedPool(GremlinAgent.CreatureKind, StartingGremlinPoolCount);
+
+            ctx.WarlockSpawner = CreateComponent<WarlockSpawner>($"WarlockSpawner P{owner + 1}", parent);
+            ctx.WarlockSpawner.Initialize(grid, ctx.Portal, ctx.Lair, ctx.Library, ctx.SlimeHatchery, ctx.Tavern, ctx.TrainingRoom, ctx.Treasury, owner);
+            ctx.Portal.SeedPool(WarlockAgent.CreatureKind, StartingWarlockPoolCount);
+
+            ctx.MazeRattlerSpawner = CreateComponent<MazeRattlerSpawner>($"MazeRattlerSpawner P{owner + 1}", parent);
+            ctx.MazeRattlerSpawner.Initialize(grid, ctx.Portal, ctx.Lair, ctx.Jail, ctx.Tavern, ctx.TrainingRoom, ctx.Treasury, owner);
+            ctx.Portal.SeedPool(MazeRattlerAgent.CreatureKind, StartingMazeRattlerPoolCount);
+
+            ctx.ElfSpawner = CreateComponent<ElfSpawner>($"ElfSpawner P{owner + 1}", parent);
+            ctx.ElfSpawner.Initialize(grid, ctx.Portal, ctx.Lair, ctx.Tavern, ctx.Treasury);
+
+            ctx.ConversionClass = CreateComponent<ConversionClassManager>($"ConversionClassManager P{owner + 1}", parent);
+            ctx.ConversionClass.Initialize(grid, ctx.Lair, ctx.Treasury, ctx.Jail, ctx.GremlinSpawner, ctx.WarlockSpawner, ctx.MazeRattlerSpawner, ctx.ElfSpawner, owner);
+
+            ctx.BeanCounterSpawner = CreateComponent<BeanCounterSpawner>($"BeanCounterSpawner P{owner + 1}", parent);
+            ctx.BeanCounterSpawner.Initialize(grid, ctx.Portal, ctx.Lair, ctx.ConversionClass, ctx.Jail, ctx.Tavern, ctx.Treasury, owner);
+            ctx.Portal.SeedPool(BeanCounterAgent.CreatureKind, StartingBeanCounterPoolCount);
+
+            return ctx;
+        }
+
+        /// Loaded-level room reconstruction, one keeper at a time — feeds
+        /// RoomReconstruction.RestoreRooms only the footprints owned by
+        /// contexts[i] (a stray/out-of-range room owner falls to context
+        /// 0), dispatched to that context's own managers. Same
+        /// IRestorableRoomManager path the single-manager version used.
+        private static void RestoreWorldRoomsPerOwner(DungeonGrid grid, Dictionary<string, List<Vector2Int>> roomFootprints, Dictionary<string, int> roomOwners, KeeperContext[] contexts)
+        {
+            for (int i = 0; i < contexts.Length; i++)
+            {
+                var ctx = contexts[i];
+                var ownFootprints = new Dictionary<string, List<Vector2Int>>();
+                foreach (var entry in roomFootprints)
+                {
+                    var roomOwner = roomOwners.TryGetValue(entry.Key, out var o) ? o : 0;
+                    if (roomOwner < 0 || roomOwner >= contexts.Length)
+                    {
+                        roomOwner = 0;
+                    }
+                    if (roomOwner == i)
+                    {
+                        ownFootprints[entry.Key] = entry.Value;
+                    }
+                }
+
+                if (ownFootprints.Count == 0)
+                {
+                    continue;
+                }
+
+                var roomManagers = new Dictionary<RoomDesignTool, IRestorableRoomManager>
+                {
+                    { RoomDesignTool.Lair, ctx.Lair },
+                    { RoomDesignTool.Treasury, ctx.Treasury },
+                    { RoomDesignTool.SlimeHatchery, ctx.SlimeHatchery },
+                    { RoomDesignTool.Tavern, ctx.Tavern },
+                    { RoomDesignTool.TrainingRoom, ctx.TrainingRoom },
+                    { RoomDesignTool.Library, ctx.Library },
+                    { RoomDesignTool.Jail, ctx.Jail },
+                    { RoomDesignTool.ConversionClass, ctx.ConversionClass },
+                };
+                RoomReconstruction.RestoreRooms(grid, ownFootprints, roomOwners, roomManagers);
+            }
+        }
+
+        /// Sweeps the grid once and queues a claim job for every Unclaimed
+        /// Floor tile on every keeper's BuilderJobBoard — see
+        /// BuilderJobBoard.QueueClaimJob for why every board and not just
+        /// one. Dug-out floor already fired FloorNeedsClaim during
+        /// CompleteDig; this only matters for floor that was authored
+        /// Unclaimed and loaded straight in without ever being dug. Room
+        /// tiles are Claimed Floor so the Ownership check skips them.
+        private static void QueuePreplacedClaimJobs(DungeonGrid grid, KeeperContext[] contexts)
+        {
+            for (int x = 0; x < grid.Width; x++)
+            {
+                for (int y = 0; y < grid.Height; y++)
+                {
+                    var coord = new Vector2Int(x, y);
+                    var tile = grid.GetTile(coord);
+                    if (tile.Type != TileType.Floor || tile.Ownership != TileOwnership.Unclaimed)
+                    {
+                        continue;
+                    }
+
+                    foreach (var ctx in contexts)
+                    {
+                        ctx.JobBoard.QueueClaimJob(coord);
+                    }
+                }
+            }
+        }
+
+        /// A spread-out fallback Throne/Portal coord for a loaded level's
+        /// player i whose ThroneRoom/PortalRoom structure is missing from
+        /// the save — so a degenerate/hand-edited save doesn't stack every
+        /// keeper's landmarks on the exact same tile.
+        private static Vector2Int SpreadFallbackCoord(DungeonGrid grid, int playerIndex)
+        {
+            return new Vector2Int(
+                Mathf.Clamp(grid.Width / 2 + playerIndex * 6, 1, grid.Width - 2),
+                grid.Height / 2);
+        }
+
         private static T CreateComponent<T>(string name) where T : Component
         {
+            return CreateComponent<T>(name, parent: null);
+        }
+
+        private static T CreateComponent<T>(string name, Transform parent) where T : Component
+        {
             var go = new GameObject(name);
+            if (parent != null)
+            {
+                go.transform.SetParent(parent, worldPositionStays: false);
+            }
             return go.AddComponent<T>();
         }
     }

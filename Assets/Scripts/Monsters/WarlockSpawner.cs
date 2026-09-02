@@ -37,8 +37,9 @@ namespace KeepersDomain.Monsters
         private TavernManager _tavernManager;
         private TrainingRoomManager _trainingRoomManager;
         private TreasuryManager _treasuryManager;
+        private int _ownerId;
 
-        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, LibraryManager libraryManager, SlimeHatcheryManager slimeHatcheryManager, TavernManager tavernManager, TrainingRoomManager trainingRoomManager, TreasuryManager treasuryManager)
+        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, LibraryManager libraryManager, SlimeHatcheryManager slimeHatcheryManager, TavernManager tavernManager, TrainingRoomManager trainingRoomManager, TreasuryManager treasuryManager, int ownerId = 0)
         {
             _grid = grid;
             _portal = portal;
@@ -48,6 +49,7 @@ namespace KeepersDomain.Monsters
             _tavernManager = tavernManager;
             _trainingRoomManager = trainingRoomManager;
             _treasuryManager = treasuryManager;
+            _ownerId = ownerId;
         }
 
         /// How many Warlocks are still available to recruit from the
@@ -83,13 +85,13 @@ namespace KeepersDomain.Monsters
                 return false;
             }
 
-            var nonImpCount = GremlinAgent.All.Count + WarlockAgent.All.Count + MazeRattlerAgent.All.Count + BeanCounterAgent.All.Count;
+            var nonImpCount = GremlinAgent.CountForOwner(_ownerId) + WarlockAgent.CountForOwner(_ownerId) + MazeRattlerAgent.CountForOwner(_ownerId) + BeanCounterAgent.CountForOwner(_ownerId);
             if (_slimeHatcheryManager == null || nonImpCount >= _slimeHatcheryManager.TotalTileCount)
             {
                 return false;
             }
 
-            var intelligentCount = WarlockAgent.All.Count;
+            var intelligentCount = WarlockAgent.CountForOwner(_ownerId);
             if (_tavernManager == null || intelligentCount >= _tavernManager.TotalTileCount)
             {
                 return false;
@@ -110,7 +112,7 @@ namespace KeepersDomain.Monsters
                 return false;
             }
 
-            SpawnWarlock(_portal.Coord);
+            SpawnWarlock(_portal.Coord, _ownerId);
             return true;
         }
 
@@ -118,7 +120,7 @@ namespace KeepersDomain.Monsters
         /// Initialize" spawn code when a tormented Warlock prisoner wins
         /// its conversion roll and rejoins the domain, instead of
         /// duplicating it.
-        public void SpawnWarlock(Vector2Int coord)
+        public void SpawnWarlock(Vector2Int coord, int ownerId = 0)
         {
             var worldPos = _grid.GridToWorld(coord);
 
@@ -133,7 +135,7 @@ namespace KeepersDomain.Monsters
             Destroy(visual.GetComponent<Collider>());
 
             var agent = visual.AddComponent<WarlockAgent>();
-            agent.Initialize(_grid, _lairManager, _tavernManager, _libraryManager, _trainingRoomManager, _treasuryManager, _portal);
+            agent.Initialize(_grid, _lairManager, _tavernManager, _libraryManager, _trainingRoomManager, _treasuryManager, _portal, ownerId);
             GameplayLog.Write($"{agent.Name} joined via the Portal at ({coord.x},{coord.y})");
         }
     }

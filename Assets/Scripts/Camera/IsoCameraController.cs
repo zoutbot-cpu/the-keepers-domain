@@ -206,5 +206,23 @@ namespace KeepersDomain.CameraControl
             _panBoundsMin = min;
             _panBoundsMax = max;
         }
+
+        /// Recenters the view on a ground point without touching the
+        /// current yaw / pitch / zoom — reuses the same ground-pivot math
+        /// HandleRotationInput orbits around, so the look-at point moves to
+        /// groundPoint while the camera keeps its distance and angle. Used
+        /// by LocalPlayerController when the debug player switcher jumps to
+        /// another keeper's Throne Room. ClampPosition keeps it inside the
+        /// (map-anchored) pan bounds.
+        public void CenterOn(Vector3 groundPoint)
+        {
+            if (!TryGetGroundPivot(out _, out var distance))
+            {
+                return;
+            }
+
+            transform.position = groundPoint - transform.forward * distance;
+            ClampPosition();
+        }
     }
 }

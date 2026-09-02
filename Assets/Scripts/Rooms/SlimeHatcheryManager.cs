@@ -30,9 +30,19 @@ namespace KeepersDomain.Rooms
 
         private const float BreedIntervalSeconds = 2f;
 
-        // Coop box: a light-wood crate with a darker slanted-look roof cap
-        // on top — cheap with primitives, distinct from Treasury's flat
-        // gold-tile look and Lair's nested-square look.
+        // Real dungeon_pack mesh (Assets/Art/DungeonPack/SlimeHatchery/
+        // ChickenCoop, built by Tools > DungeonPack > Setup Props into
+        // Dungeon/Prop_ChickenCoop) — a wood-plank coop with a dark roof,
+        // already close to a single tile's footprint. Falls back to the
+        // original primitive-built box+roof below if Prop_ChickenCoop
+        // hasn't been set up yet, same graceful-degradation pattern
+        // ThroneRoom.BuildThrone uses for the throne prop.
+        private GameObject _chickenCoopPrefab;
+        private const float ChickenCoopFootprintScale = 0.9f;
+
+        // Fallback-only primitive coop: a light-wood crate with a darker
+        // slanted-look roof cap on top, used only if Prop_ChickenCoop
+        // hasn't been set up yet. See BuildCoopVisual.
         [SerializeField] private Color _coopBoxColor = new Color(0.55f, 0.42f, 0.25f);
         [SerializeField] private Color _coopRoofColor = new Color(0.35f, 0.24f, 0.14f);
         private const float CoopBoxFootprintScale = 0.75f;
@@ -40,13 +50,37 @@ namespace KeepersDomain.Rooms
         private const float CoopRoofFootprintScale = 0.85f;
         private const float CoopRoofHeight = 0.12f;
 
-        // Ground overlay: a flat dirt-brown fill on every footprint tile
-        // (including the coop's own) — same layering trick TreasuryManager
-        // uses for its gold tiles (taller than DungeonGrid's own 0.15 floor
-        // visual so its top face wins the z-fight instead of flickering).
+        // Real dungeon_pack meadow floor texture (Assets/Resources/Dungeon/
+        // SlimeHatchery/floor_meadow_logs — a plain texture, no prefab/
+        // material build step needed, same as DungeonGrid's own Floors
+        // set), built into a real URP/Lit material once in Initialize (see
+        // DungeonPackRoomArt.BuildMaterial for why — an implicit-default-
+        // material + runtime SetTexture attempt rendered pink here). Same
+        // layering trick TreasuryManager uses for its gold tiles (taller
+        // than DungeonGrid's own 0.15 floor visual so its top face wins
+        // the z-fight instead of flickering).
+        private Material _floorMeadowMaterial;
+
+        // Fallback-only flat color, used only if the meadow texture itself
+        // failed to load (_floorMeadowMaterial null) — without this the
+        // Ground tile below would render with Unity's own untouched
+        // default primitive material (flat gray/white) instead of any
+        // deliberate color. See BuildGroundVisual.
         [SerializeField] private Color _groundColor = new Color(0.42f, 0.29f, 0.16f);
         private const float GroundTileHeight = 0.17f;
-        private const float GroundFootprintScale = 0.95f;
+
+        // One continuous field spanning the whole room rectangle now (see
+        // BuildGroundVisual) instead of a per-tile grid of textured
+        // squares — rooms of this type always merge into an exact
+        // rectangle (see TryFindMergeableRoom), so there's no per-tile
+        // gap to hide and no Seam layer is needed here any more. Instead,
+        // a scatter of small brown dirt patches (see BuildSpots) sits on
+        // top of the field for texture variation.
+        [SerializeField] private Color _spotColor = new Color(0.33f, 0.22f, 0.12f);
+        private const float SpotHeight = 0.02f;
+        private const float SpotMinRadiusScale = 0.15f;
+        private const float SpotMaxRadiusScale = 0.35f;
+        private const float SpotDensityPerTile = 0.35f;
 
         // Perimeter fence: a small log laid flat along every footprint
         // edge that borders a tile outside the room — an edge shared with
@@ -66,6 +100,7 @@ namespace KeepersDomain.Rooms
 
         private DungeonGrid _grid;
         private TreasuryManager _treasuryManager;
+        private int _ownerId;
 
         // Off in the Level Designer (see Initialize's simulateBreeding
         // param) so placing/loading a Hatchery there never starts spawning
@@ -81,16 +116,21 @@ namespace KeepersDomain.Rooms
         private readonly Dictionary<string, float> _breedTimers = new Dictionary<string, float>();
         private readonly Dictionary<Vector2Int, string> _structureRoomByCoord = new Dictionary<Vector2Int, string>();
         private readonly Dictionary<Vector2Int, GameObject> _structureVisuals = new Dictionary<Vector2Int, GameObject>();
-        private readonly Dictionary<Vector2Int, GameObject> _groundVisuals = new Dictionary<Vector2Int, GameObject>();
+        private readonly Dictionary<string, GameObject> _groundVisuals = new Dictionary<string, GameObject>();
         private readonly Dictionary<string, GameObject> _fenceVisuals = new Dictionary<string, GameObject>();
         private readonly List<GameObject> _previewMarkers = new List<GameObject>();
 
-        public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager, bool simulateBreeding = true)
+        public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager, bool simulateBreeding = true, int ownerId = 0)
         {
             _grid = grid;
             _treasuryManager = treasuryManager;
             _simulateBreeding = simulateBreeding;
+            _ownerId = ownerId;
+            _nextRoomId = ownerId * DungeonGrid.RoomIdOwnerStride;
             lairManager.RoomSold += OnRoomSold;
+
+            _chickenCoopPrefab = Resources.Load<GameObject>("Dungeon/Prop_ChickenCoop");
+            _floorMeadowMaterial = DungeonPackRoomArt.BuildMaterial("Dungeon/SlimeHatchery/floor_meadow_logs");
         }
 
         /// Total tile count across every placed Slime Hatchery — read by
@@ -211,8 +251,8 @@ namespace KeepersDomain.Rooms
             // same roomId, and _roomTiles[roomId] is the same List instance
             // every live SlimeAgent already holds a reference to — growing
             // it in place immediately widens their wander bounds too); only
-            // the coop and fence, which depend on the room's overall shape,
-            // are torn down and rebuilt below.
+            // the coop, fence, and field — which all depend on the room's
+            // overall shape — are torn down and rebuilt below.
             if (TryFindMergeableRoom(footprint, out var existingRoomId, out var mergedOrigin, out var mergedWidth, out var mergedHeight))
             {
                 roomId = existingRoomId;
@@ -222,6 +262,7 @@ namespace KeepersDomain.Rooms
                 _roomTiles[roomId].AddRange(footprint);
                 ClearStructure(roomId);
                 ClearFence(roomId);
+                ClearGround(roomId);
             }
             else
             {
@@ -234,8 +275,9 @@ namespace KeepersDomain.Rooms
             foreach (var coord in footprint)
             {
                 _grid.TryAssignRoom(coord, roomId);
-                _groundVisuals[coord] = BuildGroundVisual(coord);
             }
+
+            _groundVisuals[roomId] = BuildGroundVisual(roomId, origin, width, height);
 
             var structureCoord = GetStructureCoord(origin, width, height);
             _structureCoords[roomId] = structureCoord;
@@ -329,6 +371,19 @@ namespace KeepersDomain.Rooms
                 Destroy(fence);
             }
             _fenceVisuals.Remove(roomId);
+        }
+
+        /// Tears down this room's current field visual — used right
+        /// before rebuilding it for a new (possibly merged, larger)
+        /// footprint, since the field spans the whole room's rectangle.
+        /// Same shape as ClearStructure/ClearFence.
+        private void ClearGround(string roomId)
+        {
+            if (_groundVisuals.TryGetValue(roomId, out var ground) && ground != null)
+            {
+                Destroy(ground);
+            }
+            _groundVisuals.Remove(roomId);
         }
 
         /// The coop's own tile — centered when both dimensions are odd
@@ -456,20 +511,12 @@ namespace KeepersDomain.Rooms
         /// our own (by roomId prefix, same convention TreasuryManager uses).
         private void OnRoomSold(string roomId)
         {
-            if (!_roomTiles.TryGetValue(roomId, out var tiles))
+            if (!_roomTiles.Remove(roomId))
             {
                 return;
             }
-            _roomTiles.Remove(roomId);
 
-            foreach (var coord in tiles)
-            {
-                if (_groundVisuals.TryGetValue(coord, out var groundVisual) && groundVisual != null)
-                {
-                    Destroy(groundVisual);
-                }
-                _groundVisuals.Remove(coord);
-            }
+            ClearGround(roomId);
 
             if (_fenceVisuals.TryGetValue(roomId, out var fence) && fence != null)
             {
@@ -535,7 +582,7 @@ namespace KeepersDomain.Rooms
         {
             foreach (var coord in footprint)
             {
-                if (!_grid.CanBuildRoomOn(coord))
+                if (!_grid.CanBuildRoomOn(coord, _ownerId))
                 {
                     return false;
                 }
@@ -565,25 +612,82 @@ namespace KeepersDomain.Rooms
             return _grid.GetTile(coord).Type == TileType.Rock ? RockTopY : _grid.FloorSurfaceY;
         }
 
-        /// Flat dirt-brown fill covering the tile — same footprint/height
-        /// convention TreasuryManager.CreateTileVisual uses for its gold
-        /// tiles (0.95 * cellSize, taller than DungeonGrid's own 0.15 Floor
-        /// visual), just a single solid color rather than a border/fill
-        /// pair since there's no per-tile stored amount to frame here.
-        private GameObject BuildGroundVisual(Vector2Int coord)
+        /// One continuous dungeon_pack-textured meadow field spanning the
+        /// room's whole rectangle (rooms of this type always merge into an
+        /// exact rectangle — see TryFindMergeableRoom) instead of the old
+        /// per-tile grid of separately-bordered squares, with a scatter of
+        /// brown dirt spots (see BuildSpots) laid on top of it. Same
+        /// taller-than-Floor layering trick TreasuryManager's gold tiles
+        /// use, just sized to the whole room instead of one tile.
+        private GameObject BuildGroundVisual(string roomId, Vector2Int origin, int width, int height)
+        {
+            var container = new GameObject($"HatcheryField_{roomId}");
+            container.transform.SetParent(transform, false);
+
+            var cellSize = _grid.CellSize;
+            var minCornerX = origin.x * cellSize;
+            var minCornerZ = origin.y * cellSize;
+            var fieldWidth = width * cellSize;
+            var fieldDepth = height * cellSize;
+            var basePosition = new Vector3(minCornerX + fieldWidth * 0.5f, 0f, minCornerZ + fieldDepth * 0.5f) + Vector3.down * 0.5f;
+
+            var field = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            field.name = "Field";
+            field.transform.SetParent(container.transform, false);
+            field.transform.position = basePosition;
+            field.transform.localScale = new Vector3(fieldWidth, GroundTileHeight, fieldDepth);
+            if (_floorMeadowMaterial != null)
+            {
+                // A per-room instance (not the shared material directly —
+                // see DungeonPackRoomArt.BuildMaterial) since each room's
+                // texture tiling below depends on its own size; no color
+                // tint, the meadow art already carries its own correct
+                // look.
+                var fieldMaterial = new Material(_floorMeadowMaterial);
+                fieldMaterial.mainTextureScale = new Vector2(width, height);
+                field.GetComponent<Renderer>().material = fieldMaterial;
+            }
+            else
+            {
+                // Fallback flat color — see _groundColor's own header for
+                // why this branch exists at all.
+                field.GetComponent<Renderer>().material.color = _groundColor;
+            }
+            Destroy(field.GetComponent<Collider>());
+
+            BuildSpots(container.transform, basePosition.y, minCornerX, minCornerZ, width, height, fieldWidth, fieldDepth);
+
+            return container;
+        }
+
+        /// A scatter of small brown dirt patches laid on top of the field
+        /// — stands in for the old per-tile texture-grid look with
+        /// something that reads as one continuous meadow instead of a
+        /// checkerboard. Count and placement come from a System.Random
+        /// seeded off the room's own origin/size, so a given rectangle
+        /// always gets the same-looking scatter rather than reshuffling on
+        /// every rebuild (e.g. RestoreRoom on load).
+        private void BuildSpots(Transform parent, float fieldCenterY, float minCornerX, float minCornerZ, int width, int height, float fieldWidth, float fieldDepth)
         {
             var cellSize = _grid.CellSize;
-            var basePosition = _grid.GridToWorld(coord) + Vector3.down * 0.5f;
+            var spotY = fieldCenterY + GroundTileHeight * 0.5f + SpotHeight * 0.5f;
+            var rng = new System.Random(unchecked(minCornerX.GetHashCode() * 92821 + minCornerZ.GetHashCode() * 68917 + width * 1237 + height * 7919));
+            var spotCount = Mathf.Max(3, Mathf.RoundToInt(width * height * SpotDensityPerTile));
 
-            var ground = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            ground.name = $"HatcheryGround_{coord.x}_{coord.y}";
-            ground.transform.SetParent(transform, false);
-            ground.transform.position = basePosition;
-            ground.transform.localScale = new Vector3(cellSize * GroundFootprintScale, GroundTileHeight, cellSize * GroundFootprintScale);
-            ground.GetComponent<Renderer>().material.color = _groundColor;
-            Destroy(ground.GetComponent<Collider>());
+            for (int i = 0; i < spotCount; i++)
+            {
+                var spotX = minCornerX + (float)rng.NextDouble() * fieldWidth;
+                var spotZ = minCornerZ + (float)rng.NextDouble() * fieldDepth;
+                var radius = cellSize * Mathf.Lerp(SpotMinRadiusScale, SpotMaxRadiusScale, (float)rng.NextDouble());
 
-            return ground;
+                var spot = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+                spot.name = $"Spot_{i}";
+                spot.transform.SetParent(parent, false);
+                spot.transform.position = new Vector3(spotX, spotY, spotZ);
+                spot.transform.localScale = new Vector3(radius * 2f, SpotHeight * 0.5f, radius * 2f);
+                spot.GetComponent<Renderer>().material.color = _spotColor;
+                Destroy(spot.GetComponent<Collider>());
+            }
         }
 
         /// One small log per footprint edge that borders a tile outside
@@ -635,6 +739,9 @@ namespace KeepersDomain.Rooms
             Destroy(log.GetComponent<Collider>());
         }
 
+        /// The real chicken_coop prop, scaled to fit within coord's tile —
+        /// falls back to the original primitive-built box+roof below if
+        /// Prop_ChickenCoop hasn't been set up yet.
         private GameObject BuildCoopVisual(Vector2Int coord)
         {
             var container = new GameObject($"SlimeCoop_{coord.x}_{coord.y}");
@@ -643,6 +750,17 @@ namespace KeepersDomain.Rooms
             var cellSize = _grid.CellSize;
             var worldPos = _grid.GridToWorld(coord);
             var basePosition = new Vector3(worldPos.x, _grid.FloorSurfaceY, worldPos.z);
+
+            if (_chickenCoopPrefab != null)
+            {
+                var coop = Instantiate(_chickenCoopPrefab, container.transform, false);
+                coop.name = "Coop";
+
+                var scale = DungeonPackRoomArt.ComputeUniformScaleToFootprint(coop, cellSize * ChickenCoopFootprintScale);
+                coop.transform.localScale = Vector3.one * scale;
+                coop.transform.localPosition = basePosition;
+                return container;
+            }
 
             var box = GameObject.CreatePrimitive(PrimitiveType.Cube);
             box.name = "CoopBox";

@@ -51,26 +51,22 @@ namespace KeepersDomain.Rooms
         // floor_library_parquet — a plain texture, no prefab/material build
         // step needed, same as DungeonGrid's own Floors set), built into a
         // real URP/Lit material once in Initialize (see
-        // TrainingRoomManager.BuildDungeonPackMaterial for why — an
-        // implicit-default-material + runtime SetTexture attempt rendered
-        // pink there), with a slightly lighter purple fill inset on top —
-        // same border/fill footprint convention TreasuryManager's gold
-        // tiles use.
+        // DungeonPackRoomArt.BuildMaterial for why — an implicit-default-
+        // material + runtime SetTexture attempt rendered pink there) — the
+        // tile's whole own visual now, no separate fill inset on top
+        // (removed, see BuildGroundVisual).
         private Material _floorParquetMaterial;
-        [SerializeField] private Color _groundFillColor = new Color(0.4f, 0.22f, 0.55f);
         private const float GroundTileHeight = 0.17f;
-        private const float GroundFillHeightMargin = 0.03f;
         private const float GroundFootprintScale = 0.95f;
-        private const float GroundFillFootprintScale = 0.8f;
 
         // Border's own GroundFootprintScale (0.95) leaves a thin gap at
         // every tile edge where neighboring tiles don't quite touch — a
         // full-cell gray Seam layer underneath fills it in, sitting a bit
-        // lower than Border/Fill (SeamHeight, between DungeonGrid's own
-        // 0.15 hidden-tile height and Border's 0.17 — tall enough to fully
-        // hide that tile, short enough that Border/Fill still visibly "pop
-        // out" above it) so adjacent tiles read as flush-fitted floor
-        // panels with a mortar line between them, not a void gap.
+        // lower than Border (SeamHeight, between DungeonGrid's own 0.15
+        // hidden-tile height and Border's 0.17 — tall enough to fully hide
+        // that tile, short enough that Border still visibly "pops out"
+        // above it) so adjacent tiles read as flush-fitted floor panels
+        // with a mortar line between them, not a void gap.
         [SerializeField] private Color _seamColor = new Color(0.32f, 0.32f, 0.32f);
         private const float SeamFootprintScale = 1.0f;
         private const float SeamHeight = 0.16f;
@@ -94,7 +90,7 @@ namespace KeepersDomain.Rooms
         // ThroneRoom.BuildThrone uses for the throne prop.
         private GameObject _bookcaseModulePrefab;
         private const float BookcaseModuleTargetHeight = 1.4f;
-        private const float BookcaseModuleXScale = 2.6f;
+        private const float BookcaseModuleXScale = 1.95f;
         private const float BookcaseModuleZScale = 2f;
 
         // Fallback-only primitive bookcase: a dark-wood body with a lighter
@@ -118,6 +114,7 @@ namespace KeepersDomain.Rooms
 
         private DungeonGrid _grid;
         private TreasuryManager _treasuryManager;
+        private int _ownerId;
         private int _nextRoomId;
         private readonly Dictionary<string, List<Vector2Int>> _roomTiles = new Dictionary<string, List<Vector2Int>>();
         private readonly Dictionary<string, Vector2Int> _roomSizes = new Dictionary<string, Vector2Int>();
@@ -127,32 +124,16 @@ namespace KeepersDomain.Rooms
         private readonly Dictionary<string, List<Vector2Int>> _bookcaseAdjacentTiles = new Dictionary<string, List<Vector2Int>>();
         private readonly List<GameObject> _previewMarkers = new List<GameObject>();
 
-        public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager)
+        public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager, int ownerId = 0)
         {
             _grid = grid;
             _treasuryManager = treasuryManager;
+            _ownerId = ownerId;
+            _nextRoomId = ownerId * DungeonGrid.RoomIdOwnerStride;
             lairManager.RoomSold += OnRoomSold;
 
-            _floorParquetMaterial = BuildDungeonPackMaterial("Dungeon/Library/floor_library_parquet");
+            _floorParquetMaterial = DungeonPackRoomArt.BuildMaterial("Dungeon/Library/floor_library_parquet");
             _bookcaseModulePrefab = Resources.Load<GameObject>("Dungeon/Prop_BookcaseModule");
-        }
-
-        /// A real URP/Lit material with texturePath's texture baked in as
-        /// its _BaseMap — built explicitly via Shader.Find, the same way
-        /// every DungeonPack*Setup Editor tool builds its own materials
-        /// (see TrainingRoomManager's own copy of this method for why).
-        /// Null if the texture itself failed to load.
-        private static Material BuildDungeonPackMaterial(string texturePath)
-        {
-            var texture = Resources.Load<Texture2D>(texturePath);
-            if (texture == null)
-            {
-                return null;
-            }
-
-            var material = new Material(Shader.Find("Universal Render Pipeline/Lit"));
-            material.SetTexture("_BaseMap", texture);
-            return material;
         }
 
         /// Total tile count across every placed Library — same convention
@@ -665,7 +646,7 @@ namespace KeepersDomain.Rooms
         {
             foreach (var coord in footprint)
             {
-                if (!_grid.CanBuildRoomOn(coord))
+                if (!_grid.CanBuildRoomOn(coord, _ownerId))
                 {
                     return false;
                 }
@@ -717,7 +698,7 @@ namespace KeepersDomain.Rooms
             // itself uses — SeamHeight sits between DungeonGrid's own
             // hidden-tile height (0.15) and Border's (0.17), so it wins the
             // z-fight against the hidden tile the same way Border does,
-            // while still visibly sitting lower than Border/Fill.
+            // while still visibly sitting lower than Border.
             seam.transform.position = basePosition;
             seam.transform.localScale = new Vector3(cellSize * SeamFootprintScale, SeamHeight, cellSize * SeamFootprintScale);
             seam.GetComponent<Renderer>().material.color = _seamColor;
@@ -730,20 +711,12 @@ namespace KeepersDomain.Rooms
             border.transform.localScale = new Vector3(cellSize * GroundFootprintScale, GroundTileHeight, cellSize * GroundFootprintScale);
             if (_floorParquetMaterial != null)
             {
-                // Shared, pre-built material (see BuildDungeonPackMaterial)
-                // — no color tint, the parquet art already carries its own
-                // correct look.
+                // Shared, pre-built material (see DungeonPackRoomArt.
+                // BuildMaterial) — no color tint, the parquet art already
+                // carries its own correct look.
                 border.GetComponent<Renderer>().sharedMaterial = _floorParquetMaterial;
             }
             Destroy(border.GetComponent<Collider>());
-
-            var fill = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            fill.name = "Fill";
-            fill.transform.SetParent(container.transform, false);
-            fill.transform.position = basePosition + Vector3.up * (GroundFillHeightMargin * 0.5f);
-            fill.transform.localScale = new Vector3(cellSize * GroundFillFootprintScale, GroundTileHeight + GroundFillHeightMargin, cellSize * GroundFillFootprintScale);
-            fill.GetComponent<Renderer>().material.color = _groundFillColor;
-            Destroy(fill.GetComponent<Collider>());
 
             return container;
         }

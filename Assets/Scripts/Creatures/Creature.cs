@@ -25,6 +25,14 @@ namespace KeepersDomain.Creatures
         public int Exp { get; private set; }
         public int ExpToNextLevel => Level >= MaxLevel ? 0 : Level * _expPerLevelStep;
 
+        /// Which player this creature belongs to — the same int player
+        /// index TileState.OwnerId uses (0 is the implicit single player in
+        /// ordinary gameplay; DungeonGrid.OwnerColors maps it to a color).
+        /// Every agent builds its Creature in Awake(), before Initialize()
+        /// knows the owner, so this stays at its default (0) until
+        /// SetOwner is called from the agent's Initialize.
+        public int OwnerId { get; private set; }
+
         public CreatureStats Stats { get; } = new CreatureStats();
         public CreatureSkillSlots Skills { get; } = new CreatureSkillSlots();
 
@@ -34,6 +42,14 @@ namespace KeepersDomain.Creatures
             _growth = growthPerLevel;
             _expPerLevelStep = expPerLevelStep;
             RecalculateStats(initial: true);
+        }
+
+        /// Assigns this creature's owning player — called once from the
+        /// agent's Initialize (see OwnerId's own comment for why it can't
+        /// just be a constructor argument).
+        public void SetOwner(int ownerId)
+        {
+            OwnerId = ownerId;
         }
 
         /// Regen tick — call once per frame (or whatever cadence the owning

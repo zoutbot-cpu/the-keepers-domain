@@ -33,8 +33,9 @@ namespace KeepersDomain.Monsters
         private JailManager _jailManager;
         private TavernManager _tavernManager;
         private TreasuryManager _treasuryManager;
+        private int _ownerId;
 
-        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, ConversionClassManager conversionClassManager, JailManager jailManager, TavernManager tavernManager, TreasuryManager treasuryManager)
+        public void Initialize(DungeonGrid grid, Portal portal, LairManager lairManager, ConversionClassManager conversionClassManager, JailManager jailManager, TavernManager tavernManager, TreasuryManager treasuryManager, int ownerId = 0)
         {
             _grid = grid;
             _portal = portal;
@@ -43,6 +44,7 @@ namespace KeepersDomain.Monsters
             _jailManager = jailManager;
             _tavernManager = tavernManager;
             _treasuryManager = treasuryManager;
+            _ownerId = ownerId;
         }
 
         /// How many Bean Counters are still available to recruit from the
@@ -66,7 +68,7 @@ namespace KeepersDomain.Monsters
                 return false;
             }
 
-            if (_conversionClassManager == null || BeanCounterAgent.All.Count >= _conversionClassManager.RoomCount * BeanCountersPerConversionClass)
+            if (_conversionClassManager == null || BeanCounterAgent.CountForOwner(_ownerId) >= _conversionClassManager.RoomCount * BeanCountersPerConversionClass)
             {
                 return false;
             }
@@ -83,7 +85,7 @@ namespace KeepersDomain.Monsters
                 return false;
             }
 
-            SpawnBeanCounter(_portal.Coord);
+            SpawnBeanCounter(_portal.Coord, _ownerId);
             return true;
         }
 
@@ -92,7 +94,7 @@ namespace KeepersDomain.Monsters
         /// outcome, only a recruit), kept the same access shape as
         /// GremlinSpawner.SpawnGremlin/WarlockSpawner.SpawnWarlock for
         /// consistency.
-        public void SpawnBeanCounter(Vector2Int coord)
+        public void SpawnBeanCounter(Vector2Int coord, int ownerId = 0)
         {
             var worldPos = _grid.GridToWorld(coord);
 
@@ -104,7 +106,7 @@ namespace KeepersDomain.Monsters
             Destroy(visual.GetComponent<Collider>());
 
             var agent = visual.AddComponent<BeanCounterAgent>();
-            agent.Initialize(_grid, _lairManager, _tavernManager, _conversionClassManager, _jailManager, _treasuryManager, _portal);
+            agent.Initialize(_grid, _lairManager, _tavernManager, _conversionClassManager, _jailManager, _treasuryManager, _portal, ownerId);
             GameplayLog.Write($"{agent.Name} joined via the Portal at ({coord.x},{coord.y})");
         }
     }

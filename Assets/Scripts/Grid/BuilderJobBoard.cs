@@ -57,6 +57,14 @@ namespace KeepersDomain.Grid
 
         [SerializeField] private DungeonGrid _grid;
 
+        // Which player this board belongs to (one BuilderJobBoard per
+        // KeeperContext). The DungeonGrid dig/reinforce/build/claim/damage
+        // events are shared and carry the acting owner — every handler
+        // early-returns when that owner isn't _ownerId, so a dig queued in
+        // another keeper's territory never lands here. 0 in ordinary
+        // single-player.
+        private int _ownerId;
+
         private readonly List<Vector2Int> _openJobs = new List<Vector2Int>();
         private readonly Dictionary<Vector2Int, float> _pendingJobs = new Dictionary<Vector2Int, float>();
         private readonly Dictionary<Vector2Int, int> _claimCounts = new Dictionary<Vector2Int, int>();
@@ -69,6 +77,7 @@ namespace KeepersDomain.Grid
         // already on their way to claim it.
         private readonly Dictionary<Vector2Int, bool> _claimJobs = new Dictionary<Vector2Int, bool>();
         private readonly List<Vector2Int> _claimScratch = new List<Vector2Int>();
+        private readonly List<Vector2Int> _claimPruneScratch = new List<Vector2Int>();
 
         // Repair jobs are shaped exactly like claim jobs — single-worker,
         // no grace period, queued automatically (whenever a room tile takes
@@ -120,9 +129,10 @@ namespace KeepersDomain.Grid
         private bool _isAutoReinforceEnabled;
         private float _nextAutoReinforceScanTime;
 
-        public void Initialize(DungeonGrid grid)
+        public void Initialize(DungeonGrid grid, int ownerId = 0)
         {
             _grid = grid;
+            _ownerId = ownerId;
             _grid.DigRequested += OnDigRequested;
             _grid.DigCanceled += OnDigCanceled;
             _grid.ReinforceRequested += OnReinforceRequested;
@@ -182,9 +192,9 @@ namespace KeepersDomain.Grid
                 for (int y = 0; y < _grid.Height; y++)
                 {
                     var coord = new Vector2Int(x, y);
-                    if (_grid.GetTile(coord).Type == TileType.Rock && _grid.BordersClaimedTile(coord))
+                    if (_grid.GetTile(coord).Type == TileType.Rock && _grid.BordersClaimedTile(coord, _ownerId))
                     {
-                        _grid.RequestReinforce(coord);
+                        _grid.RequestReinforce(coord, _ownerId);
                     }
                 }
             }
@@ -234,8 +244,13 @@ namespace KeepersDomain.Grid
             }
         }
 
-        private void OnDigRequested(Vector2Int coord)
+        private void OnDigRequested(Vector2Int coord, int ownerId)
         {
+            if (ownerId != _ownerId)
+            {
+                return;
+            }
+
             if (!_pendingJobs.ContainsKey(coord) && !_openJobs.Contains(coord) && GetClaimCount(coord) < MaxWorkersPerJob)
             {
                 _pendingJobs[coord] = Time.time + ClaimDelaySeconds;
@@ -249,8 +264,13 @@ namespace KeepersDomain.Grid
             _openJobs.Remove(coord);
         }
 
-        private void OnReinforceRequested(Vector2Int coord)
+        private void OnReinforceRequested(Vector2Int coord, int ownerId)
         {
+            if (ownerId != _ownerId)
+            {
+                return;
+            }
+
             if (!_pendingReinforceJobs.ContainsKey(coord) && !_openReinforceJobs.Contains(coord))
             {
                 _pendingReinforceJobs[coord] = Time.time + ClaimDelaySeconds;
@@ -264,8 +284,13 @@ namespace KeepersDomain.Grid
             _openReinforceJobs.Remove(coord);
         }
 
-        private void OnBuildRequested(Vector2Int coord)
+        private void OnBuildRequested(Vector2Int coord, int ownerId)
         {
+            if (ownerId != _ownerId)
+            {
+                return;
+            }
+
             if (!_pendingBuildJobs.ContainsKey(coord) && !_openBuildJobs.Contains(coord))
             {
                 _pendingBuildJobs[coord] = Time.time + ClaimDelaySeconds;
@@ -279,8 +304,13 @@ namespace KeepersDomain.Grid
             _openBuildJobs.Remove(coord);
         }
 
-        private void OnFloorNeedsClaim(Vector2Int coord)
+        private void OnFloorNeedsClaim(Vector2Int coord, int ownerId)
         {
+            if (ownerId != _ownerId)
+            {
+                return;
+            }
+
             if (!_claimJobs.ContainsKey(coord))
             {
                 _claimJobs[coord] = false;
@@ -288,12 +318,35 @@ namespace KeepersDomain.Grid
             }
         }
 
+        /// Queues a claim job for an Unclaimed Floor tile that never went
+        /// through CompleteDig — floor authored as Unclaimed in the Level
+        /// Designer and loaded straight into gameplay (see
+        /// GameBootstrap.QueuePreplacedClaimJobs). Unlike OnFloorNeedsClaim
+        /// there's no owner filter: the caller queues the tile on every
+        /// keeper's board, and each board's own frontier rule
+        /// (TryClaimClaimJob's BordersClaimedTile(coord, _ownerId) check)
+        /// still decides whether — and when — this keeper's imps actually
+        /// take it.
+        public void QueueClaimJob(Vector2Int coord)
+        {
+            if (!_claimJobs.ContainsKey(coord))
+            {
+                _claimJobs[coord] = false;
+                GameplayLog.Write($"Claim job queued (pre-placed): {Coord(coord)}");
+            }
+        }
+
         /// DungeonGrid.RoomDamaged fires on every surviving hit to a room
         /// tile, not just the first — already-tracked tiles are just left
         /// alone (their Hp keeps dropping on the grid regardless; the next
         /// repair job picks up wherever it ends up).
-        private void OnRoomDamaged(Vector2Int coord)
+        private void OnRoomDamaged(Vector2Int coord, int ownerId)
         {
+            if (ownerId != _ownerId)
+            {
+                return;
+            }
+
             if (!_repairJobs.ContainsKey(coord))
             {
                 _repairJobs[coord] = false;
@@ -530,12 +583,34 @@ namespace KeepersDomain.Grid
             out Vector2Int coord, out int slotIndex, out Vector2Int approachCoord)
         {
             _claimScratch.Clear();
+            _claimPruneScratch.Clear();
             foreach (var entry in _claimJobs)
             {
-                if (!entry.Value && _grid.BordersClaimedTile(entry.Key))
+                if (entry.Value)
+                {
+                    continue;
+                }
+
+                // A tile another keeper's board already claimed (this
+                // board's own claims are removed by ApplyClaim) — drop the
+                // now-dead entry rather than sending an imp to a claimed
+                // tile it'll just bounce off (ImplingAgent re-checks
+                // IsStillClaimable on arrival).
+                if (!IsStillClaimable(entry.Key))
+                {
+                    _claimPruneScratch.Add(entry.Key);
+                    continue;
+                }
+
+                if (_grid.BordersClaimedTile(entry.Key, _ownerId))
                 {
                     _claimScratch.Add(entry.Key);
                 }
+            }
+
+            foreach (var dead in _claimPruneScratch)
+            {
+                _claimJobs.Remove(dead);
             }
 
             var found = false;
@@ -874,7 +949,7 @@ namespace KeepersDomain.Grid
         /// inventory (see ImplingAgent.TickMining).
         public bool ApplyHit(Vector2Int coord, int damage, out ResourceType resourceType, out int resourceAmount)
         {
-            var destroyed = _grid.ApplyDigDamage(coord, damage, out resourceType, out resourceAmount);
+            var destroyed = _grid.ApplyDigDamage(coord, damage, out resourceType, out resourceAmount, _ownerId);
             if (destroyed)
             {
                 _claimCounts.Remove(coord);
@@ -899,7 +974,7 @@ namespace KeepersDomain.Grid
         /// drops it from tracking, mirroring ApplyHit's role for dig jobs.
         public void ApplyClaim(Vector2Int coord)
         {
-            _grid.ClaimTile(coord);
+            _grid.ClaimTile(coord, _ownerId);
             _claimJobs.Remove(coord);
             GameplayLog.Write($"Claim job completed: {Coord(coord)}");
         }
@@ -978,7 +1053,7 @@ namespace KeepersDomain.Grid
         /// and drops it from tracking, mirroring ApplyHit's role for dig jobs.
         public void ApplyReinforce(Vector2Int coord)
         {
-            _grid.CompleteReinforce(coord);
+            _grid.CompleteReinforce(coord, _ownerId);
             _assignedReinforceJobs.Remove(coord);
             GameplayLog.Write($"Reinforce job completed: {Coord(coord)}");
         }

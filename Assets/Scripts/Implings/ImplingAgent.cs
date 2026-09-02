@@ -185,7 +185,7 @@ namespace KeepersDomain.Implings
             _creature.Skills.Set(CreatureSkillSlots.BasicAttackSlot, "Mine");
         }
 
-        public void Initialize(BuilderJobBoard jobBoard, DungeonGrid grid, Vector3 lairPosition, TreasuryManager treasuryManager, ThroneRoom throneRoom, SlimeHatcheryManager slimeHatchery, TavernManager tavern, int manaReserved)
+        public void Initialize(BuilderJobBoard jobBoard, DungeonGrid grid, Vector3 lairPosition, TreasuryManager treasuryManager, ThroneRoom throneRoom, SlimeHatcheryManager slimeHatchery, TavernManager tavern, int manaReserved, int ownerId)
         {
             _jobBoard = jobBoard;
             _grid = grid;
@@ -194,6 +194,8 @@ namespace KeepersDomain.Implings
             _throneRoom = throneRoom;
             _slimeHatchery = slimeHatchery;
             _tavern = tavern;
+            _creature.SetOwner(ownerId);
+            CreatureHealthRing.Attach(gameObject, _creature, grid);
             // The Throne Room reservation was already taken by ImplingSpawner
             // (before this agent even existed) — just remember how much to
             // hand back in OnDestroy.

@@ -41,11 +41,11 @@ namespace KeepersDomain.Rooms
         // plus an inside-corner piece unused here — see SelectCarpetMaterial)
         // replacing the old flat-colored nested-square look. Each is built
         // into its own real URP/Lit material once in Initialize (see
-        // BuildCarpetMaterial) rather than a texture applied at runtime to
-        // whatever material GameObject.CreatePrimitive happens to hand
-        // back — that implicit default isn't guaranteed URP-shaded and
-        // rendered as Unity's pink/error material for TrainingRoomManager's
-        // own equivalent floor layer.
+        // DungeonPackRoomArt.BuildMaterial) rather than a texture applied
+        // at runtime to whatever material GameObject.CreatePrimitive
+        // happens to hand back — that implicit default isn't guaranteed
+        // URP-shaded and rendered as Unity's pink/error material for
+        // TrainingRoomManager's own equivalent floor layer.
         private Material _carpetCenterMaterial;
         private Material _carpetSideMaterial;
         private Material _carpetOutsideCornerMaterial;
@@ -103,6 +103,7 @@ namespace KeepersDomain.Rooms
         [SerializeField] private DungeonGrid _grid;
 
         private TreasuryManager _treasuryManager;
+        private int _ownerId;
         private int _nextRoomId;
         private readonly Dictionary<string, List<Vector2Int>> _roomTiles = new Dictionary<string, List<Vector2Int>>();
 
@@ -134,32 +135,17 @@ namespace KeepersDomain.Rooms
         /// evict or reassign whatever had claimed it.
         public event Action<string> RoomSold;
 
-        public void Initialize(DungeonGrid grid, TreasuryManager treasuryManager)
+        public void Initialize(DungeonGrid grid, TreasuryManager treasuryManager, int ownerId = 0)
         {
             _grid = grid;
             _treasuryManager = treasuryManager;
+            _ownerId = ownerId;
+            _nextRoomId = ownerId * DungeonGrid.RoomIdOwnerStride;
 
-            _carpetCenterMaterial = BuildCarpetMaterial("Dungeon/Lair/CarpetTiles/carpet_center");
-            _carpetSideMaterial = BuildCarpetMaterial("Dungeon/Lair/CarpetTiles/carpet_side");
-            _carpetOutsideCornerMaterial = BuildCarpetMaterial("Dungeon/Lair/CarpetTiles/carpet_outside_corner");
+            _carpetCenterMaterial = DungeonPackRoomArt.BuildMaterial("Dungeon/Lair/CarpetTiles/carpet_center");
+            _carpetSideMaterial = DungeonPackRoomArt.BuildMaterial("Dungeon/Lair/CarpetTiles/carpet_side");
+            _carpetOutsideCornerMaterial = DungeonPackRoomArt.BuildMaterial("Dungeon/Lair/CarpetTiles/carpet_outside_corner");
             _nestBedPrefab = Resources.Load<GameObject>("Dungeon/Prop_NestBed");
-        }
-
-        /// A real URP/Lit material with texturePath's texture baked in as
-        /// its _BaseMap — built explicitly via Shader.Find, the same way
-        /// every DungeonPack*Setup Editor tool builds its own materials.
-        /// Null if the texture itself failed to load.
-        private static Material BuildCarpetMaterial(string texturePath)
-        {
-            var texture = Resources.Load<Texture2D>(texturePath);
-            if (texture == null)
-            {
-                return null;
-            }
-
-            var material = new Material(Shader.Find("Universal Render Pipeline/Lit"));
-            material.SetTexture("_BaseMap", texture);
-            return material;
         }
 
         /// Places a Lair spanning the rectangle between startCoord and
@@ -244,6 +230,18 @@ namespace KeepersDomain.Rooms
 
             var tile = _grid.GetTile(coord);
             if (!tile.HasRoom)
+            {
+                return false;
+            }
+
+            // The Sell tool funnels every room kind through this one method
+            // on the *active* player's LairManager — reject tiles that
+            // aren't this keeper's, so you can't sell a rival's room (and
+            // so a stray call can't tear down foreign tiles / misroute the
+            // refund). Cross-owner teardown (a hostile creature wrecking
+            // someone's room) goes through KeeperContext.TrySellRoomAt,
+            // which resolves to the owning keeper's manager.
+            if (tile.OwnerId != _ownerId)
             {
                 return false;
             }
@@ -563,7 +561,7 @@ namespace KeepersDomain.Rooms
         {
             foreach (var coord in footprint)
             {
-                if (!_grid.CanBuildRoomOn(coord))
+                if (!_grid.CanBuildRoomOn(coord, _ownerId))
                 {
                     return false;
                 }
@@ -614,20 +612,25 @@ namespace KeepersDomain.Rooms
         {
             var cellSize = _grid.CellSize;
             var basePosition = _grid.GridToWorld(coord) + Vector3.down * 0.5f;
-            var centerY = basePosition.y + CarpetFloorHeight * 0.5f;
 
             var material = SelectCarpetMaterial(coord, out var yRotationDegrees);
 
             var floor = GameObject.CreatePrimitive(PrimitiveType.Cube);
             floor.name = $"LairCarpet_{coord.x}_{coord.y}";
             floor.transform.SetParent(parent, false);
-            floor.transform.localPosition = new Vector3(basePosition.x, centerY, basePosition.z);
+            // Same "position = basePosition, no offset" convention every
+            // other room's own floor tile uses (e.g. TrainingRoomManager's
+            // Border) — this used to add an extra CarpetFloorHeight * 0.5f
+            // on top of basePosition, raising the carpet's top surface a
+            // half-height above where every other room's floor top sits
+            // instead of level with it.
+            floor.transform.localPosition = basePosition;
             floor.transform.localRotation = Quaternion.Euler(0f, yRotationDegrees, 0f);
             floor.transform.localScale = new Vector3(cellSize * CarpetFootprintScale, CarpetFloorHeight, cellSize * CarpetFootprintScale);
 
             if (material != null)
             {
-                // Shared, pre-built material (see BuildCarpetMaterial).
+                // Shared, pre-built material (see DungeonPackRoomArt.BuildMaterial).
                 floor.GetComponent<Renderer>().sharedMaterial = material;
             }
 
@@ -692,23 +695,7 @@ namespace KeepersDomain.Rooms
             var bed = Instantiate(_nestBedPrefab, parent, false);
             bed.name = "NestBed";
 
-            var renderers = bed.GetComponentsInChildren<Renderer>();
-            var scale = 1f;
-            if (renderers.Length > 0)
-            {
-                var bounds = renderers[0].bounds;
-                for (int i = 1; i < renderers.Length; i++)
-                {
-                    bounds.Encapsulate(renderers[i].bounds);
-                }
-
-                var footprint = Mathf.Max(bounds.size.x, bounds.size.z);
-                if (footprint > 0.01f)
-                {
-                    scale = (cellSize * NestBedFootprintScale) / footprint;
-                }
-            }
-
+            var scale = DungeonPackRoomArt.ComputeUniformScaleToFootprint(bed, cellSize * NestBedFootprintScale);
             bed.transform.localScale = Vector3.one * scale;
             bed.transform.localPosition = new Vector3(worldPos.x, _grid.FloorSurfaceY, worldPos.z);
         }

@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using KeepersDomain.Core;
 using KeepersDomain.Grid;
 using KeepersDomain.Rooms;
 using KeepersDomain.Implings;
@@ -114,6 +115,13 @@ namespace KeepersDomain.Input
 
         private Camera _camera;
         private DungeonGrid _grid;
+
+        // The keeper the local player is currently driving. Every manager
+        // field below is just a cached pointer into _active, refreshed by
+        // SetActiveContext when the debug player switcher flips players —
+        // so the ~1000 lines of gesture logic keep referring to _jobBoard /
+        // _lairManager / ... unchanged.
+        private KeeperContext _active;
         private BuilderJobBoard _jobBoard;
         private LairManager _lairManager;
         private TreasuryManager _treasuryManager;
@@ -228,22 +236,68 @@ namespace KeepersDomain.Input
         /// BuildMode/PendingPlacementAction.
         public Vector2Int? HoveredCoord { get; private set; }
 
-        public void Initialize(Camera camera, DungeonGrid grid, BuilderJobBoard jobBoard, LairManager lairManager, TreasuryManager treasuryManager, SlimeHatcheryManager slimeHatcheryManager, TavernManager tavernManager, TrainingRoomManager trainingRoomManager, LibraryManager libraryManager, JailManager jailManager, ConversionClassManager conversionClassManager, BridgeManager bridgeManager, ImplingSpawner implingSpawner, MinionGrabController minionGrabController)
+        // The wall coord DungeonGrid's own yellow selection outline (see
+        // SetSelectedWall) is currently showing, if any — tracked here so
+        // UpdateWallHoverOutline only calls back into SetSelectedWall when
+        // the hover target actually changes coord, instead of re-
+        // instantiating the outline object every single frame the pointer
+        // sits still over the same wall.
+        private Vector2Int? _lastWallHoverCoord;
+
+        public void Initialize(Camera camera, DungeonGrid grid, KeeperContext[] contexts, MinionGrabController minionGrabController, int activeIndex)
         {
             _camera = camera;
             _grid = grid;
-            _jobBoard = jobBoard;
-            _lairManager = lairManager;
-            _treasuryManager = treasuryManager;
-            _slimeHatcheryManager = slimeHatcheryManager;
-            _tavernManager = tavernManager;
-            _trainingRoomManager = trainingRoomManager;
-            _libraryManager = libraryManager;
-            _jailManager = jailManager;
-            _conversionClassManager = conversionClassManager;
-            _bridgeManager = bridgeManager;
-            _implingSpawner = implingSpawner;
             _minionGrabController = minionGrabController;
+            SetActiveContext(contexts[activeIndex]);
+        }
+
+        /// Repoints every cached manager field at ctx — called on init and
+        /// whenever the debug player switcher changes the active keeper
+        /// (see LocalPlayerController). Callers abort any in-progress
+        /// gesture first (see AbortInProgressGesture).
+        public void SetActiveContext(KeeperContext ctx)
+        {
+            _active = ctx;
+            _jobBoard = ctx.JobBoard;
+            _lairManager = ctx.Lair;
+            _treasuryManager = ctx.Treasury;
+            _slimeHatcheryManager = ctx.SlimeHatchery;
+            _tavernManager = ctx.Tavern;
+            _trainingRoomManager = ctx.TrainingRoom;
+            _libraryManager = ctx.Library;
+            _jailManager = ctx.Jail;
+            _conversionClassManager = ctx.ConversionClass;
+            _bridgeManager = ctx.Bridge;
+            _implingSpawner = ctx.ImplingSpawner;
+        }
+
+        /// Cancels whatever placement / sell / queue drag is mid-gesture
+        /// and clears every preview — used before a debug player switch so
+        /// a half-dragged room footprint from the old keeper doesn't carry
+        /// over. Mirrors the cleanup EndGesture does, minus the actual
+        /// placement.
+        public void AbortInProgressGesture()
+        {
+            _isDragging = false;
+            _gestureMode = GestureMode.None;
+            _pendingPlacementAction = PlacementAction.None;
+            _hasLastPaintedCoord = false;
+            _hasBridgeAxis = false;
+
+            _isPlacingLair = _isPlacingTreasury = _isPlacingHatchery = _isPlacingTavern = false;
+            _isPlacingTrainingRoom = _isPlacingLibrary = _isPlacingJail = _isPlacingConversionClass = false;
+
+            _lairManager?.ClearPlacementPreview();
+            _lairManager?.ClearSellPreview();
+            _treasuryManager?.ClearPlacementPreview();
+            _slimeHatcheryManager?.ClearPlacementPreview();
+            _tavernManager?.ClearPlacementPreview();
+            _trainingRoomManager?.ClearPlacementPreview();
+            _libraryManager?.ClearPlacementPreview();
+            _jailManager?.ClearPlacementPreview();
+            _conversionClassManager?.ClearPlacementPreview();
+            _minionGrabController?.CancelCarry();
         }
 
         public void SetSquareModeToggle(bool isEnabled)
@@ -288,10 +342,12 @@ namespace KeepersDomain.Input
                 _lairManager?.ClearSellPreview();
                 _minionGrabController?.SetVisible(false);
                 HoveredCoord = null;
+                UpdateWallHoverOutline();
                 return;
             }
 
             HoveredCoord = TryGetCoordUnderScreenPos(PointerInput.PrimaryPosition, out var hoveredCoord) ? hoveredCoord : (Vector2Int?)null;
+            UpdateWallHoverOutline();
 
             UpdateSellPreview();
 
@@ -314,6 +370,38 @@ namespace KeepersDomain.Input
             {
                 EndGesture(PointerInput.PrimaryPosition);
             }
+        }
+
+        /// Drives DungeonGrid's own yellow selection outline (see
+        /// SetSelectedWall) purely from hover now, not from a click/tap —
+        /// live as the pointer moves in View (Inspect), Mine, or Reinforce
+        /// mode, the outline follows whatever wall tile is currently under
+        /// it, and clears the moment the pointer leaves a wall (or those
+        /// modes aren't active) at all. Runs every frame from Update(),
+        /// right after HoveredCoord is refreshed — guarded by
+        /// _lastWallHoverCoord so it only calls back into SetSelectedWall
+        /// (which always re-instantiates the outline object) when the
+        /// hover target actually changes, not every single frame the
+        /// pointer sits still over the same wall.
+        private void UpdateWallHoverOutline()
+        {
+            if (_grid == null)
+            {
+                return;
+            }
+
+            var showsWallOutline = _buildMode is BuildMode.View or BuildMode.Mine or BuildMode.Reinforce;
+            var target = showsWallOutline && HoveredCoord.HasValue && _grid.GetTile(HoveredCoord.Value).Type == TileType.Rock
+                ? HoveredCoord
+                : null;
+
+            if (target == _lastWallHoverCoord)
+            {
+                return;
+            }
+
+            _lastWallHoverCoord = target;
+            _grid.SetSelectedWall(target);
         }
 
         /// Live "about to sell" feedback — runs every frame the Sell tool is
@@ -799,20 +887,18 @@ namespace KeepersDomain.Input
         }
 
         /// Populates InspectedDescription with whatever's at coord — an
-        /// impling if one's standing there, otherwise the tile itself.
-        /// Also drives the wall selection outline (see DungeonGrid.
-        /// SetSelectedWall): cleared up front so every non-wall result
-        /// below (a creature, a non-Rock tile) leaves it cleared, and only
-        /// the Rock-tile branches re-select.
+        /// impling if one's standing there, otherwise the tile itself. The
+        /// wall selection outline (see DungeonGrid.SetSelectedWall) is
+        /// driven independently now, straight from hover — see
+        /// UpdateWallHoverOutline — so this no longer touches it at all.
         private void Inspect(Vector2Int coord)
         {
-            _grid.SetSelectedWall(null);
-
             foreach (var impling in ImplingAgent.All)
             {
                 if (_grid.WorldToGrid(impling.Position) == coord)
                 {
                     _inspectedDescription = $"{impling.Name}\n{impling.State} — Position: ({coord.x},{coord.y})\n"
+                        + $"Owner: Player {impling.Creature.OwnerId + 1}\n"
                         + $"{impling.Creature.DescribeStats()}\n"
                         + $"Carrying — Gold: {impling.Inventory.Gold}  Mana Crystals: {impling.Inventory.ManaCrystals}  Slimes: {impling.Inventory.Slimes}";
                     return;
@@ -867,12 +953,10 @@ namespace KeepersDomain.Input
             var tile = _grid.GetTile(coord);
             if (tile.Type == TileType.Rock && tile.IsBedrock)
             {
-                _grid.SetSelectedWall(coord);
                 _inspectedDescription = $"Bedrock ({coord.x},{coord.y})\nUnminable";
             }
             else if (tile.Type == TileType.Rock)
             {
-                _grid.SetSelectedWall(coord);
                 var kind = tile.IsReinforced ? "Reinforced wall" : "Wall";
                 var queued = tile.IsQueuedForDig ? " (queued: mine)" : tile.IsQueuedForReinforce ? " (queued: reinforce)" : "";
                 _inspectedDescription = $"{kind} ({coord.x},{coord.y}){queued}\nHP: {tile.Hp}/{tile.MaxHp}";
@@ -905,6 +989,7 @@ namespace KeepersDomain.Input
             var hungryTag = hunger.IsHungry ? " (hungry)" : "";
             var unpaidTag = pay.IsUnhappy ? " (unpaid!)" : "";
             return $"{name}\n{task} — Position: ({coord.x},{coord.y})\n"
+                + $"Owner: Player {creature.OwnerId + 1}\n"
                 + $"{creature.DescribeStats()}\n"
                 + $"Hunger: {hunger.Value:0}{hungryTag}\n"
                 + $"Wage: {Pay.WageFor(creature.Level)}g/10min{unpaidTag}\n"
@@ -952,15 +1037,13 @@ namespace KeepersDomain.Input
                     switch (_buildMode)
                     {
                         case BuildMode.Mine:
-                            _grid.RequestDig(coord);
-                            _grid.SetSelectedWall(coord);
+                            _grid.RequestDig(coord, _active.OwnerId);
                             break;
                         case BuildMode.Reinforce:
-                            _grid.RequestReinforce(coord);
-                            _grid.SetSelectedWall(coord);
+                            _grid.RequestReinforce(coord, _active.OwnerId);
                             break;
                         case BuildMode.Construct:
-                            _grid.RequestBuild(coord);
+                            _grid.RequestBuild(coord, _active.OwnerId);
                             break;
                     }
                     break;
@@ -977,14 +1060,12 @@ namespace KeepersDomain.Input
                             {
                                 _grid.CancelDig(coord);
                             }
-                            _grid.SetSelectedWall(coord);
                             break;
                         case BuildMode.Reinforce:
                             if (_jobBoard.CancelReinforceJob(coord))
                             {
                                 _grid.CancelReinforce(coord);
                             }
-                            _grid.SetSelectedWall(coord);
                             break;
                         case BuildMode.Construct:
                             if (_jobBoard.CancelBuildJob(coord))

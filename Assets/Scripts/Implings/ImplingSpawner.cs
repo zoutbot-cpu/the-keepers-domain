@@ -28,8 +28,9 @@ namespace KeepersDomain.Implings
         private ThroneRoom _throneRoom;
         private SlimeHatcheryManager _slimeHatchery;
         private TavernManager _tavern;
+        private int _ownerId;
 
-        public void Initialize(BuilderJobBoard jobBoard, DungeonGrid grid, TreasuryManager treasuryManager, ThroneRoom throneRoom, SlimeHatcheryManager slimeHatchery, TavernManager tavern)
+        public void Initialize(BuilderJobBoard jobBoard, DungeonGrid grid, TreasuryManager treasuryManager, ThroneRoom throneRoom, SlimeHatcheryManager slimeHatchery, TavernManager tavern, int ownerId = 0)
         {
             _jobBoard = jobBoard;
             _grid = grid;
@@ -37,6 +38,7 @@ namespace KeepersDomain.Implings
             _throneRoom = throneRoom;
             _slimeHatchery = slimeHatchery;
             _tavern = tavern;
+            _ownerId = ownerId;
         }
 
         /// Summons an impling directly out of mana, no Lair required — the
@@ -47,11 +49,16 @@ namespace KeepersDomain.Implings
         /// placed Lair). No-ops on a non-walkable tile so it can't spawn
         /// inside solid Rock — the mana check itself happens in
         /// SpawnImpling.
+        /// Owner is always this spawner's keeper (_ownerId) — implings are
+        /// summoned by the player who owns this ImplingSpawner (its
+        /// KeeperContext), or, on the load path, by routing the restore to
+        /// the matching context's spawner (see GameBootstrap.
+        /// RestoreWorldCreatures).
         public void SpawnImplingAt(Vector2Int coord)
         {
             if (_grid.IsWalkable(coord, isImp: true))
             {
-                SpawnImpling(_grid.GridToWorld(coord));
+                SpawnImpling(_grid.GridToWorld(coord), _ownerId);
             }
         }
 
@@ -59,7 +66,7 @@ namespace KeepersDomain.Implings
         /// if the Throne Room doesn't have enough free mana, nothing spawns
         /// at all. Mana upkeep is what actually pays for an impling
         /// existing; a Lair is not a requirement.
-        private void SpawnImpling(Vector3 homeWorldPos)
+        private void SpawnImpling(Vector3 homeWorldPos, int ownerId)
         {
             if (_throneRoom != null && !_throneRoom.TryReserveMana(ImplingManaUpkeep))
             {
@@ -75,7 +82,7 @@ namespace KeepersDomain.Implings
             Destroy(visual.GetComponent<Collider>());
 
             var agent = visual.AddComponent<ImplingAgent>();
-            agent.Initialize(_jobBoard, _grid, homeWorldPos, _treasuryManager, _throneRoom, _slimeHatchery, _tavern, ImplingManaUpkeep);
+            agent.Initialize(_jobBoard, _grid, homeWorldPos, _treasuryManager, _throneRoom, _slimeHatchery, _tavern, ImplingManaUpkeep, ownerId);
             GameplayLog.Write($"{agent.Name} spawned at {_grid.WorldToGrid(homeWorldPos)}");
         }
     }

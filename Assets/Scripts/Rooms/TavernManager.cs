@@ -80,10 +80,10 @@ namespace KeepersDomain.Rooms
         // Dungeon/Tavern/floor_tavern_wood — a plain texture, no prefab/
         // material build step needed, same as DungeonGrid's own Floors
         // set), built into a real URP/Lit material once in Initialize (see
-        // TrainingRoomManager.BuildDungeonPackMaterial for why — an
-        // implicit-default-material + runtime SetTexture attempt rendered
-        // pink there) — the storage tile's whole own visual now, no
-        // separate fill inset on top (removed, see CreateStorageTileVisual).
+        // DungeonPackRoomArt.BuildMaterial for why — an implicit-default-
+        // material + runtime SetTexture attempt rendered pink there) — the
+        // storage tile's whole own visual now, no separate fill inset on
+        // top (removed, see CreateStorageTileVisual).
         private Material _floorTavernWoodMaterial;
         private const float StorageTileHeight = 0.17f;
         private const float LabelCharacterSize = 0.1f;
@@ -119,6 +119,7 @@ namespace KeepersDomain.Rooms
 
         private DungeonGrid _grid;
         private TreasuryManager _treasuryManager;
+        private int _ownerId;
         private int _nextRoomId;
         private readonly Dictionary<string, List<Vector2Int>> _roomTiles = new Dictionary<string, List<Vector2Int>>();
         private readonly Dictionary<string, GameObject> _shrineVisuals = new Dictionary<string, GameObject>();
@@ -157,33 +158,17 @@ namespace KeepersDomain.Rooms
             }
         }
 
-        public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager)
+        public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager, int ownerId = 0)
         {
             _grid = grid;
             _treasuryManager = treasuryManager;
+            _ownerId = ownerId;
+            _nextRoomId = ownerId * DungeonGrid.RoomIdOwnerStride;
             lairManager.RoomSold += OnRoomSold;
 
             _baconBeaconMachinePrefab = Resources.Load<GameObject>("Dungeon/Prop_BaconBeaconMachine");
             _innBarPrefab = Resources.Load<GameObject>("Dungeon/Prop_InnBar");
-            _floorTavernWoodMaterial = BuildDungeonPackMaterial("Dungeon/Tavern/floor_tavern_wood");
-        }
-
-        /// A real URP/Lit material with texturePath's texture baked in as
-        /// its _BaseMap — built explicitly via Shader.Find, the same way
-        /// every DungeonPack*Setup Editor tool builds its own materials
-        /// (see TrainingRoomManager's own copy of this method for why).
-        /// Null if the texture itself failed to load.
-        private static Material BuildDungeonPackMaterial(string texturePath)
-        {
-            var texture = Resources.Load<Texture2D>(texturePath);
-            if (texture == null)
-            {
-                return null;
-            }
-
-            var material = new Material(Shader.Find("Universal Render Pipeline/Lit"));
-            material.SetTexture("_BaseMap", texture);
-            return material;
+            _floorTavernWoodMaterial = DungeonPackRoomArt.BuildMaterial("Dungeon/Tavern/floor_tavern_wood");
         }
 
         /// Total tile count across every placed Tavern (not just its
@@ -688,7 +673,7 @@ namespace KeepersDomain.Rooms
         {
             foreach (var coord in footprint)
             {
-                if (!_grid.CanBuildRoomOn(coord))
+                if (!_grid.CanBuildRoomOn(coord, _ownerId))
                 {
                     return false;
                 }
@@ -743,29 +728,14 @@ namespace KeepersDomain.Rooms
             foreach (var coord in shrineTiles)
             {
                 centerWorld += _grid.GridToWorld(coord);
+                BuildWoodFloorTile(container.transform, coord);
             }
             centerWorld /= shrineTiles.Count;
 
             var machine = Instantiate(_baconBeaconMachinePrefab, container.transform, false);
             machine.name = "BaconBeaconMachine";
 
-            var renderers = machine.GetComponentsInChildren<Renderer>();
-            var scale = 1f;
-            if (renderers.Length > 0)
-            {
-                var bounds = renderers[0].bounds;
-                for (int i = 1; i < renderers.Length; i++)
-                {
-                    bounds.Encapsulate(renderers[i].bounds);
-                }
-
-                var footprint = Mathf.Max(bounds.size.x, bounds.size.z);
-                if (footprint > 0.01f)
-                {
-                    scale = (cellSize * StructureSize * BaconBeaconMachineFootprintScale) / footprint;
-                }
-            }
-
+            var scale = DungeonPackRoomArt.ComputeUniformScaleToFootprint(machine, cellSize * StructureSize * BaconBeaconMachineFootprintScale);
             machine.transform.localScale = Vector3.one * scale;
             machine.transform.localPosition = new Vector3(centerWorld.x, _grid.FloorSurfaceY, centerWorld.z);
 
@@ -859,13 +829,26 @@ namespace KeepersDomain.Rooms
         {
             var container = new GameObject($"BaconStorage_{coord.x}_{coord.y}");
             container.transform.SetParent(transform, false);
+            BuildWoodFloorTile(container.transform, coord);
+            return container;
+        }
 
+        /// The Seam+Border tavern-wood floor tile pattern every visible
+        /// Tavern tile gets — a storage tile's own whole visual
+        /// (CreateStorageTileVisual), and (since the real
+        /// bacon_beacon_machine mesh doesn't necessarily cover its whole
+        /// 2x2 block on its own) the floor under the shrine tiles too, see
+        /// BuildShrineMachineVisual — without it a tile shows DungeonGrid's
+        /// own untextured claimed-floor visual (rendering pink) instead of
+        /// tavern floor.
+        private void BuildWoodFloorTile(Transform parent, Vector2Int coord)
+        {
             var cellSize = _grid.CellSize;
             var basePosition = _grid.GridToWorld(coord) + Vector3.down * 0.5f;
 
             var seam = GameObject.CreatePrimitive(PrimitiveType.Cube);
             seam.name = "Seam";
-            seam.transform.SetParent(container.transform, false);
+            seam.transform.SetParent(parent, false);
             seam.transform.position = basePosition;
             seam.transform.localScale = new Vector3(cellSize * SeamFootprintScale, SeamHeight, cellSize * SeamFootprintScale);
             seam.GetComponent<Renderer>().material.color = _seamColor;
@@ -873,19 +856,17 @@ namespace KeepersDomain.Rooms
 
             var border = GameObject.CreatePrimitive(PrimitiveType.Cube);
             border.name = "Border";
-            border.transform.SetParent(container.transform, false);
+            border.transform.SetParent(parent, false);
             border.transform.position = basePosition;
             border.transform.localScale = new Vector3(cellSize * 0.95f, StorageTileHeight, cellSize * 0.95f);
             if (_floorTavernWoodMaterial != null)
             {
-                // Shared, pre-built material (see BuildDungeonPackMaterial)
-                // — no color tint, the wood art already carries its own
-                // correct look.
+                // Shared, pre-built material (see DungeonPackRoomArt.
+                // BuildMaterial) — no color tint, the wood art already
+                // carries its own correct look.
                 border.GetComponent<Renderer>().sharedMaterial = _floorTavernWoodMaterial;
             }
             Destroy(border.GetComponent<Collider>());
-
-            return container;
         }
 
         /// The room's one bacon-count label, floating above the shrine

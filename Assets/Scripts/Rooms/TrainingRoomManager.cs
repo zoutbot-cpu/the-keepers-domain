@@ -34,27 +34,23 @@ namespace KeepersDomain.Rooms
         // own tile): the real dungeon_pack tatami floor texture (Assets/
         // Resources/Dungeon/TrainingRoom/floor_tatami — a plain texture, no
         // prefab/material build step needed, same as DungeonGrid's own
-        // Floors set) with a slightly lighter green fill inset on top —
-        // same border/fill footprint convention TreasuryManager's gold
-        // tiles use. Taller than DungeonGrid's own 0.15 floor visual so its
-        // top face wins the z-fight instead of flickering; the fill sits a
-        // further margin above the border for the same reason (see
-        // TreasuryManager's FillHeightMargin).
+        // Floors set), built into a real URP/Lit material once in
+        // Initialize (see DungeonPackRoomArt.BuildMaterial for why — an
+        // implicit-default-material + runtime SetTexture attempt rendered
+        // pink here) — the tile's whole own visual now, no separate fill inset
+        // on top (removed, see BuildGroundVisual).
         private Material _floorTatamiMaterial;
-        [SerializeField] private Color _groundFillColor = new Color(0.35f, 0.65f, 0.35f);
         private const float GroundTileHeight = 0.17f;
-        private const float GroundFillHeightMargin = 0.03f;
         private const float GroundFootprintScale = 0.95f;
-        private const float GroundFillFootprintScale = 0.8f;
 
-        // Border's own GroundFootprintScale (0.95) leaves a thin gap at
-        // every tile edge where neighboring tiles don't quite touch — a
-        // full-cell gray Seam layer underneath fills it in, sitting a bit
-        // lower than Border/Fill (SeamHeight, between DungeonGrid's own
-        // 0.15 hidden-tile height and Border's 0.17 — tall enough to fully
-        // hide that tile, short enough that Border/Fill still visibly "pop
-        // out" above it) so adjacent tiles read as flush-fitted floor
-        // panels with a mortar line between them, not a void gap.
+        // GroundFootprintScale's own 0.95 leaves a thin gap at every tile
+        // edge where neighboring tiles don't quite touch — a full-cell
+        // gray Seam layer underneath fills it in, sitting a bit lower than
+        // Border (SeamHeight, between DungeonGrid's own 0.15 hidden-tile
+        // height and Border's 0.17 — tall enough to fully hide that tile,
+        // short enough that Border still visibly "pops out" above it) so
+        // adjacent tiles read as flush-fitted floor panels with a mortar
+        // line between them, not a void gap.
         [SerializeField] private Color _seamColor = new Color(0.32f, 0.32f, 0.32f);
         private const float SeamFootprintScale = 1.0f;
         private const float SeamHeight = 0.16f;
@@ -90,6 +86,7 @@ namespace KeepersDomain.Rooms
 
         private DungeonGrid _grid;
         private TreasuryManager _treasuryManager;
+        private int _ownerId;
         private int _nextRoomId;
         private readonly Dictionary<string, List<Vector2Int>> _roomTiles = new Dictionary<string, List<Vector2Int>>();
         private readonly Dictionary<string, List<Vector2Int>> _structureCoords = new Dictionary<string, List<Vector2Int>>();
@@ -98,35 +95,16 @@ namespace KeepersDomain.Rooms
         private readonly Dictionary<Vector2Int, GameObject> _groundVisuals = new Dictionary<Vector2Int, GameObject>();
         private readonly List<GameObject> _previewMarkers = new List<GameObject>();
 
-        public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager)
+        public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager, int ownerId = 0)
         {
             _grid = grid;
             _treasuryManager = treasuryManager;
+            _ownerId = ownerId;
+            _nextRoomId = ownerId * DungeonGrid.RoomIdOwnerStride;
             lairManager.RoomSold += OnRoomSold;
 
-            _floorTatamiMaterial = BuildDungeonPackMaterial("Dungeon/TrainingRoom/floor_tatami");
+            _floorTatamiMaterial = DungeonPackRoomArt.BuildMaterial("Dungeon/TrainingRoom/floor_tatami");
             _trainingDummyPrefab = Resources.Load<GameObject>("Dungeon/Prop_TrainingDummy");
-        }
-
-        /// A real URP/Lit material with texturePath's texture baked in as
-        /// its _BaseMap — built explicitly via Shader.Find, the same way
-        /// every DungeonPack*Setup Editor tool builds its own materials,
-        /// rather than relying on whatever material GameObject.
-        /// CreatePrimitive happens to hand back and mutating that: that
-        /// implicit default rendered as Unity's pink/error material here,
-        /// since nothing guarantees it's actually URP/Lit-shaded. Null if
-        /// the texture itself failed to load.
-        private static Material BuildDungeonPackMaterial(string texturePath)
-        {
-            var texture = Resources.Load<Texture2D>(texturePath);
-            if (texture == null)
-            {
-                return null;
-            }
-
-            var material = new Material(Shader.Find("Universal Render Pipeline/Lit"));
-            material.SetTexture("_BaseMap", texture);
-            return material;
         }
 
         /// Total tile count across every placed Training Room — read by
@@ -633,7 +611,7 @@ namespace KeepersDomain.Rooms
         {
             foreach (var coord in footprint)
             {
-                if (!_grid.CanBuildRoomOn(coord))
+                if (!_grid.CanBuildRoomOn(coord, _ownerId))
                 {
                     return false;
                 }
@@ -664,13 +642,13 @@ namespace KeepersDomain.Rooms
         }
 
         /// A real dungeon_pack-textured tatami border (see
-        /// _floorTatamiMaterial), with a slightly lighter flat-green fill
-        /// inset on top — same border/fill footprint convention
-        /// TreasuryManager.CreateTileVisual uses for its gold tiles. A
-        /// full-cell gray Seam sits beneath both (see its own field header)
-        /// so the gap Border's own 0.95 footprint would otherwise leave at
-        /// every tile edge reads as a mortar line instead of a void gap.
-        /// RefreshVisual's own isPlainFloor check never applies once a room
+        /// _floorTatamiMaterial) — no fill inset on top (removed; read as a
+        /// stray white square once seen in-Editor, same issue Tavern's own
+        /// storage tiles had). A full-cell gray Seam sits beneath it (see
+        /// its own field header) so the gap Border's own 0.95 footprint
+        /// would otherwise leave at every tile edge reads as a mortar line
+        /// instead of a void gap. RefreshVisual's own isPlainFloor check
+        /// never applies once a room
         /// covers the tile, so without this the floor underneath would just
         /// be a flat placeholder color.
         private GameObject BuildGroundVisual(Vector2Int coord)
@@ -702,24 +680,13 @@ namespace KeepersDomain.Rooms
 
             if (_floorTatamiMaterial != null)
             {
-                // Shared, pre-built material (see BuildDungeonPackMaterial)
-                // — no color tint, the tatami art already carries its own
-                // correct look.
+                // Shared, pre-built material (see DungeonPackRoomArt.
+                // BuildMaterial) — no color tint, the tatami art already
+                // carries its own correct look.
                 border.GetComponent<Renderer>().sharedMaterial = _floorTatamiMaterial;
             }
 
             Destroy(border.GetComponent<Collider>());
-
-            var fill = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            fill.name = "Fill";
-            fill.transform.SetParent(container.transform, false);
-            // Raised by half the margin so its bottom still matches the
-            // border's (no gap underneath) while its top clears the
-            // border's top — see GroundFillHeightMargin.
-            fill.transform.position = basePosition + Vector3.up * (GroundFillHeightMargin * 0.5f);
-            fill.transform.localScale = new Vector3(cellSize * GroundFillFootprintScale, GroundTileHeight + GroundFillHeightMargin, cellSize * GroundFillFootprintScale);
-            fill.GetComponent<Renderer>().material.color = _groundFillColor;
-            Destroy(fill.GetComponent<Collider>());
 
             return container;
         }
@@ -742,23 +709,7 @@ namespace KeepersDomain.Rooms
                 var dummy = Instantiate(_trainingDummyPrefab, container.transform, false);
                 dummy.name = "Dummy";
 
-                var renderers = dummy.GetComponentsInChildren<Renderer>();
-                var scale = 1f;
-                if (renderers.Length > 0)
-                {
-                    var bounds = renderers[0].bounds;
-                    for (int i = 1; i < renderers.Length; i++)
-                    {
-                        bounds.Encapsulate(renderers[i].bounds);
-                    }
-
-                    var footprint = Mathf.Max(bounds.size.x, bounds.size.z);
-                    if (footprint > 0.01f)
-                    {
-                        scale = (_grid.CellSize * TrainingDummyFootprintScale) / footprint;
-                    }
-                }
-
+                var scale = DungeonPackRoomArt.ComputeUniformScaleToFootprint(dummy, _grid.CellSize * TrainingDummyFootprintScale);
                 dummy.transform.localScale = Vector3.one * scale;
                 dummy.transform.localPosition = basePosition;
                 return container;

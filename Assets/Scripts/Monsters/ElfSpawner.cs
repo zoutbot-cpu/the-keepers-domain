@@ -37,7 +37,7 @@ namespace KeepersDomain.Monsters
         /// a tormented prisoner fails its conversion roll, and by
         /// MinionGrabController if a live Elf is ever grabbed and re-jailed
         /// (same generic capture path every jailable creature uses).
-        public void SpawnElf(Vector2Int coord)
+        public void SpawnElf(Vector2Int coord, int ownerId = 0)
         {
             var worldPos = _grid.GridToWorld(coord);
 
@@ -49,7 +49,7 @@ namespace KeepersDomain.Monsters
             Destroy(visual.GetComponent<Collider>());
 
             var agent = visual.AddComponent<ElfAgent>();
-            agent.Initialize(_grid, _lairManager, _tavernManager, _treasuryManager, _portal);
+            agent.Initialize(_grid, _lairManager, _tavernManager, _treasuryManager, _portal, ownerId);
             GameplayLog.Write($"{agent.Name} shuffled into existence, weak and worthless, at ({coord.x},{coord.y})");
         }
     }

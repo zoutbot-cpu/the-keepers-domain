@@ -69,14 +69,14 @@ namespace KeepersDomain.Rooms
         /// What's actually free to spend right now.
         public int CurrentMana => MaxMana - ReservedMana;
 
-        public void Initialize(Vector2Int center, DungeonGrid grid)
+        public void Initialize(Vector2Int center, DungeonGrid grid, int startingMaxMana = StartingMaxMana)
         {
             Coord = center;
             transform.position = grid.GridToWorld(center);
             var platformHeight = grid.CellSize * PlatformHeightFactor;
             var ringHeight = grid.CellSize * RingHeightFactor;
 
-            MaxMana = StartingMaxMana;
+            MaxMana = startingMaxMana > 0 ? startingMaxMana : StartingMaxMana;
 
             grid.SetBlocked(center, true);
 

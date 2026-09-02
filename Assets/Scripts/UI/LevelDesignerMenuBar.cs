@@ -2,8 +2,10 @@ using System;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using KeepersDomain.Core;
+using KeepersDomain.Grid;
 using KeepersDomain.Input;
 using KeepersDomain.LevelDesigner;
+using KeepersDomain.Rooms;
 
 namespace KeepersDomain.UI
 {
@@ -26,7 +28,9 @@ namespace KeepersDomain.UI
             Rooms,
             Creatures,
             Edit,
-            File
+            Remove,
+            File,
+            Settings
         }
 
         private const float BarHeight = 44f;
@@ -50,9 +54,15 @@ namespace KeepersDomain.UI
 
         private LevelDesignerSession _session;
         private LevelDesignerInteractionController _interactionController;
+        private DungeonGrid _grid;
+        private JailManager _jailManager;
         private Action<string, LevelData> _onLoadRequested;
 
         private MenuTab _openTab = MenuTab.None;
+        // Half-wall view defaults ON in the editor — authors spend most of
+        // their time looking down into rooms, so full-height walls just get
+        // in the way (see DungeonGrid.SetHalfWalls / JailManager.SetHalfWalls).
+        private bool _halfWallsOn = true;
         private int _selectedOwnerId;
         private Vector2 _playersScrollPos;
         private Vector2 _fileScrollPos;
@@ -67,15 +77,22 @@ namespace KeepersDomain.UI
         /// GameBootstrap.BuildLevelDesignerWorld/LoadLevelDesignerWorld),
         /// so re-saving defaults to overwriting the same file rather than
         /// making the player retype the name.
-        public void Initialize(LevelDesignerSession session, LevelDesignerInteractionController interactionController, Action<string, LevelData> onLoadRequested, string initialLevelName)
+        public void Initialize(LevelDesignerSession session, LevelDesignerInteractionController interactionController, DungeonGrid grid, JailManager jailManager, Action<string, LevelData> onLoadRequested, string initialLevelName)
         {
             _session = session;
             _interactionController = interactionController;
+            _grid = grid;
+            _jailManager = jailManager;
             _onLoadRequested = onLoadRequested;
             if (!string.IsNullOrEmpty(initialLevelName))
             {
                 _levelNameInput = initialLevelName;
             }
+
+            // Push the default-on half-wall state straight through — the
+            // grid and every placed Jail already exist by the time the menu
+            // bar is wired (see GameBootstrap.SetUpLevelDesignerWorld).
+            ApplyHalfWalls();
         }
 
         private void OnGUI()
@@ -202,7 +219,9 @@ namespace KeepersDomain.UI
             DrawTabButton(MenuTab.Rooms, "Rooms");
             DrawTabButton(MenuTab.Creatures, "Creatures");
             DrawTabButton(MenuTab.Edit, "Edit");
+            DrawTabButton(MenuTab.Remove, "Remove");
             DrawTabButton(MenuTab.File, "Save/Load");
+            DrawTabButton(MenuTab.Settings, "Settings");
             GUILayout.FlexibleSpace();
             // Tears the level-designer world down and shows the main menu
             // again — same GameBootstrap.ReturnToMainMenu gameplay's own
@@ -247,8 +266,14 @@ namespace KeepersDomain.UI
                 case MenuTab.Edit:
                     DrawEditMenu();
                     break;
+                case MenuTab.Remove:
+                    DrawRemoveMenu();
+                    break;
                 case MenuTab.File:
                     DrawFileMenu();
+                    break;
+                case MenuTab.Settings:
+                    DrawSettingsMenu();
                     break;
             }
             GUILayout.EndArea();
@@ -389,7 +414,16 @@ namespace KeepersDomain.UI
             GUILayout.Space(8f);
             if (_interactionController.RoomTool != RoomDesignTool.None)
             {
-                GUILayout.Label("Drag to size, release to place.");
+                // A room must belong to a player (its tiles are Claimed
+                // Floor — see LevelDesignerInteractionController.
+                // PlaceRoomFootprint, which no-ops with no owner picked),
+                // so the same selector Structures/Creatures use is shown
+                // here too rather than silently defaulting to Player 1.
+                DrawOwnerSelector("Belongs to:");
+                GUILayout.Space(4f);
+                GUILayout.Label(_selectedOwnerId < 0
+                    ? "Rooms must belong to a player — pick one above."
+                    : "Drag to size, release to place.");
             }
 
             if (_interactionController.IsPlacingRoom)
@@ -480,7 +514,7 @@ namespace KeepersDomain.UI
             var currentOwnerId = _interactionController.SelectedCurrentOwnerId;
             var currentOwnerLabel = currentOwnerId >= 0 && currentOwnerId < _session.Players.Count
                 ? $"Player {currentOwnerId + 1}"
-                : "no owner";
+                : "Unclaimed";
             GUILayout.Label($"Selected: {selection} at ({coord.x}, {coord.y}) — currently {currentOwnerLabel}");
 
             GUILayout.Space(8f);
@@ -490,6 +524,44 @@ namespace KeepersDomain.UI
             {
                 _interactionController.ReassignSelectedOwner(_selectedOwnerId);
             }
+        }
+
+        /// A 6th tool category — an on/off mode (same GUILayout.Toggle-as-
+        /// button shape Edit mode uses) that turns every tap into a delete:
+        /// walls, terrain, floor, rooms, structures, creatures. See
+        /// LevelDesignerInteractionController.RemoveAt.
+        private void DrawRemoveMenu()
+        {
+            var isRemoveModeOn = _interactionController.RemoveMode;
+            var pressed = GUILayout.Toggle(isRemoveModeOn, isRemoveModeOn ? "[Remove Mode: ON]" : "Remove Mode: OFF", GUI.skin.button);
+            if (pressed != isRemoveModeOn)
+            {
+                _interactionController.SetRemoveMode(pressed);
+            }
+
+            GUILayout.Space(8f);
+            GUILayout.Label("Tap a wall, terrain tile, floor, room, structure, or creature to delete it. Rooms and structures take their whole footprint back to plain rock. Not mirrored, and there's no undo.");
+        }
+
+        /// Display-only options that don't touch the level data — currently
+        /// just the half-wall view toggle (default ON in the editor, see
+        /// the _halfWallsOn field). Mirrors BottomMenuBar's own Settings
+        /// menu in ordinary gameplay.
+        private void DrawSettingsMenu()
+        {
+            var halfWallsOn = GUILayout.Toggle(_halfWallsOn, "Half wall");
+            if (halfWallsOn != _halfWallsOn)
+            {
+                _halfWallsOn = halfWallsOn;
+                ApplyHalfWalls();
+            }
+            GUILayout.Label("Squashes every wall to half height — bottom half kept, top pressed down. Also lowers Jail pit rims. Not saved with the level.");
+        }
+
+        private void ApplyHalfWalls()
+        {
+            _grid.SetHalfWalls(_halfWallsOn);
+            _jailManager.SetHalfWalls(_halfWallsOn);
         }
 
         private void DrawFileMenu()
@@ -548,13 +620,27 @@ namespace KeepersDomain.UI
         /// tool — "make the claimed tile one have a selection box for whom
         /// the tile belongs to before placing it" from the brief, reused
         /// as-is for creature ownership too since it's the same choice.
+        /// The gray "Unclaimed" entry is a pseudo-player standing in for
+        /// ownerId -1 ("no owner") — every consumer already treats a
+        /// negative id that way (unclaimed floor, no creature owner-ring,
+        /// a Reinforced wall's default-blue orb). Rooms are the one thing
+        /// that can't be unowned (see DrawRoomsMenu).
         private void DrawOwnerSelector(string label)
         {
             GUILayout.Label(label);
             GUILayout.BeginHorizontal();
+
+            var previousColor = GUI.color;
+            GUI.color = LevelDesignerColors.Unowned;
+            if (GUILayout.Toggle(_selectedOwnerId < 0, "Unclaimed", GUI.skin.button, GUILayout.Width(OwnerButtonWidth * 2f)))
+            {
+                _selectedOwnerId = -1;
+            }
+            GUI.color = previousColor;
+
             for (int i = 0; i < _session.Players.Count; i++)
             {
-                var previousColor = GUI.color;
+                previousColor = GUI.color;
                 GUI.color = _session.Players[i].Color;
                 if (GUILayout.Toggle(_selectedOwnerId == i, $"P{i + 1}", GUI.skin.button, GUILayout.Width(OwnerButtonWidth)))
                 {

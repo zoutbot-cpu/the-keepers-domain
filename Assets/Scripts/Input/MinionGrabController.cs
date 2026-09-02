@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using KeepersDomain.Core;
 using KeepersDomain.Grid;
 using KeepersDomain.Implings;
 using KeepersDomain.Monsters;
@@ -41,6 +42,7 @@ namespace KeepersDomain.Input
 
         private Camera _camera;
         private DungeonGrid _grid;
+        private KeeperContext _active;
         private TrainingRoomManager _trainingRoomManager;
         private JailManager _jailManager;
 
@@ -57,14 +59,25 @@ namespace KeepersDomain.Input
         /// BottomMenuBar to show the right instruction text for Grab mode.
         public bool IsCarrying => _isCarrying;
 
-        public void Initialize(Camera camera, DungeonGrid grid, TrainingRoomManager trainingRoomManager, JailManager jailManager)
+        public void Initialize(Camera camera, DungeonGrid grid, KeeperContext[] contexts, int activeIndex)
         {
             _camera = camera;
             _grid = grid;
-            _trainingRoomManager = trainingRoomManager;
-            _jailManager = jailManager;
+            SetActiveContext(contexts[activeIndex]);
             BuildHandVisual();
             SetVisible(false);
+        }
+
+        /// Repoints the grab hand at ctx's Training Room / Jail — and drops
+        /// any carried minion first, since it belongs to the keeper we're
+        /// switching away from. Called by LocalPlayerController on a debug
+        /// player switch.
+        public void SetActiveContext(KeeperContext ctx)
+        {
+            CancelCarry();
+            _active = ctx;
+            _trainingRoomManager = ctx.TrainingRoom;
+            _jailManager = ctx.Jail;
         }
 
         public void SetVisible(bool visible)
@@ -322,12 +335,13 @@ namespace KeepersDomain.Input
         /// Checks every creature list in turn (implings first, same order
         /// TileInteractionController.Inspect uses) for whichever one's grid
         /// coord matches — the first match wins if more than one creature
-        /// somehow shares a tile.
+        /// somehow shares a tile. Only the active keeper's own creatures are
+        /// grabbable: you can't pick up and reposition a rival's minion.
         private bool TryFindMinionAt(Vector2Int coord, out Behaviour agent, out Transform creatureTransform)
         {
             foreach (var impling in ImplingAgent.All)
             {
-                if (_grid.WorldToGrid(impling.Position) == coord)
+                if (impling.Creature.OwnerId == _active.OwnerId && _grid.WorldToGrid(impling.Position) == coord)
                 {
                     agent = impling;
                     creatureTransform = impling.transform;
@@ -337,7 +351,7 @@ namespace KeepersDomain.Input
 
             foreach (var gremlin in GremlinAgent.All)
             {
-                if (_grid.WorldToGrid(gremlin.Position) == coord)
+                if (gremlin.Creature.OwnerId == _active.OwnerId && _grid.WorldToGrid(gremlin.Position) == coord)
                 {
                     agent = gremlin;
                     creatureTransform = gremlin.transform;
@@ -347,7 +361,7 @@ namespace KeepersDomain.Input
 
             foreach (var warlock in WarlockAgent.All)
             {
-                if (_grid.WorldToGrid(warlock.Position) == coord)
+                if (warlock.Creature.OwnerId == _active.OwnerId && _grid.WorldToGrid(warlock.Position) == coord)
                 {
                     agent = warlock;
                     creatureTransform = warlock.transform;
@@ -357,7 +371,7 @@ namespace KeepersDomain.Input
 
             foreach (var mazeRattler in MazeRattlerAgent.All)
             {
-                if (_grid.WorldToGrid(mazeRattler.Position) == coord)
+                if (mazeRattler.Creature.OwnerId == _active.OwnerId && _grid.WorldToGrid(mazeRattler.Position) == coord)
                 {
                     agent = mazeRattler;
                     creatureTransform = mazeRattler.transform;
@@ -367,7 +381,7 @@ namespace KeepersDomain.Input
 
             foreach (var beanCounter in BeanCounterAgent.All)
             {
-                if (_grid.WorldToGrid(beanCounter.Position) == coord)
+                if (beanCounter.Creature.OwnerId == _active.OwnerId && _grid.WorldToGrid(beanCounter.Position) == coord)
                 {
                     agent = beanCounter;
                     creatureTransform = beanCounter.transform;
@@ -377,7 +391,7 @@ namespace KeepersDomain.Input
 
             foreach (var elf in ElfAgent.All)
             {
-                if (_grid.WorldToGrid(elf.Position) == coord)
+                if (elf.Creature.OwnerId == _active.OwnerId && _grid.WorldToGrid(elf.Position) == coord)
                 {
                     agent = elf;
                     creatureTransform = elf.transform;

@@ -54,6 +54,23 @@ namespace KeepersDomain.Monsters
         /// same convention ImplingAgent.All uses.
         public static IReadOnlyList<GremlinAgent> All => _all;
 
+        /// How many currently-alive Gremlins belong to ownerId — spawner
+        /// population caps are per-keeper now (see GremlinSpawner.
+        /// MeetsJoinRequirements), so a rival keeper's roster never gates
+        /// your own recruiting.
+        public static int CountForOwner(int ownerId)
+        {
+            var count = 0;
+            foreach (var agent in _all)
+            {
+                if (agent.Creature.OwnerId == ownerId)
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+
         public int Id { get; private set; }
         public Vector3 Position => transform.position;
 
@@ -176,7 +193,7 @@ namespace KeepersDomain.Monsters
             _creature = new Creature(_baseStats, _growthPerLevel, _expPerLevelStep);
         }
 
-        public void Initialize(DungeonGrid grid, LairManager lairManager, TavernManager tavernManager, TrainingRoomManager trainingRoomManager, TreasuryManager treasuryManager, Portal portal)
+        public void Initialize(DungeonGrid grid, LairManager lairManager, TavernManager tavernManager, TrainingRoomManager trainingRoomManager, TreasuryManager treasuryManager, Portal portal, int ownerId)
         {
             _grid = grid;
             _lairManager = lairManager;
@@ -184,6 +201,8 @@ namespace KeepersDomain.Monsters
             _trainingRoomManager = trainingRoomManager;
             _treasuryManager = treasuryManager;
             _portal = portal;
+            _creature.SetOwner(ownerId);
+            CreatureHealthRing.Attach(gameObject, _creature, grid);
             _lairManager.RoomSold += OnLairSold;
         }
 
@@ -591,7 +610,7 @@ namespace KeepersDomain.Monsters
             var destroyed = _grid.ApplyRoomDamage(_attackTargetCoord, AttackHitDamage);
             if (destroyed)
             {
-                _lairManager.TrySellRoom(_attackTargetCoord);
+                KeepersDomain.Core.KeeperContext.TrySellRoomAt(_grid, _attackTargetCoord);
                 GameplayLog.Write($"{Name} ({_happiness.Tier}) destroyed a room at ({_attackTargetCoord.x},{_attackTargetCoord.y})");
                 SetTask(GremlinTask.Idle);
             }
@@ -614,7 +633,7 @@ namespace KeepersDomain.Monsters
             }
 
             _attackHitTimer -= AttackHitInterval;
-            var destroyed = _grid.ApplyDigDamage(_attackTargetCoord, AttackHitDamage, out _, out _);
+            var destroyed = _grid.ApplyDigDamage(_attackTargetCoord, AttackHitDamage, out _, out _, _creature.OwnerId);
             if (destroyed)
             {
                 GameplayLog.Write($"{Name} ({_happiness.Tier}) smashed a wall at ({_attackTargetCoord.x},{_attackTargetCoord.y})");
@@ -798,7 +817,7 @@ namespace KeepersDomain.Monsters
             var candidates = new List<Vector2Int>();
             foreach (var candidate in distances.Keys)
             {
-                if (_grid.CanBuildRoomOn(candidate))
+                if (_grid.CanBuildRoomOn(candidate, _creature.OwnerId))
                 {
                     candidates.Add(candidate);
                 }

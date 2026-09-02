@@ -23,7 +23,8 @@ namespace KeepersDomain.UI
             Build,
             Impling,
             Creatures,
-            Tasks
+            Tasks,
+            Settings
         }
 
         private const float BarHeight = 44f;
@@ -43,8 +44,19 @@ namespace KeepersDomain.UI
         public static bool PointerOverPanel { get; private set; }
 
         private DungeonGrid _grid;
-        private BuilderJobBoard _jobBoard;
         private TileInteractionController _interactionController;
+        private LocalPlayerController _localPlayer;
+
+        // Every context this session — only used to draw the debug player
+        // switcher (and only when Length > 1).
+        private KeeperContext[] _contexts;
+
+        // The keeper whose economy/tasks/recruiting this HUD currently
+        // shows. Cached pointers into _active, refreshed by SetActiveContext
+        // when the debug switcher flips players — the draw code below keeps
+        // referring to _jobBoard / _throneRoom / ... unchanged.
+        private KeeperContext _active;
+        private BuilderJobBoard _jobBoard;
         private TreasuryManager _treasuryManager;
         private ThroneRoom _throneRoom;
         private TavernManager _tavernManager;
@@ -59,6 +71,7 @@ namespace KeepersDomain.UI
 
         private MenuTab _openTab = MenuTab.None;
         private bool _squareModeOn;
+        private bool _halfWallsOn;
         private bool _digQueuePaused;
         private bool _autoReinforceOn;
         private List<JobKind> _priorityOrder;
@@ -66,25 +79,41 @@ namespace KeepersDomain.UI
         private Vector2 _tasksScrollPos;
         private Vector2 _creaturesScrollPos;
 
-        public void Initialize(DungeonGrid grid, BuilderJobBoard jobBoard, TileInteractionController interactionController, TreasuryManager treasuryManager, ThroneRoom throneRoom, TavernManager tavernManager, TrainingRoomManager trainingRoomManager, LibraryManager libraryManager, JailManager jailManager, ConversionClassManager conversionClassManager, GremlinSpawner gremlinSpawner, WarlockSpawner warlockSpawner, MazeRattlerSpawner mazeRattlerSpawner, BeanCounterSpawner beanCounterSpawner)
+        public void Initialize(DungeonGrid grid, KeeperContext[] contexts, TileInteractionController interactionController, LocalPlayerController localPlayer, int activeIndex)
         {
             _grid = grid;
-            _jobBoard = jobBoard;
+            _contexts = contexts;
             _interactionController = interactionController;
-            _treasuryManager = treasuryManager;
-            _throneRoom = throneRoom;
-            _tavernManager = tavernManager;
-            _trainingRoomManager = trainingRoomManager;
-            _libraryManager = libraryManager;
-            _jailManager = jailManager;
-            _conversionClassManager = conversionClassManager;
-            _gremlinSpawner = gremlinSpawner;
-            _warlockSpawner = warlockSpawner;
-            _mazeRattlerSpawner = mazeRattlerSpawner;
-            _beanCounterSpawner = beanCounterSpawner;
+            _localPlayer = localPlayer;
+            SetActiveContext(contexts[activeIndex]);
+        }
+
+        /// Repoints every cached manager/spawner field at ctx and re-seeds
+        /// the job-priority list from ctx's board — called on init and by
+        /// LocalPlayerController when the debug player switcher flips
+        /// players.
+        public void SetActiveContext(KeeperContext ctx)
+        {
+            _active = ctx;
+            _jobBoard = ctx.JobBoard;
+            _treasuryManager = ctx.Treasury;
+            _throneRoom = ctx.Throne;
+            _tavernManager = ctx.Tavern;
+            _trainingRoomManager = ctx.TrainingRoom;
+            _libraryManager = ctx.Library;
+            _jailManager = ctx.Jail;
+            _conversionClassManager = ctx.ConversionClass;
+            _gremlinSpawner = ctx.GremlinSpawner;
+            _warlockSpawner = ctx.WarlockSpawner;
+            _mazeRattlerSpawner = ctx.MazeRattlerSpawner;
+            _beanCounterSpawner = ctx.BeanCounterSpawner;
             // Seeded from the board's actual current order, not a second
             // hardcoded default — see BuilderJobBoard.GetJobPriorityOrder.
             _priorityOrder = new List<JobKind>(_jobBoard.GetJobPriorityOrder());
+            // These toggles are per-board state; resync the UI to the
+            // newly-active board so a checkbox doesn't lie.
+            _digQueuePaused = false;
+            _autoReinforceOn = false;
         }
 
         private void OnGUI()
@@ -94,12 +123,19 @@ namespace KeepersDomain.UI
             var inspectionRect = new Rect(Screen.width - InspectionPanelWidth - 10f, 10f, InspectionPanelWidth, InspectionPanelHeight);
             var topBarRect = new Rect(10f, 10f, TopBarWidth, TopBarHeight);
 
+            var hasSwitcher = _contexts != null && _contexts.Length > 1 && _localPlayer != null;
+            var switcherRect = new Rect(10f, topBarRect.yMax + 4f, TopBarWidth, hasSwitcher ? TopBarHeight : 0f);
+
             var rawMousePos = Mouse.current != null ? Mouse.current.position.ReadValue() : Vector2.zero;
             var mouseScreenPos = new Vector2(rawMousePos.x, Screen.height - rawMousePos.y);
             var isOverInspectionPanel = _interactionController.BuildMode == BuildMode.View && inspectionRect.Contains(mouseScreenPos);
-            PointerOverPanel = barRect.Contains(mouseScreenPos) || (_openTab != MenuTab.None && panelRect.Contains(mouseScreenPos)) || isOverInspectionPanel || topBarRect.Contains(mouseScreenPos);
+            PointerOverPanel = barRect.Contains(mouseScreenPos) || (_openTab != MenuTab.None && panelRect.Contains(mouseScreenPos)) || isOverInspectionPanel || topBarRect.Contains(mouseScreenPos) || (hasSwitcher && switcherRect.Contains(mouseScreenPos));
 
             DrawTopBar(topBarRect);
+            if (hasSwitcher)
+            {
+                DrawPlayerSwitcher(switcherRect);
+            }
             DrawPendingPlacementBanner(panelRect, barRect);
             DrawBar(barRect);
 
@@ -161,6 +197,29 @@ namespace KeepersDomain.UI
             GUILayout.EndArea();
         }
 
+        /// Debug-only player switcher — one toggle per keeper (P1..PN, AI
+        /// ones tagged), only shown on a multi-player level. Clicking one
+        /// repoints input / HUD / camera at that keeper via
+        /// LocalPlayerController. Gameplay is still single-player; this is
+        /// purely for inspecting/driving each roster during testing.
+        private void DrawPlayerSwitcher(Rect rect)
+        {
+            GUILayout.BeginArea(rect, GUI.skin.box);
+            GUILayout.BeginHorizontal();
+            GUILayout.Label("View:", GUILayout.Width(36f));
+            for (int i = 0; i < _contexts.Length; i++)
+            {
+                var label = _contexts[i].IsAI ? $"P{i + 1} (AI)" : $"P{i + 1}";
+                var isActive = i == _localPlayer.ActiveIndex;
+                if (GUILayout.Toggle(isActive, label, GUI.skin.button) && !isActive)
+                {
+                    _localPlayer.SetActivePlayer(i);
+                }
+            }
+            GUILayout.EndHorizontal();
+            GUILayout.EndArea();
+        }
+
         private void DrawBar(Rect rect)
         {
             GUILayout.BeginArea(rect, GUI.skin.box);
@@ -169,6 +228,7 @@ namespace KeepersDomain.UI
             DrawTabButton(MenuTab.Impling, "Impling menu");
             DrawTabButton(MenuTab.Creatures, "Creatures");
             DrawTabButton(MenuTab.Tasks, "Tasks");
+            DrawTabButton(MenuTab.Settings, "Settings");
             GUILayout.FlexibleSpace();
             // Tears the whole running game down and shows the main menu
             // again — see GameBootstrap.ReturnToMainMenu. No confirmation
@@ -207,6 +267,9 @@ namespace KeepersDomain.UI
                     break;
                 case MenuTab.Tasks:
                     DrawTasksMenu();
+                    break;
+                case MenuTab.Settings:
+                    DrawSettingsMenu();
                     break;
             }
             GUILayout.EndArea();
@@ -558,7 +621,7 @@ namespace KeepersDomain.UI
             foreach (var impling in implings)
             {
                 var coord = _grid.WorldToGrid(impling.Position);
-                GUILayout.Label($"#{impling.Id}  Lv{impling.Creature.Level}  {impling.State}  ({coord.x},{coord.y})  G:{impling.Inventory.Gold} M:{impling.Inventory.ManaCrystals} S:{impling.Inventory.Slimes}");
+                GUILayout.Label($"#{impling.Id}  Lv{impling.Creature.Level}  P{impling.Creature.OwnerId + 1}  {impling.State}  ({coord.x},{coord.y})  G:{impling.Inventory.Gold} M:{impling.Inventory.ManaCrystals} S:{impling.Inventory.Slimes}");
             }
 
             foreach (var gremlin in gremlins)
@@ -566,7 +629,7 @@ namespace KeepersDomain.UI
                 var coord = _grid.WorldToGrid(gremlin.Position);
                 var hungryTag = gremlin.Hunger.IsHungry ? " (hungry)" : "";
                 var unhappyTag = gremlin.Pay.IsUnhappy ? " (unpaid!)" : "";
-                GUILayout.Label($"{gremlin.Name}  Lv{gremlin.Creature.Level}  {gremlin.Task}  ({coord.x},{coord.y})  Hunger:{gremlin.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(gremlin.Creature.Level)}g{unhappyTag}  Happy:{gremlin.Happiness.Value:0} ({gremlin.Happiness.Tier})");
+                GUILayout.Label($"{gremlin.Name}  Lv{gremlin.Creature.Level}  P{gremlin.Creature.OwnerId + 1}  {gremlin.Task}  ({coord.x},{coord.y})  Hunger:{gremlin.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(gremlin.Creature.Level)}g{unhappyTag}  Happy:{gremlin.Happiness.Value:0} ({gremlin.Happiness.Tier})");
             }
 
             foreach (var warlock in warlocks)
@@ -574,7 +637,7 @@ namespace KeepersDomain.UI
                 var coord = _grid.WorldToGrid(warlock.Position);
                 var hungryTag = warlock.Hunger.IsHungry ? " (hungry)" : "";
                 var unhappyTag = warlock.Pay.IsUnhappy ? " (unpaid!)" : "";
-                GUILayout.Label($"{warlock.Name}  Lv{warlock.Creature.Level}  {warlock.Task}  ({coord.x},{coord.y})  Hunger:{warlock.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(warlock.Creature.Level)}g{unhappyTag}  Happy:{warlock.Happiness.Value:0} ({warlock.Happiness.Tier})");
+                GUILayout.Label($"{warlock.Name}  Lv{warlock.Creature.Level}  P{warlock.Creature.OwnerId + 1}  {warlock.Task}  ({coord.x},{coord.y})  Hunger:{warlock.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(warlock.Creature.Level)}g{unhappyTag}  Happy:{warlock.Happiness.Value:0} ({warlock.Happiness.Tier})");
             }
 
             foreach (var mazeRattler in mazeRattlers)
@@ -582,7 +645,7 @@ namespace KeepersDomain.UI
                 var coord = _grid.WorldToGrid(mazeRattler.Position);
                 var hungryTag = mazeRattler.Hunger.IsHungry ? " (hungry)" : "";
                 var unhappyTag = mazeRattler.Pay.IsUnhappy ? " (unpaid!)" : "";
-                GUILayout.Label($"{mazeRattler.Name}  Lv{mazeRattler.Creature.Level}  {mazeRattler.Task}  ({coord.x},{coord.y})  Hunger:{mazeRattler.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(mazeRattler.Creature.Level)}g{unhappyTag}  Happy:{mazeRattler.Happiness.Value:0} ({mazeRattler.Happiness.Tier})");
+                GUILayout.Label($"{mazeRattler.Name}  Lv{mazeRattler.Creature.Level}  P{mazeRattler.Creature.OwnerId + 1}  {mazeRattler.Task}  ({coord.x},{coord.y})  Hunger:{mazeRattler.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(mazeRattler.Creature.Level)}g{unhappyTag}  Happy:{mazeRattler.Happiness.Value:0} ({mazeRattler.Happiness.Tier})");
             }
 
             foreach (var beanCounter in beanCounters)
@@ -590,7 +653,7 @@ namespace KeepersDomain.UI
                 var coord = _grid.WorldToGrid(beanCounter.Position);
                 var hungryTag = beanCounter.Hunger.IsHungry ? " (hungry)" : "";
                 var unhappyTag = beanCounter.Pay.IsUnhappy ? " (unpaid!)" : "";
-                GUILayout.Label($"{beanCounter.Name}  Lv{beanCounter.Creature.Level}  {beanCounter.Task}  ({coord.x},{coord.y})  Hunger:{beanCounter.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(beanCounter.Creature.Level)}g{unhappyTag}  Happy:{beanCounter.Happiness.Value:0} ({beanCounter.Happiness.Tier})");
+                GUILayout.Label($"{beanCounter.Name}  Lv{beanCounter.Creature.Level}  P{beanCounter.Creature.OwnerId + 1}  {beanCounter.Task}  ({coord.x},{coord.y})  Hunger:{beanCounter.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(beanCounter.Creature.Level)}g{unhappyTag}  Happy:{beanCounter.Happiness.Value:0} ({beanCounter.Happiness.Tier})");
             }
 
             foreach (var elf in elves)
@@ -598,10 +661,24 @@ namespace KeepersDomain.UI
                 var coord = _grid.WorldToGrid(elf.Position);
                 var hungryTag = elf.Hunger.IsHungry ? " (hungry)" : "";
                 var unhappyTag = elf.Pay.IsUnhappy ? " (unpaid!)" : "";
-                GUILayout.Label($"{elf.Name}  Lv{elf.Creature.Level}  {elf.Task}  ({coord.x},{coord.y})  Hunger:{elf.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(elf.Creature.Level)}g{unhappyTag}  Happy:{elf.Happiness.Value:0} ({elf.Happiness.Tier})");
+                GUILayout.Label($"{elf.Name}  Lv{elf.Creature.Level}  P{elf.Creature.OwnerId + 1}  {elf.Task}  ({coord.x},{coord.y})  Hunger:{elf.Hunger.Value:0}{hungryTag}  Wage:{Pay.WageFor(elf.Creature.Level)}g{unhappyTag}  Happy:{elf.Happiness.Value:0} ({elf.Happiness.Tier})");
             }
 
             GUILayout.EndScrollView();
+        }
+
+        /// Display-only options that don't touch game state — currently just
+        /// the half-wall view toggle (see DungeonGrid.SetHalfWalls).
+        private void DrawSettingsMenu()
+        {
+            var halfWallsOn = GUILayout.Toggle(_halfWallsOn, "Half wall");
+            if (halfWallsOn != _halfWallsOn)
+            {
+                _halfWallsOn = halfWallsOn;
+                _grid.SetHalfWalls(_halfWallsOn);
+                _jailManager.SetHalfWalls(_halfWallsOn);
+            }
+            GUILayout.Label("Squashes every wall to half height — bottom half kept, top pressed down. Also lowers Jail pit rims.");
         }
 
         private void DrawTasksMenu()

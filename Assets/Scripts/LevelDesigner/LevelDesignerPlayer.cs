@@ -40,5 +40,11 @@ namespace KeepersDomain.LevelDesigner
         {
             "Red", "Blue", "Yellow", "Green", "Orange", "Purple", "Cyan", "Pink"
         };
+
+        /// The swatch for the owner selector's "Unclaimed" pseudo-player
+        /// (ownerId -1 — see LevelDesignerMenuBar.DrawOwnerSelector) — a
+        /// plain mid-gray, deliberately outside Palette so it never
+        /// collides with a real player color.
+        public static readonly Color Unowned = new Color(0.5f, 0.5f, 0.5f);
     }
 }

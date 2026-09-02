@@ -27,24 +27,39 @@ namespace KeepersDomain.Rooms
         // wins the z-fight instead of flickering against it.
         private const float TileVisualHeight = 0.17f;
 
-        // The fill sits this much taller than the border so its top face is
-        // unambiguously above the border's, not just coplanar with it —
-        // equal heights left the two z-fighting, which on most GPUs made
-        // the border win and cover the fill instead of framing it.
-        private const float FillHeightMargin = 0.03f;
-
+        // Real dungeon_pack treasury floor texture (Assets/Resources/
+        // Dungeon/Treasury/floor_treasury — a plain texture, no prefab/
+        // material build step needed, same as DungeonGrid's own Floors
+        // set), built into a real URP/Lit material once in Initialize
+        // (see DungeonPackRoomArt.BuildMaterial). _borderColor is
+        // fallback-only now, used only if the texture itself failed to
+        // load — the tile's whole own visual, no separate fill inset on
+        // top any more (removed, see CreateTileVisual).
+        private Material _floorTreasuryMaterial;
         [SerializeField] private Color _borderColor = new Color(0.83f, 0.68f, 0.21f);
-        [SerializeField] private Color _fillColor = new Color(0.5f, 0.5f, 0.5f);
 
-        // Fraction of a cell the gray fill occupies — the remainder (both
-        // sides) is the gold ring left showing underneath, i.e. the border's
-        // thickness. Lower = thicker border.
-        [SerializeField] private float _fillFootprintScale = 0.65f;
+        // Border's own 0.95 footprint leaves a thin gap at every tile edge
+        // where neighboring tiles don't quite touch — a full-cell gray
+        // Seam layer underneath fills it in, sitting a bit lower than
+        // Border (SeamHeight, between DungeonGrid's own 0.15 hidden-tile
+        // height and Border's 0.17 — tall enough to fully hide that tile,
+        // short enough that Border still visibly "pops out" above it) so
+        // adjacent tiles read as flush-fitted floor panels with a mortar
+        // line between them, not a void gap. Same fix already applied to
+        // every other room this session.
+        [SerializeField] private Color _seamColor = new Color(0.32f, 0.32f, 0.32f);
+        private const float SeamFootprintScale = 1.0f;
+        private const float SeamHeight = 0.16f;
 
-        [SerializeField] private float _labelSurfaceOffset = 0.01f;
-        [SerializeField] private float _labelCharacterSize = 0.1f;
-        [SerializeField] private int _labelFontSize = 24;
-        [SerializeField] private Color _labelColor = Color.black;
+        // Real dungeon_pack gold-pile meshes (Assets/Art/DungeonPack/
+        // Treasury/GoldLevel1-5, built by Tools > DungeonPack > Setup
+        // Props into Dungeon/Prop_TreasuryGold1-5) — "a visual for each
+        // amount" replacing the old flat gray fill + number label. Index 0
+        // is level 1 (1-100 gold) through index 4, level 5 (601+, not
+        // currently reachable at GoldCapacityPerTile's own 500 cap — see
+        // GetGoldTier). A tile at 0 gold shows no pile at all, just the
+        // bare floor. See RefreshGoldPileVisual.
+        private readonly GameObject[] _goldPilePrefabs = new GameObject[5];
 
         // Placement-preview markers while a Treasury drag is in progress —
         // same green/red valid/invalid ghost-square idea LairManager's
@@ -67,12 +82,20 @@ namespace KeepersDomain.Rooms
         private const float RockTopY = 0.5f;
 
         private DungeonGrid _grid;
+        private int _ownerId;
         private int _nextRoomId;
         private readonly List<Vector2Int> _tiles = new List<Vector2Int>();
         private readonly Dictionary<string, List<Vector2Int>> _roomTiles = new Dictionary<string, List<Vector2Int>>();
         private readonly Dictionary<Vector2Int, int> _storedGold = new Dictionary<Vector2Int, int>();
-        private readonly Dictionary<Vector2Int, TextMesh> _labels = new Dictionary<Vector2Int, TextMesh>();
         private readonly Dictionary<Vector2Int, GameObject> _tileVisuals = new Dictionary<Vector2Int, GameObject>();
+
+        // The gold-pile mesh currently standing on a tile (null/no entry
+        // for an empty, 0-gold tile) plus which tier it represents — see
+        // RefreshGoldPileVisual, which only tears down and rebuilds when
+        // the tier actually changes rather than on every single deposit.
+        private readonly Dictionary<Vector2Int, GameObject> _goldPileVisuals = new Dictionary<Vector2Int, GameObject>();
+        private readonly Dictionary<Vector2Int, int> _goldPileTiers = new Dictionary<Vector2Int, int>();
+
         private readonly List<GameObject> _previewMarkers = new List<GameObject>();
 
         /// Gold in reserves — summed across every registered Treasury tile.
@@ -90,10 +113,18 @@ namespace KeepersDomain.Rooms
             }
         }
 
-        public void Initialize(DungeonGrid grid, LairManager lairManager)
+        public void Initialize(DungeonGrid grid, LairManager lairManager, int ownerId = 0)
         {
             _grid = grid;
+            _ownerId = ownerId;
+            _nextRoomId = ownerId * DungeonGrid.RoomIdOwnerStride;
             lairManager.RoomSold += OnRoomSold;
+
+            _floorTreasuryMaterial = DungeonPackRoomArt.BuildMaterial("Dungeon/Treasury/floor_treasury");
+            for (int level = 1; level <= _goldPilePrefabs.Length; level++)
+            {
+                _goldPilePrefabs[level - 1] = Resources.Load<GameObject>($"Dungeon/Prop_TreasuryGold{level}");
+            }
         }
 
         /// Places a Treasury spanning the rectangle between startCoord and
@@ -190,7 +221,7 @@ namespace KeepersDomain.Rooms
                 }
 
                 _storedGold[coord] = current - take;
-                _labels[coord].text = _storedGold[coord].ToString();
+                RefreshGoldPileVisual(coord);
                 remaining -= take;
             }
 
@@ -230,7 +261,7 @@ namespace KeepersDomain.Rooms
 
                 var add = Mathf.Min(room, remaining);
                 _storedGold[coord] = current + add;
-                _labels[coord].text = _storedGold[coord].ToString();
+                RefreshGoldPileVisual(coord);
                 remaining -= add;
             }
         }
@@ -247,12 +278,12 @@ namespace KeepersDomain.Rooms
             }
         }
 
-        /// Adds coord as a storage slot, starting at 0 gold, with its gray/
-        /// gold-border tile visual and a number label on its surface. Only
-        /// called from TryPlaceTreasury now — a tile without a RoomId
-        /// backing it wouldn't be sellable or protected from a second room
-        /// being placed on top of it, so this stays private rather than a
-        /// standalone entry point.
+        /// Adds coord as a storage slot, starting at 0 gold (empty, no
+        /// gold-pile visual yet — see RefreshGoldPileVisual/GetGoldTier)
+        /// with its floor tile visual. Only called from TryPlaceTreasury
+        /// now — a tile without a RoomId backing it wouldn't be sellable
+        /// or protected from a second room being placed on top of it, so
+        /// this stays private rather than a standalone entry point.
         private void RegisterTile(Vector2Int coord)
         {
             if (_storedGold.ContainsKey(coord))
@@ -263,7 +294,7 @@ namespace KeepersDomain.Rooms
             _tiles.Add(coord);
             _storedGold[coord] = 0;
             _tileVisuals[coord] = CreateTileVisual(coord);
-            _labels[coord] = CreateLabel(coord);
+            _goldPileTiers[coord] = 0;
         }
 
         /// Deposits up to amount gold into coord, capped at
@@ -283,7 +314,7 @@ namespace KeepersDomain.Rooms
             }
 
             _storedGold[coord] = current + deposited;
-            _labels[coord].text = _storedGold[coord].ToString();
+            RefreshGoldPileVisual(coord);
             return deposited;
         }
 
@@ -361,8 +392,8 @@ namespace KeepersDomain.Rooms
         /// LairManager.RoomSold fires for every sold room regardless of
         /// kind — only react to ones that are actually ours (by roomId
         /// prefix; LairManager's own roomIds are "Lair_N", never
-        /// "Treasury_N"). Clears every tile that room owned: visuals,
-        /// label, and its stored-gold entry — that gold is simply gone,
+        /// "Treasury_N"). Clears every tile that room owned: visuals, gold
+        /// pile, and its stored-gold entry — that gold is simply gone,
         /// there's no "refund the stash" mechanic.
         private void OnRoomSold(string roomId)
         {
@@ -379,11 +410,12 @@ namespace KeepersDomain.Rooms
                 }
                 _tileVisuals.Remove(coord);
 
-                if (_labels.TryGetValue(coord, out var label) && label != null)
+                if (_goldPileVisuals.TryGetValue(coord, out var pile) && pile != null)
                 {
-                    Destroy(label.gameObject);
+                    Destroy(pile);
                 }
-                _labels.Remove(coord);
+                _goldPileVisuals.Remove(coord);
+                _goldPileTiers.Remove(coord);
 
                 _storedGold.Remove(coord);
                 _tiles.Remove(coord);
@@ -415,7 +447,7 @@ namespace KeepersDomain.Rooms
         {
             foreach (var coord in footprint)
             {
-                if (!_grid.CanBuildRoomOn(coord))
+                if (!_grid.CanBuildRoomOn(coord, _ownerId))
                 {
                     return false;
                 }
@@ -445,12 +477,18 @@ namespace KeepersDomain.Rooms
             return _grid.GetTile(coord).Type == TileType.Rock ? RockTopY : _grid.FloorSurfaceY;
         }
 
-        /// Gray fill on a gold border, the same footprint convention
-        /// DungeonGrid's own floor tiles use (0.95 * cellSize, see
-        /// RefreshVisual) so the border sits flush with the tile edges —
-        /// only the fill is inset, leaving the border ring showing round it.
-        /// Returns the container so OnRoomSold can destroy exactly this
-        /// tile's visual without hunting for it by name.
+        /// Real dungeon_pack treasury floor (falls back to a flat gold-
+        /// colored border if _floorTreasuryMaterial failed to load), same
+        /// footprint convention DungeonGrid's own floor tiles use (0.95 *
+        /// cellSize, see RefreshVisual) so the border sits flush with the
+        /// tile edges. A full-cell gray Seam sits beneath it (see its own
+        /// field header) so the gap this 0.95 footprint would otherwise
+        /// leave at every tile edge reads as a mortar line instead of a
+        /// void gap. No separate fill inset any more — the room's actual
+        /// stored gold shows as a real pile mesh instead now (see
+        /// RefreshGoldPileVisual). Returns the container so OnRoomSold can
+        /// destroy exactly this tile's visual without hunting for it by
+        /// name.
         private GameObject CreateTileVisual(Vector2Int coord)
         {
             var container = new GameObject($"Treasury_{coord.x}_{coord.y}");
@@ -459,51 +497,109 @@ namespace KeepersDomain.Rooms
             var cellSize = _grid.CellSize;
             var basePosition = _grid.GridToWorld(coord) + Vector3.down * 0.5f;
 
+            var seam = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            seam.name = "Seam";
+            seam.transform.SetParent(container.transform, false);
+            seam.transform.position = basePosition;
+            seam.transform.localScale = new Vector3(cellSize * SeamFootprintScale, SeamHeight, cellSize * SeamFootprintScale);
+            seam.GetComponent<Renderer>().material.color = _seamColor;
+            Destroy(seam.GetComponent<Collider>());
+
             var border = GameObject.CreatePrimitive(PrimitiveType.Cube);
             border.name = "Border";
             border.transform.SetParent(container.transform, false);
             border.transform.position = basePosition;
             border.transform.localScale = new Vector3(cellSize * 0.95f, TileVisualHeight, cellSize * 0.95f);
-            border.GetComponent<Renderer>().material.color = _borderColor;
+            if (_floorTreasuryMaterial != null)
+            {
+                // Shared, pre-built material (see DungeonPackRoomArt.
+                // BuildMaterial) — no color tint, the treasury art
+                // already carries its own correct look.
+                border.GetComponent<Renderer>().sharedMaterial = _floorTreasuryMaterial;
+            }
+            else
+            {
+                border.GetComponent<Renderer>().material.color = _borderColor;
+            }
             Destroy(border.GetComponent<Collider>());
-
-            var fill = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            fill.name = "Fill";
-            fill.transform.SetParent(container.transform, false);
-            // Raised by half the margin so its bottom still matches the
-            // border's (no gap underneath) while its top clears the
-            // border's top — see FillHeightMargin.
-            fill.transform.position = basePosition + Vector3.up * (FillHeightMargin * 0.5f);
-            fill.transform.localScale = new Vector3(cellSize * _fillFootprintScale, TileVisualHeight + FillHeightMargin, cellSize * _fillFootprintScale);
-            fill.GetComponent<Renderer>().material.color = _fillColor;
-            Destroy(fill.GetComponent<Collider>());
 
             return container;
         }
 
-        /// "Display the amount of gold as a number on it for now" — a plain
-        /// world-space TextMesh, no Canvas/UI setup needed for a prototype
-        /// placeholder. Laid flat on the tile's gray fill (rotated 90° on X
-        /// so its face points up, plus the camera's 45° yaw — see
-        /// IsoCameraController — so the digits read upright from the fixed
-        /// iso view) rather than floating above it, and sized small (see
-        /// _labelCharacterSize) so up to 3 digits clear the gold border.
-        private TextMesh CreateLabel(Vector2Int coord)
+        /// Which of the 5 gold-pile tiers (see TREASURY_README.txt)
+        /// amount falls into — 0 means "empty, no pile at all". The
+        /// thresholds are the pack's own bracket boundaries; tier 5
+        /// (601+) isn't reachable yet at GoldCapacityPerTile's current
+        /// 500 cap — deliberately left as-is (a future feature's
+        /// concern, not this one's), so it's simply unused for now.
+        private static int GetGoldTier(int amount)
         {
-            var go = new GameObject($"GoldLabel_{coord.x}_{coord.y}");
-            go.transform.SetParent(transform, false);
-            var basePosition = _grid.GridToWorld(coord) + Vector3.down * 0.5f;
-            go.transform.position = basePosition + Vector3.up * (FillHeightMargin * 0.5f + (TileVisualHeight + FillHeightMargin) * 0.5f + _labelSurfaceOffset);
-            go.transform.rotation = Quaternion.Euler(90f, 45f, 0f);
+            if (amount <= 0)
+            {
+                return 0;
+            }
+            if (amount <= 100)
+            {
+                return 1;
+            }
+            if (amount <= 200)
+            {
+                return 2;
+            }
+            if (amount <= 400)
+            {
+                return 3;
+            }
+            if (amount <= 600)
+            {
+                return 4;
+            }
+            return 5;
+        }
 
-            var textMesh = go.AddComponent<TextMesh>();
-            textMesh.text = "0";
-            textMesh.characterSize = _labelCharacterSize;
-            textMesh.fontSize = _labelFontSize;
-            textMesh.anchor = TextAnchor.MiddleCenter;
-            textMesh.alignment = TextAlignment.Center;
-            textMesh.color = _labelColor;
-            return textMesh;
+        /// Swaps coord's gold-pile mesh to match its current _storedGold
+        /// amount — "a visual for each amount" replacing the old flat
+        /// fill + number label. A no-op if the tile's tier hasn't actually
+        /// changed (called on every single deposit/withdrawal, so this
+        /// keeps a rapid string of small transfers from destroying and
+        /// re-instantiating the same mesh over and over). Tier 0 (empty)
+        /// leaves the tile bare, just its own floor. Gracefully does
+        /// nothing beyond clearing the old mesh if the new tier's prop
+        /// hasn't been set up yet (Tools > DungeonPack > Setup Props).
+        private void RefreshGoldPileVisual(Vector2Int coord)
+        {
+            var tier = GetGoldTier(_storedGold[coord]);
+            if (_goldPileTiers.TryGetValue(coord, out var currentTier) && currentTier == tier)
+            {
+                return;
+            }
+            _goldPileTiers[coord] = tier;
+
+            if (_goldPileVisuals.TryGetValue(coord, out var existing) && existing != null)
+            {
+                Destroy(existing);
+            }
+            _goldPileVisuals.Remove(coord);
+
+            if (tier == 0)
+            {
+                return;
+            }
+
+            var prefab = _goldPilePrefabs[tier - 1];
+            if (prefab == null)
+            {
+                return;
+            }
+
+            var worldPos = _grid.GridToWorld(coord);
+            var pile = Instantiate(prefab, transform, false);
+            pile.name = $"TreasuryGoldPile_{coord.x}_{coord.y}";
+            // Every level is pre-sized to a single tile and pivoted at
+            // y=0 (per the pack's own readme) — natural scale, no
+            // footprint correction needed.
+            pile.transform.position = new Vector3(worldPos.x, _grid.FloorSurfaceY, worldPos.z);
+            _goldPileVisuals[coord] = pile;
         }
     }
 }

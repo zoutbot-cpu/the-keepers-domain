@@ -9,6 +9,17 @@ namespace KeepersDomain.Grid
     /// itself is a plain XZ plane, which keeps dig/territory/room logic 2D and simple.
     public class DungeonGrid : MonoBehaviour
     {
+        /// Each room manager is per-player now (one per KeeperContext) and
+        /// mints roomIds from its own `_nextRoomId` counter. Seeding that
+        /// counter at `ownerId * RoomIdOwnerStride` keeps every player's ids
+        /// in a disjoint band ("Lair_2000003" etc.) so one keeper selling a
+        /// room can never resolve to — and tear down — another keeper's
+        /// tiles via the shared roomId → tile map. The "{Type}_{n}" shape is
+        /// unchanged, so LairManager.GetCostPerTileForRoomId's StartsWith
+        /// and RoomReconstruction.ResolveRoomManager's LastIndexOf('_') both
+        /// still parse it.
+        public const int RoomIdOwnerStride = 1_000_000;
+
         [SerializeField] private int _width = 24;
         [SerializeField] private int _height = 24;
         [SerializeField] private float _cellSize = 1f;
@@ -142,6 +153,15 @@ namespace KeepersDomain.Grid
         private Material _floorClaimedMaterial;
         private Texture2D[] _claimedTileTextures;
 
+        // A full-cell dark-gray slab set just under each Claimed floor tile,
+        // showing through the ~5% gap the 0.95-scale floor cube leaves on
+        // every side so a paved area reads as grouted tiles instead of
+        // cubes hovering over a void — same trick JailManager's "Seam" runs
+        // under its room-floor panels. Parallel to _visuals; only ever
+        // non-null for a plain Claimed floor tile (see UpdateFloorGrout).
+        [SerializeField] private Color _claimedGroutColor = new Color(0.16f, 0.16f, 0.17f);
+        private GameObject[,] _floorGrout;
+
         /// Which floating icon (if any) a queued Rock/Floor tile shows —
         /// replaces the old flat queued-color tint (see RefreshVisual's
         /// Rock/Floor color branches) so the wall/floor itself just reads
@@ -167,6 +187,19 @@ namespace KeepersDomain.Grid
         // cell — see DungeonPackWallSetup's bounds log — based at
         // floorSurfaceY - 0.5, i.e. topping out around 1.53).
         private const float QueuedIconFloatHeight = 1.75f;
+
+        // dungeon_pack wall meshes are pivoted at their base (min Y ≈ 0) —
+        // see DungeonPackWallSetup's bounds log — and RefreshVisual seats
+        // that base half a unit below the tile centre so it sits flush with
+        // the floor. "Half wall" mode then scales height about this base.
+        private const float WallBaseLocalY = -0.5f;
+
+        // "Half wall" display mode (see SetHalfWalls, wired to BottomMenuBar's
+        // Settings menu): every wall mesh is squashed to half height on Y
+        // about its base, so the bottom half stays put and the top is pressed
+        // down to the midpoint — a see-over view that changes nothing about
+        // the walls themselves. Purely cosmetic.
+        private bool _halfWalls;
 
         // The Construct-wall frame stands roughly where the future wall
         // will rise, base at the floor surface rather than floating high
@@ -269,6 +302,13 @@ namespace KeepersDomain.Grid
                 ? OwnerColors[ownerId]
                 : _playerColor;
         }
+
+        /// Public read of the same per-owner color a Reinforced wall's orb
+        /// uses — for anything outside DungeonGrid that needs to tint by
+        /// owner (see CreatureHealthRing). Out-of-range / -1 falls back to
+        /// the single-player color, so ordinary gameplay (one implicit
+        /// owner 0) just gets PlayerColor.
+        public Color GetOwnerColor(int ownerId) => ResolveOwnerColor(ownerId);
 
         /// The (cached, reused) orb material for ownerId, recolored in
         /// place to ResolveOwnerColor(ownerId) on every call so a color
@@ -376,25 +416,37 @@ namespace KeepersDomain.Grid
         /// rather than assuming y=0.
         public float FloorSurfaceY => -0.5f + 0.15f * 0.5f;
 
-        public event Action<Vector2Int> DigRequested;
+        // The int on the request/claim/damage events is the owning player
+        // (see RequestDig et al., ClaimTile, TileState.OwnerId) — every
+        // BuilderJobBoard is per-player now (one KeeperContext each) and
+        // early-returns on a mismatch, so a dig queued in P1's territory
+        // never lands on P2's job board. Cancel/TileChanged stay coord-only:
+        // a cancel broadcast is a harmless no-op on any board that doesn't
+        // track that tile, so there's nothing to route.
+        public event Action<Vector2Int, int> DigRequested;
         public event Action<Vector2Int> DigCanceled;
-        public event Action<Vector2Int> ReinforceRequested;
+        public event Action<Vector2Int, int> ReinforceRequested;
         public event Action<Vector2Int> ReinforceCanceled;
-        public event Action<Vector2Int> BuildRequested;
+        public event Action<Vector2Int, int> BuildRequested;
         public event Action<Vector2Int> BuildCanceled;
         public event Action<Vector2Int> TileChanged;
 
         /// Fired when a Rock tile finishes digging out as Unclaimed floor —
         /// i.e. always, since digging no longer auto-claims by proximity to
         /// the portal. BuilderJobBoard listens for this to queue a claim job.
-        public event Action<Vector2Int> FloorNeedsClaim;
+        /// The int is the digger's owner — the claim job is queued on that
+        /// player's board (and only actually claimed if it borders that
+        /// player's own frontier, see BuilderJobBoard.TryClaimClaimJob).
+        public event Action<Vector2Int, int> FloorNeedsClaim;
 
         /// Fired whenever a room tile takes damage and survives (see
         /// ApplyRoomDamage) — not fired on the hit that destroys it, since
         /// at that point the whole room is about to be torn down rather
         /// than needing a repair job. BuilderJobBoard listens for this to
         /// queue a repair job, the same way it listens to FloorNeedsClaim.
-        public event Action<Vector2Int> RoomDamaged;
+        /// The int is the room tile's own owner — repairing a damaged room
+        /// is that player's job, not the attacker's.
+        public event Action<Vector2Int, int> RoomDamaged;
 
         public void Initialize(int width, int height, float cellSize)
         {
@@ -427,6 +479,7 @@ namespace KeepersDomain.Grid
             };
             _queuedActionIcons = new GameObject[_width, _height];
             _queuedActionIconKind = new QueuedIcon[_width, _height];
+            _floorGrout = new GameObject[_width, _height];
 
             _selectionOutlineMaterial = new Material(Shader.Find("Universal Render Pipeline/Unlit"));
             _selectionOutlineMaterial.SetColor(BaseColorId, Color.yellow);
@@ -454,7 +507,7 @@ namespace KeepersDomain.Grid
         /// tiles dug out during play. isBuildable defaults to true for
         /// ordinary rooms; GameBootstrap passes false for rooms that already
         /// have their own fixed structure, so a Lair can't be placed on them.
-        public void CarveRoom(Vector2Int center, int halfSize, bool isBuildable = true)
+        public void CarveRoom(Vector2Int center, int halfSize, bool isBuildable = true, int ownerId = 0)
         {
             for (int x = -halfSize; x <= halfSize; x++)
             {
@@ -468,6 +521,7 @@ namespace KeepersDomain.Grid
 
                     _tiles[coord.x, coord.y].Type = TileType.Floor;
                     _tiles[coord.x, coord.y].Ownership = TileOwnership.Claimed;
+                    _tiles[coord.x, coord.y].OwnerId = ownerId;
                     _tiles[coord.x, coord.y].IsBuildable = isBuildable;
                     RefreshVisual(coord);
                 }
@@ -479,7 +533,7 @@ namespace KeepersDomain.Grid
         /// halfSize — CarveRoom's (2*halfSize+1) span can only ever produce
         /// odd dimensions, so this is what an even-sized room (e.g. a 4x4)
         /// needs instead.
-        public void CarveRect(Vector2Int origin, int width, int height, bool isBuildable = true)
+        public void CarveRect(Vector2Int origin, int width, int height, bool isBuildable = true, int ownerId = 0)
         {
             for (int x = 0; x < width; x++)
             {
@@ -493,6 +547,7 @@ namespace KeepersDomain.Grid
 
                     _tiles[coord.x, coord.y].Type = TileType.Floor;
                     _tiles[coord.x, coord.y].Ownership = TileOwnership.Claimed;
+                    _tiles[coord.x, coord.y].OwnerId = ownerId;
                     _tiles[coord.x, coord.y].IsBuildable = isBuildable;
                     RefreshVisual(coord);
                 }
@@ -714,6 +769,16 @@ namespace KeepersDomain.Grid
             return InBounds(coord) && GetTile(coord) is { Type: TileType.Floor, Ownership: TileOwnership.Claimed, IsBuildable: true, HasRoom: false };
         }
 
+        /// Same as CanBuildRoomOn, but the tile must also be claimed by
+        /// ownerId — so a player (or an AI creature) can only place a room
+        /// on their own territory, not on a rival keeper's claimed floor.
+        /// ownerId -1 falls back to the owner-agnostic check (nothing to
+        /// match against).
+        public bool CanBuildRoomOn(Vector2Int coord, int ownerId)
+        {
+            return CanBuildRoomOn(coord) && (ownerId < 0 || GetTile(coord).OwnerId == ownerId);
+        }
+
         /// Whether coord has at least one cardinal neighbor that's already
         /// Claimed floor — or a Claimed bridge tile (see TryAssignBridgeRoom;
         /// a bridged Water/Lava tile is Claimed too, even though it can
@@ -725,6 +790,16 @@ namespace KeepersDomain.Grid
         /// actually borders the claimed frontier.
         public bool BordersClaimedTile(Vector2Int coord)
         {
+            return BordersClaimedTile(coord, ownerId: -1);
+        }
+
+        /// As above, but a neighbor only counts when it's claimed BY ownerId
+        /// — so a player's territory grows outward only from their own
+        /// frontier (and across their own bridges), never by butting up
+        /// against a rival keeper's claimed floor. ownerId -1 counts any
+        /// owner (the plain single-player / HUD-status case).
+        public bool BordersClaimedTile(Vector2Int coord, int ownerId)
+        {
             foreach (var offset in GridDirections.Cardinal)
             {
                 var neighbor = coord + offset;
@@ -735,6 +810,11 @@ namespace KeepersDomain.Grid
 
                 var neighborTile = GetTile(neighbor);
                 if (neighborTile.Ownership != TileOwnership.Claimed)
+                {
+                    continue;
+                }
+
+                if (ownerId >= 0 && neighborTile.OwnerId != ownerId)
                 {
                     continue;
                 }
@@ -813,7 +893,7 @@ namespace KeepersDomain.Grid
         /// the tile is already reinforced/not Rock), same no-op-on-invalid
         /// pattern as the rest of these request methods. Also rejects
         /// Bedrock outright — "unminable" — see SetBedrock.
-        public void RequestDig(Vector2Int coord)
+        public void RequestDig(Vector2Int coord, int ownerId = 0)
         {
             if (!InBounds(coord))
             {
@@ -828,7 +908,7 @@ namespace KeepersDomain.Grid
 
             tile.IsQueuedForDig = true;
             RefreshVisual(coord);
-            DigRequested?.Invoke(coord);
+            DigRequested?.Invoke(coord, ownerId);
         }
 
         /// Un-queues a Rock tile. Only meaningful while BuilderJobBoard still
@@ -860,7 +940,7 @@ namespace KeepersDomain.Grid
         /// rejects resource walls (WallResourceType != None) — reinforcing
         /// a gold seam isn't a thing implings do — and Bedrock, which is
         /// already permanently unminable and has nothing to gain from it.
-        public void RequestReinforce(Vector2Int coord)
+        public void RequestReinforce(Vector2Int coord, int ownerId = 0)
         {
             if (!InBounds(coord))
             {
@@ -875,7 +955,7 @@ namespace KeepersDomain.Grid
 
             tile.IsQueuedForReinforce = true;
             RefreshVisual(coord);
-            ReinforceRequested?.Invoke(coord);
+            ReinforceRequested?.Invoke(coord, ownerId);
         }
 
         /// Un-queues a Rock tile's reinforce job. Only meaningful while
@@ -905,7 +985,11 @@ namespace KeepersDomain.Grid
         /// see RefreshVisual) and its HP is topped up to ReinforcedMaxHp —
         /// meaningful even on a tile that's already taken some dig damage,
         /// since reinforcing represents thickening the wall back up.
-        public void CompleteReinforce(Vector2Int coord)
+        /// ownerId stamps the wall's owner so its glowing orb renders in that
+        /// player's color (see ApplyOrbOwnerColor / ResolveOwnerColor). -1
+        /// leaves whatever owner the tile already had (the plain
+        /// single-player / unowned-fallback case).
+        public void CompleteReinforce(Vector2Int coord, int ownerId = -1)
         {
             if (!InBounds(coord))
             {
@@ -916,6 +1000,10 @@ namespace KeepersDomain.Grid
             tile.IsQueuedForReinforce = false;
             tile.IsReinforced = true;
             tile.Hp = TileState.ReinforcedMaxHp;
+            if (ownerId >= 0)
+            {
+                tile.OwnerId = ownerId;
+            }
             RefreshVisual(coord);
         }
 
@@ -924,7 +1012,7 @@ namespace KeepersDomain.Grid
         /// an already-dug-out domain. Requiring Claimed ownership means a
         /// tile can never be both a pending claim job and a pending build
         /// job at once, with no extra exclusion check needed.
-        public void RequestBuild(Vector2Int coord)
+        public void RequestBuild(Vector2Int coord, int ownerId = 0)
         {
             if (!InBounds(coord))
             {
@@ -939,7 +1027,7 @@ namespace KeepersDomain.Grid
 
             tile.IsQueuedForBuild = true;
             RefreshVisual(coord);
-            BuildRequested?.Invoke(coord);
+            BuildRequested?.Invoke(coord, ownerId);
         }
 
         /// Un-queues a Floor tile's build job. Only meaningful while
@@ -988,6 +1076,34 @@ namespace KeepersDomain.Grid
             RefreshVisual(coord);
         }
 
+        /// Every tile currently tagged with roomId — the level editor's
+        /// Remove tool grabs this before selling a room so it can then
+        /// reset that exact footprint back to plain Rock (TrySellRoom
+        /// leaves the tiles as bare Claimed Floor). Same whole-grid scan
+        /// RemoveRoomTiles uses, and must be called before it since
+        /// TrySellRoom clears every RoomId as part of the sale.
+        public List<Vector2Int> GetRoomFootprint(string roomId)
+        {
+            var tiles = new List<Vector2Int>();
+            if (string.IsNullOrEmpty(roomId))
+            {
+                return tiles;
+            }
+
+            for (int x = 0; x < _width; x++)
+            {
+                for (int y = 0; y < _height; y++)
+                {
+                    if (_tiles[x, y].RoomId == roomId)
+                    {
+                        tiles.Add(new Vector2Int(x, y));
+                    }
+                }
+            }
+
+            return tiles;
+        }
+
         /// Clears RoomId off every tile belonging to roomId — used to sell a
         /// placed room. Scans the whole grid rather than tracking footprints
         /// separately, which is fine at prototype scale and stays correct
@@ -1022,7 +1138,7 @@ namespace KeepersDomain.Grid
         /// for a plain wall. The yield is based on however much HP this hit
         /// actually removed (capped at what was left), not the raw damage
         /// number, so an overkill final hit doesn't over-report.
-        public bool ApplyDigDamage(Vector2Int coord, int amount, out ResourceType resourceType, out int resourceAmount)
+        public bool ApplyDigDamage(Vector2Int coord, int amount, out ResourceType resourceType, out int resourceAmount, int diggerOwnerId = 0)
         {
             resourceType = ResourceType.None;
             resourceAmount = 0;
@@ -1053,7 +1169,7 @@ namespace KeepersDomain.Grid
             tile.Hp -= amount;
             if (tile.Hp <= 0)
             {
-                CompleteDig(coord);
+                CompleteDig(coord, diggerOwnerId);
                 return true;
             }
 
@@ -1113,7 +1229,7 @@ namespace KeepersDomain.Grid
             }
 
             RefreshVisual(coord);
-            RoomDamaged?.Invoke(coord);
+            RoomDamaged?.Invoke(coord, tile.OwnerId);
             return false;
         }
 
@@ -1142,7 +1258,10 @@ namespace KeepersDomain.Grid
             return tile.Hp >= TileState.RoomMaxHp;
         }
 
-        public void CompleteDig(Vector2Int coord)
+        /// diggerOwnerId is the owner of the impling (or creature) that dug
+        /// this tile out — passed straight through to FloorNeedsClaim so the
+        /// claim job lands on that player's board.
+        public void CompleteDig(Vector2Int coord, int diggerOwnerId = 0)
         {
             if (!InBounds(coord))
             {
@@ -1161,10 +1280,15 @@ namespace KeepersDomain.Grid
             ClearWallDecoration(coord);
 
             RefreshVisual(coord);
-            FloorNeedsClaim?.Invoke(coord);
+            FloorNeedsClaim?.Invoke(coord, diggerOwnerId);
         }
 
-        public void ClaimTile(Vector2Int coord)
+        /// ownerId stamps the claiming player onto the tile — in ordinary
+        /// single-player this is 0; on a multi-player map it's whichever
+        /// keeper's impling completed the claim job (see
+        /// BuilderJobBoard.ApplyClaim). Without this a live-claimed tile
+        /// kept OwnerId at its Rock default (-1) and never tinted.
+        public void ClaimTile(Vector2Int coord, int ownerId = 0)
         {
             if (!InBounds(coord))
             {
@@ -1175,6 +1299,7 @@ namespace KeepersDomain.Grid
             if (tile.Type == TileType.Floor && tile.Ownership != TileOwnership.Claimed)
             {
                 tile.Ownership = TileOwnership.Claimed;
+                tile.OwnerId = ownerId;
                 RefreshVisual(coord);
             }
         }
@@ -1207,7 +1332,7 @@ namespace KeepersDomain.Grid
         /// as claimed territory too, letting an impling claim onward past
         /// it. It still can never host an ordinary room: CanBuildRoomOn
         /// requires Type == Floor, which a bridged Water/Lava tile never is.
-        public bool TryAssignBridgeRoom(Vector2Int coord, string roomId)
+        public bool TryAssignBridgeRoom(Vector2Int coord, string roomId, int ownerId = 0)
         {
             if (!InBounds(coord))
             {
@@ -1223,6 +1348,7 @@ namespace KeepersDomain.Grid
             tile.RoomId = roomId;
             tile.Hp = TileState.RoomMaxHp;
             tile.Ownership = TileOwnership.Claimed;
+            tile.OwnerId = ownerId;
             RefreshVisual(coord);
             return true;
         }
@@ -1361,6 +1487,16 @@ namespace KeepersDomain.Grid
             if (!isReassignable)
             {
                 return;
+            }
+
+            // Reassigning a plain Claimed floor tile to the "Unclaimed"
+            // pseudo-player (ownerId < 0) actually unclaims it — a claimed
+            // floor tile with no owner isn't a state this game models. A
+            // Reinforced wall stays a wall and just drops its orb owner
+            // (see ApplyOrbOwnerColor's -1 fallback).
+            if (ownerId < 0 && tile.Type == TileType.Floor)
+            {
+                tile.Ownership = TileOwnership.Unclaimed;
             }
 
             tile.OwnerId = ownerId;
@@ -1596,19 +1732,11 @@ namespace KeepersDomain.Grid
                 GameObject child;
                 if (wallPrefab != null)
                 {
-                    // Mesh's own pivot sits at its base (Y=0, see
-                    // DungeonPackWallSetup's bounds log) — dropping it half
-                    // a unit below the tile center lines its base up with
-                    // where the old flat cube's bottom face sat, flush with
-                    // the floor. Full cellSize on X/Z (not the 0.95-margin
-                    // every floor/non-mesh cube still uses) so adjacent
-                    // wall tiles butt up against each other with no gap —
-                    // unlike floor tiles, walls are meant to read as one
-                    // continuous surface.
+                    // Positioning/scaling (base flush with the floor, full
+                    // cellSize on X/Z so neighbours butt together, optional
+                    // half-height squash) all live in ApplyWallChildTransform.
                     child = Instantiate(wallPrefab, visual.transform, false);
-                    child.transform.localPosition = Vector3.down * 0.5f;
-                    child.transform.localRotation = Quaternion.identity;
-                    child.transform.localScale = new Vector3(_cellSize, 1f, _cellSize);
+                    ApplyWallChildTransform(child.transform);
                 }
                 else if (terrainMeshPrefab != null)
                 {
@@ -1705,6 +1833,7 @@ namespace KeepersDomain.Grid
                 }
             }
 
+            UpdateFloorGrout(coord, tile);
             UpdateQueuedActionIcon(coord, tile);
 
             // Selection outline is a duplicate of the wall's own current
@@ -1720,6 +1849,46 @@ namespace KeepersDomain.Grid
             }
 
             TileChanged?.Invoke(coord);
+        }
+
+        /// Ensures/clears the dark-gray grout slab under a plain Claimed
+        /// floor tile — see the _floorGrout field's own header. Full cell
+        /// footprint (so adjacent slabs meet and read as continuous grout
+        /// lines) sitting ~1cm below the textured floor cube's top so it
+        /// only shows in the gaps. Cheap to call every RefreshVisual: it
+        /// only creates/destroys the slab when the claimed-ness actually
+        /// changes, otherwise just re-applies the transform/tint.
+        private void UpdateFloorGrout(Vector2Int coord, TileState tile)
+        {
+            bool wantsGrout = tile.Type == TileType.Floor
+                && tile.Ownership == TileOwnership.Claimed
+                && !tile.HasRoom
+                && !tile.IsQueuedForBuild;
+
+            var existing = _floorGrout[coord.x, coord.y];
+            if (!wantsGrout)
+            {
+                if (existing != null)
+                {
+                    Destroy(existing);
+                    _floorGrout[coord.x, coord.y] = null;
+                }
+                return;
+            }
+
+            if (existing == null)
+            {
+                existing = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                existing.name = "Grout";
+                existing.transform.SetParent(_visuals[coord.x, coord.y].transform, false);
+                Destroy(existing.GetComponent<Collider>());
+                existing.GetComponent<Renderer>().sharedMaterial = _plainFloorMaterial;
+                _floorGrout[coord.x, coord.y] = existing;
+            }
+
+            existing.transform.localPosition = Vector3.down * (0.5f + tile.PitDepth);
+            existing.transform.localScale = new Vector3(_cellSize, 0.13f, _cellSize);
+            ApplyTint(existing, _claimedGroutColor);
         }
 
         /// Ensures/clears the floating icon for a queued Rock/Floor tile —
@@ -1938,6 +2107,53 @@ namespace KeepersDomain.Grid
             }
 
             _selectionOutline = outline;
+        }
+
+        /// Seats a wall mesh child in its tile: base flush with the floor,
+        /// full cellSize on X/Z so adjacent walls read as one continuous
+        /// surface. In "half wall" mode (see SetHalfWalls) the mesh is
+        /// squashed to half height on Y about its base — the bottom half
+        /// stays put and the top is pressed down to the midpoint.
+        private void ApplyWallChildTransform(Transform child)
+        {
+            var heightScale = _halfWalls ? 0.5f : 1f;
+            child.localPosition = new Vector3(0f, WallBaseLocalY, 0f);
+            child.localRotation = Quaternion.identity;
+            child.localScale = new Vector3(_cellSize, heightScale, _cellSize);
+        }
+
+        /// Toggles "half wall" display mode — every wall mesh is squashed to
+        /// half its height about its base (bottom half kept, top pressed
+        /// down), letting the player see over the dungeon without altering
+        /// the walls in any gameplay sense. Purely visual; wired to
+        /// BottomMenuBar's Settings menu.
+        public void SetHalfWalls(bool enabled)
+        {
+            if (_halfWalls == enabled)
+            {
+                return;
+            }
+
+            _halfWalls = enabled;
+
+            for (int x = 0; x < _width; x++)
+            {
+                for (int y = 0; y < _height; y++)
+                {
+                    var child = _visualChildren[x, y];
+                    if (child != null && GetWallMeshPrefab(_tiles[x, y]) != null)
+                    {
+                        ApplyWallChildTransform(child.transform);
+                    }
+                }
+            }
+
+            // The selection outline is a clone of one wall's child transform
+            // (see SetSelectedWall) — rebuild it so it tracks the new height.
+            if (_selectedWallCoord.HasValue)
+            {
+                SetSelectedWall(_selectedWallCoord);
+            }
         }
 
         /// Which dungeon_pack wall prefab (if any) a tile should render as
