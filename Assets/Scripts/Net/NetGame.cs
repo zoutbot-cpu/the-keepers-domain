@@ -57,7 +57,7 @@ namespace KeepersDomain.Net
             // Client: build the render-only world (creates the DungeonGrid),
             // then pull the current grid state from the host.
             NetSession.Instance?.OnClientReady?.Invoke();
-            _grid = FindFirstObjectByType<DungeonGrid>();
+            _grid = FindAnyObjectByType<DungeonGrid>();
             RequestSnapshotRpc();
         }
 
@@ -172,7 +172,7 @@ namespace KeepersDomain.Net
         {
             if (_grid == null)
             {
-                _grid = FindFirstObjectByType<DungeonGrid>();
+                _grid = FindAnyObjectByType<DungeonGrid>();
                 if (_grid == null)
                 {
                     return;

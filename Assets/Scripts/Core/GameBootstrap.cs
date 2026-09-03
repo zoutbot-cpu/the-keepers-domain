@@ -180,7 +180,7 @@ namespace KeepersDomain.Core
         {
             BuildWorld(LevelFileIO.Load("level1"));
 
-            var grid = Object.FindFirstObjectByType<DungeonGrid>();
+            var grid = Object.FindAnyObjectByType<DungeonGrid>();
             var prefab = Resources.Load<GameObject>("Net/NetGame");
             var netGameGo = Object.Instantiate(prefab);
             var netObj = netGameGo.GetComponent<NetworkObject>();
