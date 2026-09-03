@@ -43,7 +43,14 @@ namespace KeepersDomain.Creatures
 
         private Transform _host;
         private DungeonGrid _grid;
-        private Creature _creature;
+
+        // HP fraction (0..1) and owner id, read fresh every frame. A host
+        // creature/Throne wires these to its own Creature; a network ghost
+        // (see CreatureNetView) wires them to replicated netvars, so the
+        // ring renders the same either side of the wire without knowing
+        // which.
+        private System.Func<float> _fillFraction01;
+        private System.Func<int> _ownerId;
 
         // 1 for a creature; larger for a bigger host (the Throne Room passes
         // ~4 so its ring circles the 3x3 platform). Scales the ring radius
@@ -66,9 +73,22 @@ namespace KeepersDomain.Creatures
         public static CreatureHealthRing Attach(GameObject host, Creature creature, DungeonGrid grid,
             float radiusScale = 1f, bool hideWhenFull = false)
         {
+            return Attach(host,
+                () => { var m = creature.Stats.MaxHP; return m > 0f ? Mathf.Clamp01(creature.Stats.HP / m) : 0f; },
+                () => creature.OwnerId,
+                grid, radiusScale, hideWhenFull);
+        }
+
+        /// Delegate form — for a renderer with no Creature of its own (a
+        /// network ghost reading replicated HP/owner). fillFraction01 is
+        /// current HP as a 0..1 fraction of max.
+        public static CreatureHealthRing Attach(GameObject host, System.Func<float> fillFraction01,
+            System.Func<int> ownerId, DungeonGrid grid, float radiusScale = 1f, bool hideWhenFull = false)
+        {
             var ring = host.AddComponent<CreatureHealthRing>();
             ring._host = host.transform;
-            ring._creature = creature;
+            ring._fillFraction01 = fillFraction01;
+            ring._ownerId = ownerId;
             ring._grid = grid;
             ring._radiusScale = radiusScale;
             ring._hideWhenFull = hideWhenFull;
@@ -116,12 +136,12 @@ namespace KeepersDomain.Creatures
                 _fillRenderers[i] = fill.GetComponent<Renderer>();
             }
 
-            SyncToCreature();
+            SyncRing();
         }
 
         private void Update()
         {
-            if (_container == null || _host == null || _grid == null || _creature == null)
+            if (_container == null || _host == null || _grid == null || _fillFraction01 == null)
             {
                 return;
             }
@@ -129,16 +149,15 @@ namespace KeepersDomain.Creatures
             var pos = _host.position;
             _container.transform.position = new Vector3(pos.x, _grid.FloorSurfaceY + HeightAboveFloor, pos.z);
 
-            SyncToCreature();
+            SyncRing();
         }
 
         /// Only touches the segment GameObjects/materials when the lit count
         /// or owner color actually changed — same "don't churn visuals every
         /// frame" convention the rest of the prototype follows.
-        private void SyncToCreature()
+        private void SyncRing()
         {
-            var maxHp = _creature.Stats.MaxHP;
-            var fraction = maxHp > 0f ? Mathf.Clamp01(_creature.Stats.HP / maxHp) : 0f;
+            var fraction = Mathf.Clamp01(_fillFraction01());
 
             if (_hideWhenFull)
             {
@@ -155,7 +174,7 @@ namespace KeepersDomain.Creatures
             }
 
             var lit = Mathf.Clamp(Mathf.CeilToInt(fraction * SegmentCount), 0, SegmentCount);
-            var ownerColor = _grid.GetOwnerColor(_creature.OwnerId);
+            var ownerColor = _grid.GetOwnerColor(_ownerId());
 
             if (lit == _litSegments && ownerColor == _fillColor)
             {

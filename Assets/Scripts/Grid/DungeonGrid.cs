@@ -668,6 +668,24 @@ namespace KeepersDomain.Grid
             return _tiles[coord.x, coord.y];
         }
 
+        /// Client-only: overwrite coord's tile with the host's replicated
+        /// state and rebuild its visual. The host never calls this — it
+        /// mutates tiles through the ordinary gameplay/editor methods, and a
+        /// networking layer (see GridNetSync) forwards each TileChanged to
+        /// clients, which land here. RebuildWallDecoration is deterministic
+        /// (coord-seeded), so client and host nuggets match.
+        public void ApplyReplicatedTile(Vector2Int coord, TileState state)
+        {
+            if (_tiles == null || !InBounds(coord))
+            {
+                return;
+            }
+
+            _tiles[coord.x, coord.y] = state;
+            RefreshVisual(coord);
+            RebuildWallDecoration(coord, state.WallResourceType);
+        }
+
         public Vector3 GridToWorld(Vector2Int coord)
         {
             return new Vector3((coord.x + 0.5f) * _cellSize, 0f, (coord.y + 0.5f) * _cellSize);
