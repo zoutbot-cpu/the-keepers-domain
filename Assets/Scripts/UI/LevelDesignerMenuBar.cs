@@ -66,6 +66,7 @@ namespace KeepersDomain.UI
         private int _selectedOwnerId;
         private Vector2 _playersScrollPos;
         private Vector2 _fileScrollPos;
+        private Vector2 _mapDesignScrollPos;
         private string _levelNameInput = "MyLevel";
         private string _statusMessage = "";
 
@@ -356,6 +357,11 @@ namespace KeepersDomain.UI
             var interactionController = _interactionController;
             var activeTool = interactionController.MapDesignTool;
 
+            // Scrolls — the wall/terrain/floor/bridge tool groups plus the
+            // conditional owner selector overflow the fixed-height panel
+            // (same reason Players / Save-Load menus scroll).
+            _mapDesignScrollPos = GUILayout.BeginScrollView(_mapDesignScrollPos, GUILayout.Height(250f));
+
             GUILayout.Label("Walls");
             BeginButtonRow();
             DrawMapToolButton(MapDesignTool.PlainWall, "Plain");
@@ -377,6 +383,8 @@ namespace KeepersDomain.UI
             EndButtonRow();
             BeginButtonRow();
             DrawMapToolButton(MapDesignTool.HolyGround, "Holy Ground");
+            // Bridge sits with terrain — it paints onto Water/Lava.
+            DrawMapToolButton(MapDesignTool.Bridge, "Bridge");
             EndButtonRow();
 
             GUILayout.Space(8f);
@@ -386,18 +394,18 @@ namespace KeepersDomain.UI
             DrawMapToolButton(MapDesignTool.ClaimedFloor, "Claimed");
             EndButtonRow();
 
-            GUILayout.Space(8f);
-            GUILayout.Label("Bridge (paint over Water/Lava)");
-            BeginButtonRow();
-            DrawMapToolButton(MapDesignTool.Bridge, "Bridge");
-            EndButtonRow();
-
             if (activeTool == MapDesignTool.ClaimedFloor || activeTool == MapDesignTool.ReinforcedWall
                 || activeTool == MapDesignTool.Bridge)
             {
                 GUILayout.Space(8f);
                 DrawOwnerSelector("Belongs to:");
+                if (activeTool == MapDesignTool.Bridge)
+                {
+                    GUILayout.Label("Paint over Water/Lava. Drag to lay a run.");
+                }
             }
+
+            GUILayout.EndScrollView();
         }
 
         private void DrawRoomsMenu()
