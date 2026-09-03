@@ -34,7 +34,7 @@ namespace KeepersDomain.Monsters
     /// tier — an Elf just claims a Lair, eats, and otherwise roams; it has
     /// nothing it's good at. Visual is a placeholder pale-green capsule,
     /// smaller than every other creature's, until a real model exists.
-    public class ElfAgent : MonoBehaviour
+    public class ElfAgent : MonoBehaviour, ICombatant
     {
         /// Key used to look this creature type up in a Portal's recruitable
         /// pool — Elf is never actually seeded into one (see ElfSpawner),
@@ -64,6 +64,13 @@ namespace KeepersDomain.Monsters
         public Hunger Hunger => _hunger;
         public Pay Pay => _pay;
         public Happiness Happiness => _happiness;
+
+        /// Creature-vs-creature combat — see design-doc.md's Combat section
+        /// and GremlinAgent for the shared wiring.
+        public Combatant Combat => _combat;
+        public bool IsImp => false;
+        public string Species => CreatureKind;
+        private readonly Combatant _combat = new Combatant();
 
         // Deliberately weak — "weak and worthless" per the brief. Well
         // below Gremlin's own placeholder stats in every dimension.
@@ -146,6 +153,12 @@ namespace KeepersDomain.Monsters
             _creature.SetOwner(ownerId);
             CreatureHealthRing.Attach(gameObject, _creature, grid);
             _lairManager.RoomSold += OnLairSold;
+
+            _combat.Initialize(this, this, grid, _creature, _hunger, _happiness,
+                KeepersDomain.Core.KeeperContext.ForOwner(ownerId)?.ThroneCoord ?? grid.WorldToGrid(transform.position),
+                () => _myLairRoomId != null ? _myLairCoord : (Vector2Int?)null,
+                () => SetTask(ElfTask.Idle),
+                isImp: false);
         }
 
         private void Update()
@@ -163,6 +176,13 @@ namespace KeepersDomain.Monsters
                 return;
             }
 
+            // Combat overrides the normal priority list while engaged —
+            // see GremlinAgent / design-doc.md's Combat section.
+            if (_combat.Tick(Time.deltaTime))
+            {
+                return;
+            }
+
             EvaluateAndAct();
         }
 
@@ -173,19 +193,20 @@ namespace KeepersDomain.Monsters
             {
                 _pay.MarkPaid();
                 _happiness.ApplyPaidBonus();
-                GameplayLog.Write($"{Name} was paid {wage} gold (Lv{_creature.Level})");
+                GameplayLog.Write(_creature.OwnerId, $"{Name} was paid {wage} gold (Lv{_creature.Level})");
             }
             else
             {
                 _pay.MarkUnpaid();
                 _happiness.ApplyUnpaidPenalty();
-                GameplayLog.Write($"{Name} went unpaid ({wage} gold owed) — unhappy");
+                GameplayLog.Write(_creature.OwnerId, $"{Name} went unpaid ({wage} gold owed) — unhappy");
             }
         }
 
         private void OnDestroy()
         {
             _all.Remove(this);
+            _combat.Dispose();
 
             if (_lairManager != null)
             {
@@ -315,7 +336,7 @@ namespace KeepersDomain.Monsters
 
         private void ArriveAtPortal()
         {
-            GameplayLog.Write($"{Name} walked up the Portal stairs and left the domain for good");
+            GameplayLog.Write(_creature.OwnerId, $"{Name} walked up the Portal stairs and left the domain for good");
             Destroy(gameObject);
         }
 
@@ -478,7 +499,7 @@ namespace KeepersDomain.Monsters
             if (destroyed)
             {
                 KeepersDomain.Core.KeeperContext.TrySellRoomAt(_grid, _attackTargetCoord);
-                GameplayLog.Write($"{Name} ({_happiness.Tier}) destroyed a room at ({_attackTargetCoord.x},{_attackTargetCoord.y})");
+                GameplayLog.Write(_creature.OwnerId, $"{Name} ({_happiness.Tier}) destroyed a room at ({_attackTargetCoord.x},{_attackTargetCoord.y})");
                 SetTask(ElfTask.Idle);
             }
         }
@@ -501,7 +522,7 @@ namespace KeepersDomain.Monsters
             var destroyed = _grid.ApplyDigDamage(_attackTargetCoord, AttackHitDamage, out _, out _, _creature.OwnerId);
             if (destroyed)
             {
-                GameplayLog.Write($"{Name} ({_happiness.Tier}) smashed a wall at ({_attackTargetCoord.x},{_attackTargetCoord.y})");
+                GameplayLog.Write(_creature.OwnerId, $"{Name} ({_happiness.Tier}) smashed a wall at ({_attackTargetCoord.x},{_attackTargetCoord.y})");
                 SetTask(ElfTask.Idle);
             }
         }
@@ -538,7 +559,7 @@ namespace KeepersDomain.Monsters
             {
                 _myLairRoomId = _grid.GetTile(_lairTargetCoord).RoomId;
                 _myLairCoord = _lairTargetCoord;
-                GameplayLog.Write($"{Name} claimed a Lair tile at ({_lairTargetCoord.x},{_lairTargetCoord.y})");
+                GameplayLog.Write(_creature.OwnerId, $"{Name} claimed a Lair tile at ({_lairTargetCoord.x},{_lairTargetCoord.y})");
             }
 
             SetTask(ElfTask.Idle);
@@ -647,6 +668,8 @@ namespace KeepersDomain.Monsters
         /// ReplanPathFromCurrentPosition.
         public void ReplanPathFromCurrentPosition()
         {
+            _combat.OnExternalReposition();
+
             if (!IsMovingTask(_task))
             {
                 return;

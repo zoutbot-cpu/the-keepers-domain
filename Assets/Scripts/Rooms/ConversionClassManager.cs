@@ -553,13 +553,13 @@ namespace KeepersDomain.Rooms
                 if (joined)
                 {
                     SpawnByKind(creatureKind, pitCoord);
-                    GameplayLog.Write($"{name} agreed to eat meat and do regular jobs — rejoined the domain at ({pitCoord.x},{pitCoord.y})");
+                    GameplayLog.Write(_ownerId, $"{name} agreed to eat meat and do regular jobs — rejoined the domain at ({pitCoord.x},{pitCoord.y})");
                 }
                 else
                 {
                     var gold = GoodFailureGoldPerLevel * Mathf.Max(1, level);
                     _treasuryManager?.AddGold(gold);
-                    GameplayLog.Write($"{name} refused conversion and exploded into {gold} gold at ({pitCoord.x},{pitCoord.y})");
+                    GameplayLog.Write(_ownerId, $"{name} refused conversion and exploded into {gold} gold at ({pitCoord.x},{pitCoord.y})");
                 }
                 return true;
             }
@@ -567,12 +567,12 @@ namespace KeepersDomain.Rooms
             if (joined)
             {
                 SpawnByKind(creatureKind, pitCoord);
-                GameplayLog.Write($"{name} caved under the sermon and rejoined the domain as a {creatureKind} at ({pitCoord.x},{pitCoord.y})");
+                GameplayLog.Write(_ownerId, $"{name} caved under the sermon and rejoined the domain as a {creatureKind} at ({pitCoord.x},{pitCoord.y})");
             }
             else
             {
                 _elfSpawner?.SpawnElf(pitCoord, _ownerId);
-                GameplayLog.Write($"{name} broke down into a weak, worthless Elf at ({pitCoord.x},{pitCoord.y})");
+                GameplayLog.Write(_ownerId, $"{name} broke down into a weak, worthless Elf at ({pitCoord.x},{pitCoord.y})");
             }
             return true;
         }

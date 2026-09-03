@@ -160,7 +160,7 @@ namespace KeepersDomain.Rooms
                     var missed = _grid.GetTile(coord);
                     if ((missed.Type == TileType.Water || missed.Type == TileType.Lava) && !missed.HasRoom)
                     {
-                        GameplayLog.Write($"Bridge not placed at ({coord.x},{coord.y}) — must be cardinally adjacent to Claimed floor or an existing bridge tile");
+                        GameplayLog.Write(_ownerId, $"Bridge not placed at ({coord.x},{coord.y}) — must be cardinally adjacent to Claimed floor or an existing bridge tile");
                     }
                 }
 
@@ -169,7 +169,7 @@ namespace KeepersDomain.Rooms
 
             if (_treasuryManager != null && !_treasuryManager.TrySpendGold(CostPerTile))
             {
-                GameplayLog.Write($"Bridge not placed at ({coord.x},{coord.y}) — need {CostPerTile}g stored in the Treasury");
+                GameplayLog.Write(_ownerId, $"Bridge not placed at ({coord.x},{coord.y}) — need {CostPerTile}g stored in the Treasury");
                 return false;
             }
 
@@ -197,7 +197,7 @@ namespace KeepersDomain.Rooms
                 _lavaDecayDeadline[coord] = Time.time + LavaBridgeDecaySeconds;
             }
 
-            GameplayLog.Write($"Bridge built at ({coord.x},{coord.y})");
+            GameplayLog.Write(_ownerId, $"Bridge built at ({coord.x},{coord.y})");
             return true;
         }
 
@@ -229,7 +229,7 @@ namespace KeepersDomain.Rooms
 
             _grid.RemoveRoomTiles(roomId);
             CleanupTile(coord, roomId);
-            GameplayLog.Write($"Bridge decayed over lava at ({coord.x},{coord.y})");
+            GameplayLog.Write(_ownerId, $"Bridge decayed over lava at ({coord.x},{coord.y})");
         }
 
         private void CleanupTile(Vector2Int coord, string roomId)

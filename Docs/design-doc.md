@@ -173,6 +173,134 @@ Conversion Class's torment-failure outcome for an Evil-alignment prisoner — "w
   - **80** — hungry: same as Gremlin's (nearest Tavern tile with bacon).
   - **30** — otherwise: roam to random reachable floor tiles, identical to Gremlin's own fallback — this is the only tier below Hunger an Elf has.
 
+## Combat
+
+The first real creature-vs-creature system. It generalizes the wall/room-attacking mechanic Happiness already uses (Strength/Attackspeed-driven hits — see Happiness, above) into fighting between live creatures, and adds everything that only matters once two creatures can hurt each other: who counts as an enemy, target acquisition, breaking off, and what happens to the loser. Nothing here is implemented yet; every number is a placeholder.
+
+**First use case is Keeper-vs-Keeper PvP** over an online peer-to-peer connection — see "Multiplayer authority", below, for why the netcode model has to be settled before this ships.
+
+### Keeper stances
+
+Every Keeper holds a **stance** toward every other Keeper: **Aggressive** (the default), **Neutral**, or **Friendly**. Stances are **directional** — P1 can be Friendly toward P2 while P2 is Aggressive toward P1 — and each creature reads *its own* Keeper's stance toward the other side. Stored in a single `StanceRegistry` service, host-authoritative and replicated so both machines resolve hostility identically.
+
+- **Aggressive** — every hostile creature within aggro range (below) is a target; attack on sight.
+- **Neutral** — no creature is a target until that Keeper's side has actually hit it; from then on *that individual* retaliates against its attacker, and same-owner creatures near it (within aggro range) assist. Hitting a Neutral Keeper's creature does **not** flip your Keeper stance — only the struck creature reacts.
+- **Friendly** — a struck creature still retaliates against its attacker, but nearby allies do **not** assist, and nothing ever auto-aggros.
+
+**Wild/neutral creatures** (anything not owned by a Keeper — future map fauna, etc.) belong to a pseudo-owner whose stance toward everyone defaults to **Neutral**.
+
+Stance can be changed at any time, including mid-fight; a change never auto-disengages fights already in progress.
+
+### Detection and targeting
+
+- **Aggro radius** — a new creature stat, **5 tiles** for every creature to start (per-creature tuning later). A creature scans for hostiles (per the stance rules above) within this radius.
+- **Line of sight** — a straight grid trace, blocked only by Rock/Bedrock walls (not by other creatures, rooms, or terrain). A target must be in LOS *and* in aggro radius to be acquired.
+- **Target selection** — nearest valid hostile. Swappable for lowest-HP / highest-threat / player-directed later (attack commands are a separate, later feature).
+- **One current target** at a time — no threat table yet. Being hit by someone who isn't the current target does not switch targets, except via the Neutral-stance "the individual now retaliates against its attacker" rule.
+- **Drop conditions** — the current target is released when it is downed, when it leaves aggro range and stays out, or when LOS to it has been broken for **3 continuous seconds**. On drop, the creature re-scans; with nothing to fight it returns to its normal priority list (below).
+- **Leash** — a creature that chases a target more than **7 tiles from where the fight started** breaks off, so a runner can't drag a whole roster across the map. Measured from the engagement spot, not from home territory — a creature dropped deep in an enemy base still defends itself and fights where it stands.
+
+### Attacking
+
+- **Range** is measured in **tiles**. The basic attack is melee (range 1) until skills define otherwise.
+- **Hit cadence** — `1 / Attackspeed` seconds per hit, the same shape the Happiness wall-attack and the Imp's "Mine" already use.
+- **Damage per hit** — driven by **Strength** (same as the existing wall/room attack).
+- **Armor** — flat reduction: `damage_taken = max(0, incoming − Armor)`.
+- **Lifesteal** — the attacker heals for its **Lifesteal** value on every hit that deals damage (capped at MaxHP). First use of the stat.
+- **Multiple attackers** may share a tile and all hit the same target — no surround/slot limit, hits just stack against one HP pool (same as two Imps sharing a dig tile).
+- **Windup, cooldown, projectiles, mana cost, AoE, and friendly fire** are all deferred to the skills system — the basic attack has none of them. Skill slots 2–6 (see "Skill slots", above) are where those come in per creature.
+
+### The Throne as a target
+
+The Throne Room is attackable (`IAttackTarget`) — a hostile creature with no creature to fight walks up to the enemy Throne and hits it on the same Strength/cadence rule. **1000 HP, regenerating 10/sec**, so a lone wanderer can't scratch it — it takes a sustained warband to out-damage the regen. It carries a health "foot-circle" like a creature's (`CreatureHealthRing`, scaled up to circle the platform) that's **hidden while at full HP**. Attacking it rallies the owning Keeper's nearby idle defenders onto the attacker. There's **no lose-condition** on it hitting 0 yet — it just clamps and regens back; the Throne HP shows in the top status bar.
+
+### Breaking off (priority)
+
+While a creature has a target, combat overrides its entire normal priority list — Lair-claiming included — *unless* one of these pulls it out, checked in this order every frame:
+
+1. **Happiness Leaving (0–10)** — unchanged; walk to the Portal / "destroy the domain" still wins over everything.
+2. **HP ≤ 20%** — flee: path to the creature's own Keeper's Throne Room and stay there. If no path exists, it fights cornered.
+3. **Grabbed by the hand** — being picked up drops the target immediately; combat does not resume on release (the creature re-evaluates fresh from wherever it's dropped).
+4. **Hunger < 30** — break off and go eat (see Hunger).
+5. **Happiness < 30** (Unhappy / Angry) — leave the fight if a path away from the target exists; otherwise keep fighting.
+
+**After combat ends** (target dropped, none of the above firing): if HP ≥ 80%, resume the task that was interrupted; otherwise go to a claimed Lair tile and rest until HP ≥ 80%, then resume. A creature resting on its own claimed Lair tile regenerates **25% of MaxHP per minute** (independent of its normal passive HPRegen, which keeps ticking everywhere).
+
+### Downed bodies and defeat
+
+A creature reduced to 0 HP does **not** die — it **faints**. The live agent is removed and replaced by an inert **downed body** on its tile (same "live agent becomes inert data" pattern Jail's `JailedPrisoner` uses, but as a physical, draggable object). The downed body carries the *entire* creature — kind, name, level, exp, stat block, owner, alignment — so a rescued creature comes back exactly as it was.
+
+- A downed body has a small **faint-HP** pool — **10% of the creature's MaxHP** — that does not regenerate while downed and resets when the creature stands back up. Creatures don't keep attacking a downed target (they drop it on down), so depleting this is a **deliberate** re-target — an Aggressive creature standing next to one will do it. If faint-HP hits 0, the creature is **permanently dead** — removed from the game, no recovery. Permadeath is real. (Scaling with MaxHP means a tanky creature is also harder to finish off.)
+- **Coming to** — a downed body left undisturbed (not attacked, not being carried by an Imp) for **1 continuous minute** stands back up on its own as a live agent, at whatever faint-HP it has left, and immediately paths to a claimed Lair tile to rest (the post-combat heal). With no Lair reachable it flees toward its Keeper's Throne Room instead. Any hit resets the minute. In PvP this is the capture/finish window — get an Imp to the body within a minute or it walks away.
+- A downed body dropped onto Lava or into a Chasm is **permanently dead** immediately.
+- **Recovery** — a downed body carried to one of its own Keeper's Lair tiles (see the Rescue Ally job, below) becomes a recovering body: **+25% MaxHP per minute**. At full HP it stands back up as a live agent with its level/exp intact.
+- **Capture** — a downed body carried to an enemy Jail's pit tile becomes that Keeper's `JailedPrisoner`, feeding the existing Jail → Conversion Class pipeline unchanged (see those rooms).
+- The player's hand can grab and carry downed bodies directly, same as grabbing a live minion.
+
+### Imp jobs: Rescue Ally and Capture Enemy
+
+Two new auto-queued `BuilderJobBoard` job kinds, both non-cancelable (same "no player tap needed" model as RepairRoom):
+
+- **Rescue Ally** — **highest priority of any Imp job**. Queued whenever a friendly (same-owner) downed body exists on a tile reachable by that Keeper's Imps. An Imp walks to the body, picks it up, and carries it to the nearest owned Lair with a free tile, where it becomes a recovering body (above).
+- **Capture Enemy** — **one priority below Rescue Ally**, and only queued if that Keeper has a Jail with a free pit tile. An Imp carries a hostile downed body to that Jail pit, imprisoning it via the existing `JailManager` capture path.
+
+Full Imp job order becomes: **RescueAlly, CaptureEnemy, Dig, RepairRoom, Reinforce, Build, Claim**.
+
+- Both sides' Imps can race for the same body; whoever picks it up first wins and the body drops off every other board.
+- An Imp carrying a body that comes within aggro range of any non-Imp hostile **drops the body where it stands and flees** (see "Imps in combat", below) — the body stays put for another attempt.
+
+### Imps in combat
+
+- An Imp **flees all hostiles** — pathing away toward its own Throne Room — **except other Imps**.
+- An Imp **is hostile toward enemy Imps** and fights them with "Mine" (consistent with "Mine" being "only effective against other Imps and resource objects", see Skill slots). Imp-vs-Imp is the one fight an Imp will actually pick.
+- Imps have no morale or hunger (see Creatures), so the only break-off rules that apply to a fighting Imp are HP ≤ 20% (flee) and being grabbed.
+
+### Exp from combat
+
+Placeholder rates, balancing later:
+
+- **+1 exp per 1 point of damage dealt.**
+- **+0.5 exp per 1 point of damage received.**
+- Granted **on each hit**, not on kill — there's no separate bonus for downing or killing a creature (the damage that got it there already paid out).
+- This is the "combat" exp source the Creatures section lists alongside tasks and training.
+
+### Assist and alarm
+
+- **Assist** — when a Neutral-stance creature is first attacked, every same-owner creature within its aggro radius that isn't already fighting switches to target the attacker. Friendly-stance creatures get no assist; Aggressive-stance creatures are all already engaging anyway.
+- **Alarm** — any creature entering combat pings same-owner combat-capable creatures within **5 tiles**; idle ones path toward the fight. Imps ignore the alarm (they only ever fight enemy Imps, and flee everything else).
+
+### Multiplayer authority (implementation note)
+
+Combat is the system that forces the netcode decision. The recommended model is **host-authoritative** (one peer hosts the simulation; the other is a client that sends intents and renders replicated state), not deterministic lockstep — the current simulation is thoroughly non-deterministic (`Time.deltaTime` and `UnityEngine.Random` throughout, client-local ID counters, Unity pathfinding) and making it lockstep-safe would be a permanent tax on every future feature.
+
+Under host-authority the host owns and resolves: every `CreatureStats.HP`, all damage and Lifesteal math, all combat RNG, the `StanceRegistry`, and every faint / recover / permadeath / capture transition. Clients predict only their own hand/camera.
+
+Prerequisite refactors, in order:
+1. Extract the duplicated per-creature movement (`PlanPathTo` / `MoveAlongPathThen` / `ReplanPathFromCurrentPosition`, currently byte-identical across every agent) into a composed `GridMover`, and add combat as a composed `Combatant` component — same composition pattern `Creature` / `Hunger` / `Pay` / `Happiness` already use. Each species keeps its own `EvaluateAndAct` priority ladder.
+2. Route gameplay ticks through one host-gated simulation step instead of every agent's own `Update()`.
+3. Consolidate gameplay RNG and ID assignment into host-authoritative services.
+4. Split `GameBootstrap` world-building into "host builds, client receives" (the `LevelData` load path is already most of the way there).
+
+### Tuning (implementation note)
+
+Every combat number above is an unbalanced placeholder. Per-creature stat blocks should move to ScriptableObjects (from the current per-agent `[SerializeField] CreatureStatBlock`) so time-to-kill, aggro radius, faint-HP, and recovery rates can be iterated without touching prefabs.
+
+### Current implementation
+
+Shipped (compiles clean; **not yet playtested** — the Editor wasn't available when it was written, so numbers and edge cases need a live pass):
+
+- **`StanceRegistry`** (`Assets/Scripts/Core`) — the directional stance table, `StanceRegistry.Current` set once per game by `GameBootstrap.BuildWorld`, cleared in `ReturnToMainMenu`. Default Aggressive between keepers, so combat only actually fires on a multi-keeper level (via the debug player switcher, until an AI or real netcode exists). No stance-editing UI yet — a menu would call `StanceRegistry.Set`.
+- **`Combatant`** (`Assets/Scripts/Creatures`) — the whole system, composed into every agent like `Hunger`/`Happiness` and ticked at the top of `Update` before `EvaluateAndAct` (or the Imp's state machine). Returns `true` to mean "combat drove the creature this frame, skip normal behavior." Covers: aggro scan (throttled 0.25s) filtered by stance + `DungeonGrid.HasLineOfSight` (a supercover grid trace blocked only by Rock), nearest-target, single target, LOS-lost-3s / out-of-range drop, leash (7 tiles from where the fight started, so a dropped-in creature still defends itself), melee attack on the `1/Attackspeed` cadence (chases to a tile *beside* the target and holds), `Armor` as flat reduction, `Lifesteal` per hit, combat exp (+1/dmg dealt, +0.5/dmg taken), the assist/alarm broadcast on being hit, HP≤20% flee-to-Throne (only while a fight is active), Hunger<30 / Happiness<30 / grabbed break-off, and post-combat healing.
+- **"Finish off enemies" setting** — an Aggressive creature standing over a knocked-out enemy only beats it to death (`Combatant.TryFinishDownedEnemy`) when this is on. **Off by default** (BottomMenuBar → Settings; `Combatant.AllowFinishOffEnemies`, reset each game by `GameBootstrap`) — so by default a downed creature always gets its full come-to window / a chance to be captured.
+- **`GameplayLog` is keeper-tagged** — `GameplayLog.Write(int ownerId, string)` prefixes `[P1]` / `[P2]` (`[wild]` for none); every creature agent, spawner, `Combatant`, `DownedBody`, `BuilderJobBoard`, and the Jail/Conversion/Bridge managers now route through it. `Combatant` also logs every creature-vs-creature hit (`[P1] Croak #0 hits [P2] Hexley #3 for 12 (34/80 HP)`) and every finishing blow.
+- **`DownedBody`** (`Assets/Scripts/Creatures`) — added to the creature's own GameObject on faint; the agent is **disabled, not destroyed** (so the creature, level, exp, name are all preserved for a clean stand-up — a functional equivalent of the "inert data" model in the design above). 10%-MaxHP faint pool, 60s come-to (routes the revived creature to its Lair to finish healing), 25%/min recovery when delivered to a Lair, permadeath on faint-pool depletion or a Lava/Chasm drop. The placeholder capsule tips on its side while down.
+- **Imp behavior** — Imps flee every hostile except enemy Imps (pathing toward their Throne Room), and fight enemy Imps with "Mine". `OnDisable`/`OnEnable` now keep a frozen (grabbed or downed) Imp off the job board.
+- **Rescue Ally / Capture Enemy** — implemented Imp-side (checked in `ImplingAgent.TrySeekJob` ahead of every `BuilderJobBoard` job) rather than as new `JobKind`s, because a downed body is a moving entity the coord-keyed board can't track. Rescue outranks capture; capture only starts if the keeper has a Jail with a free pit. New Imp states `MovingToDownedBody` / `CarryingBody`; the body is dragged along, delivered to a Lair tile (`LairManager.TryFindNearestLairTile` → `DownedBody.BeginRecovery`) or a Jail pit. Two Imps race; first to `BeginCarry` wins. A carrier that comes within aggro of a non-Imp hostile drops the body and flees.
+- **Jailing a downed creature** keeps its own capsule parked in the pit as the prisoner (`JailManager.TryCaptureBody` → `DownedBody.MarkJailed`), rather than `TryCapture`'s tiny inert gray blob — the blob sat below the pit rim and read as "the creature vanished". The `JailedPrisoner` bookkeeping and the Jail → Conversion Class pipeline are unchanged; the parked capsule is tracked in `_prisonerVisuals` so a torment / Jail-sale tears it down. (`TryCapture` — the live-creature Grab-drop-onto-pit path — still makes a blob; same visibility caveat applies there.) A jailed prisoner patches itself up while held — an instant **+10% MaxHP** on entry, then **+5% MaxHP/min** — visible on its health ring.
+- **Grab hand** — `MinionGrabController` picks up and carries any keeper's downed body: onto your Jail pit jails it, onto your own Lair tile starts recovery, onto Lava/Chasm kills it, anywhere else just moves it. Carrying a body *over* Lava/Chasm no longer kills it — only a body left at rest on one dies.
+
+Deferred: the `GridMover` extraction (netcode prerequisite #1 — `Combatant` carries its own copy of the path/move helpers for now; the five Monster agents still duplicate theirs), the health-ring damage flash, ScriptableObject stat blocks, and any stance UI.
+
 ## Terrain (current implementation note)
 New tile types beyond Rock/Floor, each with its own walkability rule (`DungeonGrid.IsWalkable`/`TileType`):
 - **Water** — undeep: every creature can wade through it except Imps, who need a Bridge (see below) to cross.

@@ -23,7 +23,14 @@ namespace KeepersDomain.Implings
         MovingToSlimePickup,
         CollectingSlime,
         ReturningToLair,
-        IdleInLair
+        IdleInLair,
+
+        /// Walking to a knocked-out creature to pick it up — Rescue Ally
+        /// (own downed creature -> carry to a Lair) or Capture Enemy
+        /// (hostile downed creature -> carry to a Jail pit). See
+        /// design-doc.md's Combat section.
+        MovingToDownedBody,
+        CarryingBody
     }
 
     /// Where an impling carrying cargo is headed to unload it — Treasury for
@@ -42,7 +49,7 @@ namespace KeepersDomain.Implings
     /// line, so it can no longer cut through undug rock. Paths only need
     /// planning once per trip — tiles only ever go Rock -> Floor, never back,
     /// so a route found now stays valid for the rest of that walk.
-    public class ImplingAgent : MonoBehaviour, IJobWorker
+    public class ImplingAgent : MonoBehaviour, IJobWorker, ICombatant
     {
         private static int _nextId;
         private static readonly List<ImplingAgent> _all = new List<ImplingAgent>();
@@ -67,6 +74,22 @@ namespace KeepersDomain.Implings
         /// Level/stats/skill slots, per design-doc.md's Creatures section.
         /// Read-only from the outside; ticked and leveled internally.
         public Creature Creature => _creature;
+
+        /// Combat — see design-doc.md's Combat section. An Imp flees every
+        /// hostile except an enemy Imp, and only ever fights those (with
+        /// "Mine"). Composed in like the Monsters/*Agent types, but with no
+        /// Hunger/Happiness/Lair-heal (impMode).
+        public Combatant Combat => _combat;
+        public bool IsImp => true;
+        public string Species => "Imp";
+        private readonly Combatant _combat = new Combatant();
+
+        // The knocked-out creature this Imp is walking to / hauling, and
+        // where it's taking it (a Lair tile to recover, or a Jail pit to
+        // capture). See TryStartDownedBodyJob.
+        private DownedBody _bodyTarget;
+        private bool _bodyToJail;
+        private Vector2Int _bodyDeliverCoord;
 
         // Level-1 values match the Imp's old hardcoded defaults exactly
         // (Strength 20 == old _hitDamage, Attackspeed 1 == 1 / old
@@ -196,6 +219,11 @@ namespace KeepersDomain.Implings
             _tavern = tavern;
             _creature.SetOwner(ownerId);
             CreatureHealthRing.Attach(gameObject, _creature, grid);
+            _combat.Initialize(this, this, grid, _creature, hunger: null, happiness: null,
+                KeepersDomain.Core.KeeperContext.ForOwner(ownerId)?.ThroneCoord ?? grid.WorldToGrid(transform.position),
+                getLairCoord: null,
+                () => { DropCarriedBodyInPlace(); SetState(ImplingState.SeekingJob); },
+                isImp: true);
             // The Throne Room reservation was already taken by ImplingSpawner
             // (before this agent even existed) — just remember how much to
             // hand back in OnDestroy.
@@ -227,6 +255,17 @@ namespace KeepersDomain.Implings
         /// class already uses.
         public void ReplanPathFromCurrentPosition()
         {
+            _combat.OnExternalReposition();
+
+            // Grabbed mid-rescue/capture — set the body down and start over.
+            if (_state is ImplingState.MovingToDownedBody or ImplingState.CarryingBody)
+            {
+                DropCarriedBodyInPlace();
+                _bodyTarget = null;
+                SetState(ImplingState.SeekingJob);
+                return;
+            }
+
             if (!IsMovingState(_state))
             {
                 return;
@@ -265,6 +304,22 @@ namespace KeepersDomain.Implings
             }
 
             _creature.Tick(Time.deltaTime);
+
+            // Combat (flee a hostile, or fight an enemy Imp) takes over the
+            // whole state machine while it's active — see design-doc.md's
+            // Combat section. onDisengage drops _state back to SeekingJob.
+            if (_combat.Tick(Time.deltaTime))
+            {
+                // "drops the body where it stands and flees" — see
+                // design-doc.md's Combat section.
+                if (_combat.IsFleeing)
+                {
+                    DropCarriedBodyInPlace();
+                }
+
+                _jobBoard.SetWorkerAvailable(this, false);
+                return;
+            }
 
             switch (_state)
             {
@@ -310,11 +365,24 @@ namespace KeepersDomain.Implings
                 case ImplingState.IdleInLair:
                     TrySeekJob();
                     break;
+                case ImplingState.MovingToDownedBody:
+                    MoveAlongPathThen(ArriveAtDownedBody);
+                    break;
+                case ImplingState.CarryingBody:
+                    TickCarryingBody();
+                    break;
             }
         }
 
         private void TrySeekJob()
         {
+            // Rescue Ally / Capture Enemy come ahead of every board job —
+            // see design-doc.md's Combat section.
+            if (TryStartDownedBodyJob())
+            {
+                return;
+            }
+
             // A full inventory takes priority over picking up a new job —
             // there'd be nowhere to put anything more mined anyway.
             if (_inventory.IsFull && TryFindDepositTarget(out var fullCoord, out var fullKind))
@@ -371,6 +439,165 @@ namespace KeepersDomain.Implings
             // If PlanPathTo failed (no route home right now — e.g. walled
             // off), just stand still; TrySeekJob runs again next frame and
             // will retry on its own once the world reconnects.
+        }
+
+        /// Rescue Ally (own knocked-out creature -> carry to a Lair tile to
+        /// recover) or Capture Enemy (hostile knocked-out creature -> carry
+        /// to a Jail pit; only if this keeper has a Jail with a free pit) —
+        /// see design-doc.md's Combat section. Rescue outranks capture.
+        /// Both are handled Imp-side rather than as BuilderJobBoard job
+        /// kinds because a downed body is a moving entity, not a fixed tile
+        /// the coord-keyed board could track.
+        private bool TryStartDownedBodyJob()
+        {
+            if (DownedBody.All.Count == 0)
+            {
+                return false;
+            }
+
+            var ctx = KeepersDomain.Core.KeeperContext.ForOwner(_creature.OwnerId);
+            if (ctx == null)
+            {
+                return false;
+            }
+
+            var from = _grid.WorldToGrid(transform.position);
+            var reachable = _grid.GetReachableFloorDistances(from, isImp: true);
+
+            if (ctx.Lair != null
+                && TryPickNearestBody(reachable, wantAlly: true, out var ally)
+                && ctx.Lair.TryFindNearestLairTile(from, out var lairCoord)
+                && PlanPathTo(_grid.WorldToGrid(ally.transform.position), ally.transform.position))
+            {
+                _bodyTarget = ally;
+                _bodyToJail = false;
+                _bodyDeliverCoord = lairCoord;
+                SetState(ImplingState.MovingToDownedBody);
+                return true;
+            }
+
+            if (ctx.Jail != null && ctx.Jail.HasFreePitTile()
+                && TryPickNearestBody(reachable, wantAlly: false, out var enemy)
+                && ctx.Jail.TryFindNearestFreePitTile(from, out var pitCoord)
+                && PlanPathTo(_grid.WorldToGrid(enemy.transform.position), enemy.transform.position))
+            {
+                _bodyTarget = enemy;
+                _bodyToJail = true;
+                _bodyDeliverCoord = pitCoord;
+                SetState(ImplingState.MovingToDownedBody);
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryPickNearestBody(Dictionary<Vector2Int, int> reachable, bool wantAlly, out DownedBody best)
+        {
+            best = null;
+            var bestDistance = int.MaxValue;
+            var myOwner = _creature.OwnerId;
+
+            foreach (var body in DownedBody.All)
+            {
+                if (body == null || body.IsCarried || body.IsRecovering)
+                {
+                    continue;
+                }
+
+                var isAlly = body.OwnerId == myOwner;
+                if (wantAlly != isAlly || (!wantAlly && body.IsImp))
+                {
+                    continue;
+                }
+
+                var bodyCoord = _grid.WorldToGrid(body.transform.position);
+                if (reachable.TryGetValue(bodyCoord, out var distance) && distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    best = body;
+                }
+            }
+
+            return best != null;
+        }
+
+        private void ArriveAtDownedBody()
+        {
+            if (_bodyTarget == null || _bodyTarget.IsCarried || _bodyTarget.IsRecovering
+                || !DownedBody.All.Contains(_bodyTarget))
+            {
+                _bodyTarget = null;
+                SetState(ImplingState.SeekingJob);
+                return;
+            }
+
+            _bodyTarget.BeginCarry();
+            if (!PlanPathTo(_bodyDeliverCoord, _grid.GridToWorld(_bodyDeliverCoord)))
+            {
+                _bodyTarget.transform.position = transform.position;
+                _bodyTarget.DropFromCarry();
+                _bodyTarget = null;
+                SetState(ImplingState.SeekingJob);
+                return;
+            }
+
+            SetState(ImplingState.CarryingBody);
+        }
+
+        private void TickCarryingBody()
+        {
+            if (_bodyTarget == null || !DownedBody.All.Contains(_bodyTarget))
+            {
+                _bodyTarget = null;
+                SetState(ImplingState.SeekingJob);
+                return;
+            }
+
+            _bodyTarget.transform.position = transform.position;
+            MoveAlongPathThen(DeliverCarriedBody);
+        }
+
+        private void DeliverCarriedBody()
+        {
+            var body = _bodyTarget;
+            _bodyTarget = null;
+
+            if (body == null || !DownedBody.All.Contains(body))
+            {
+                SetState(ImplingState.SeekingJob);
+                return;
+            }
+
+            body.transform.position = _grid.GridToWorld(_bodyDeliverCoord);
+
+            if (_bodyToJail)
+            {
+                var ctx = KeepersDomain.Core.KeeperContext.ForOwner(_creature.OwnerId);
+                if (ctx?.Jail == null || !ctx.Jail.TryCaptureBody(_bodyDeliverCoord, body))
+                {
+                    // Pit filled up before the Imp got here — set it back
+                    // down; TrySeekJob re-picks it (or another Imp does).
+                    body.DropFromCarry();
+                }
+            }
+            else
+            {
+                body.BeginRecovery();
+            }
+
+            SetState(ImplingState.SeekingJob);
+        }
+
+        private void DropCarriedBodyInPlace()
+        {
+            if (_bodyTarget == null)
+            {
+                return;
+            }
+
+            _bodyTarget.transform.position = transform.position;
+            _bodyTarget.DropFromCarry();
+            _bodyTarget = null;
         }
 
         /// Gold goes to the nearest Treasury tile with room; mana crystals
@@ -513,7 +740,7 @@ namespace KeepersDomain.Implings
             }
 
             var coord = _grid.WorldToGrid(transform.position);
-            GameplayLog.Write($"{Name} {_state} -> {newState} at ({coord.x},{coord.y})");
+            GameplayLog.Write(_creature.OwnerId, $"{Name} {_state} -> {newState} at ({coord.x},{coord.y})");
             _state = newState;
 
             // Set the instant the state changes, not deferred to this
@@ -531,9 +758,30 @@ namespace KeepersDomain.Implings
             _jobBoard.SetWorkerAvailable(this, isAvailable);
         }
 
+        /// While this agent is disabled — grabbed by the hand, or knocked
+        /// out (see DownedBody) — it must not be handed jobs or counted as a
+        /// "closer available worker" by other Imps' job searches. OnEnable
+        /// puts an idle Imp back on the board once it's active again.
+        /// _jobBoard is null until Initialize, so both guard on it.
+        private void OnDisable()
+        {
+            _jobBoard?.SetWorkerAvailable(this, false);
+        }
+
+        private void OnEnable()
+        {
+            if (_jobBoard != null
+                && _state is ImplingState.SeekingJob or ImplingState.ReturningToLair or ImplingState.IdleInLair)
+            {
+                _jobBoard.SetWorkerAvailable(this, true);
+            }
+        }
+
         private void OnDestroy()
         {
             _all.Remove(this);
+            _combat.Dispose();
+            DropCarriedBodyInPlace();
 
             if (_jobBoard != null)
             {

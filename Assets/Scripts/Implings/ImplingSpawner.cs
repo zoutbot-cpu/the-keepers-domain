@@ -83,7 +83,7 @@ namespace KeepersDomain.Implings
 
             var agent = visual.AddComponent<ImplingAgent>();
             agent.Initialize(_jobBoard, _grid, homeWorldPos, _treasuryManager, _throneRoom, _slimeHatchery, _tavern, ImplingManaUpkeep, ownerId);
-            GameplayLog.Write($"{agent.Name} spawned at {_grid.WorldToGrid(homeWorldPos)}");
+            GameplayLog.Write(ownerId, $"{agent.Name} spawned at {_grid.WorldToGrid(homeWorldPos)}");
         }
     }
 }

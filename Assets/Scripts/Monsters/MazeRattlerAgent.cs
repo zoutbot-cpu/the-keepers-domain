@@ -41,7 +41,7 @@ namespace KeepersDomain.Monsters
     /// its pit tiles ("haunt the prisoners") instead of going straight to
     /// Gremlin's generic floor-tile roam. Visual is a placeholder brown
     /// capsule until a real model exists — see MazeRattlerSpawner.
-    public class MazeRattlerAgent : MonoBehaviour
+    public class MazeRattlerAgent : MonoBehaviour, ICombatant
     {
         /// Key used to look this creature type up in a Portal's recruitable
         /// pool (see Portal.SeedPool/TryTakeFromPool and
@@ -98,6 +98,13 @@ namespace KeepersDomain.Monsters
         /// Read-only from the outside — ticked internally, driven by Hunger
         /// and Pay (see Happiness's own header).
         public Happiness Happiness => _happiness;
+
+        /// Creature-vs-creature combat — see design-doc.md's Combat section
+        /// and GremlinAgent for the shared wiring.
+        public Combatant Combat => _combat;
+        public bool IsImp => false;
+        public string Species => CreatureKind;
+        private readonly Combatant _combat = new Combatant();
 
         // Same placeholder stat block as GremlinAgent — no design-brief
         // values exist yet for Maze Rattler specifically, and "copy the
@@ -202,19 +209,32 @@ namespace KeepersDomain.Monsters
             _creature.SetOwner(ownerId);
             CreatureHealthRing.Attach(gameObject, _creature, grid);
             _lairManager.RoomSold += OnLairSold;
+
+            _combat.Initialize(this, this, grid, _creature, _hunger, _happiness,
+                KeepersDomain.Core.KeeperContext.ForOwner(ownerId)?.ThroneCoord ?? grid.WorldToGrid(transform.position),
+                () => _myLairRoomId != null ? _myLairCoord : (Vector2Int?)null,
+                () => SetTask(MazeRattlerTask.Idle),
+                isImp: false);
         }
 
         private void Update()
         {
             _creature.Tick(Time.deltaTime);
             _hunger.Tick(Time.deltaTime);
-            _happiness.Tick(Time.deltaTime, _hunger.IsHungry, _task == MazeRattlerTask.Training);
+            _happiness.Tick(Time.deltaTime, _hunger.IsHungry, _task == MazeRattlerTask.Training && !_combat.InCombat);
             if (_pay.Tick(Time.deltaTime))
             {
                 TryGetPaid();
             }
 
             if (_grid == null)
+            {
+                return;
+            }
+
+            // Combat overrides the normal priority list while engaged —
+            // see GremlinAgent / design-doc.md's Combat section.
+            if (_combat.Tick(Time.deltaTime))
             {
                 return;
             }
@@ -229,19 +249,20 @@ namespace KeepersDomain.Monsters
             {
                 _pay.MarkPaid();
                 _happiness.ApplyPaidBonus();
-                GameplayLog.Write($"{Name} was paid {wage} gold (Lv{_creature.Level})");
+                GameplayLog.Write(_creature.OwnerId, $"{Name} was paid {wage} gold (Lv{_creature.Level})");
             }
             else
             {
                 _pay.MarkUnpaid();
                 _happiness.ApplyUnpaidPenalty();
-                GameplayLog.Write($"{Name} went unpaid ({wage} gold owed) — unhappy");
+                GameplayLog.Write(_creature.OwnerId, $"{Name} went unpaid ({wage} gold owed) — unhappy");
             }
         }
 
         private void OnDestroy()
         {
             _all.Remove(this);
+            _combat.Dispose();
 
             if (_lairManager != null)
             {
@@ -383,7 +404,7 @@ namespace KeepersDomain.Monsters
 
         private void ArriveAtPortal()
         {
-            GameplayLog.Write($"{Name} walked up the Portal stairs and left the domain for good");
+            GameplayLog.Write(_creature.OwnerId, $"{Name} walked up the Portal stairs and left the domain for good");
             Destroy(gameObject);
         }
 
@@ -546,7 +567,7 @@ namespace KeepersDomain.Monsters
             if (destroyed)
             {
                 KeepersDomain.Core.KeeperContext.TrySellRoomAt(_grid, _attackTargetCoord);
-                GameplayLog.Write($"{Name} ({_happiness.Tier}) destroyed a room at ({_attackTargetCoord.x},{_attackTargetCoord.y})");
+                GameplayLog.Write(_creature.OwnerId, $"{Name} ({_happiness.Tier}) destroyed a room at ({_attackTargetCoord.x},{_attackTargetCoord.y})");
                 SetTask(MazeRattlerTask.Idle);
             }
         }
@@ -569,7 +590,7 @@ namespace KeepersDomain.Monsters
             var destroyed = _grid.ApplyDigDamage(_attackTargetCoord, AttackHitDamage, out _, out _, _creature.OwnerId);
             if (destroyed)
             {
-                GameplayLog.Write($"{Name} ({_happiness.Tier}) smashed a wall at ({_attackTargetCoord.x},{_attackTargetCoord.y})");
+                GameplayLog.Write(_creature.OwnerId, $"{Name} ({_happiness.Tier}) smashed a wall at ({_attackTargetCoord.x},{_attackTargetCoord.y})");
                 SetTask(MazeRattlerTask.Idle);
             }
         }
@@ -606,7 +627,7 @@ namespace KeepersDomain.Monsters
             {
                 _myLairRoomId = _grid.GetTile(_lairTargetCoord).RoomId;
                 _myLairCoord = _lairTargetCoord;
-                GameplayLog.Write($"{Name} claimed a Lair tile at ({_lairTargetCoord.x},{_lairTargetCoord.y})");
+                GameplayLog.Write(_creature.OwnerId, $"{Name} claimed a Lair tile at ({_lairTargetCoord.x},{_lairTargetCoord.y})");
             }
 
             SetTask(MazeRattlerTask.Idle);
@@ -820,6 +841,8 @@ namespace KeepersDomain.Monsters
         /// frame the same way it already does after any other task finishes.
         public void ReplanPathFromCurrentPosition()
         {
+            _combat.OnExternalReposition();
+
             if (!IsMovingTask(_task))
             {
                 return;

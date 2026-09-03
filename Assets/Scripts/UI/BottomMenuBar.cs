@@ -72,6 +72,7 @@ namespace KeepersDomain.UI
         private MenuTab _openTab = MenuTab.None;
         private bool _squareModeOn;
         private bool _halfWallsOn;
+        private bool _finishOffEnemiesOn;
         private bool _digQueuePaused;
         private bool _autoReinforceOn;
         private List<JobKind> _priorityOrder;
@@ -193,6 +194,8 @@ namespace KeepersDomain.UI
             GUILayout.Label($"Mana: {_throneRoom.CurrentMana}/{_throneRoom.ReservedMana}/{_throneRoom.MaxMana}");
             GUILayout.Space(12f);
             GUILayout.Label($"Bacon: {_tavernManager.TotalBacon}");
+            GUILayout.Space(12f);
+            GUILayout.Label($"Throne HP: {_throneRoom.Hp}/{_throneRoom.MaxHp}");
             GUILayout.EndHorizontal();
             GUILayout.EndArea();
         }
@@ -679,6 +682,16 @@ namespace KeepersDomain.UI
                 _jailManager.SetHalfWalls(_halfWallsOn);
             }
             GUILayout.Label("Squashes every wall to half height — bottom half kept, top pressed down. Also lowers Jail pit rims.");
+
+            GUILayout.Space(6f);
+
+            var finishOffOn = GUILayout.Toggle(_finishOffEnemiesOn, "Finish off enemies");
+            if (finishOffOn != _finishOffEnemiesOn)
+            {
+                _finishOffEnemiesOn = finishOffOn;
+                Combatant.AllowFinishOffEnemies = _finishOffEnemiesOn;
+            }
+            GUILayout.Label("When on, an Aggressive creature standing over a knocked-out enemy beats it to death (permadeath) instead of leaving it to come to on its own or be dragged off to a Jail. Off by default.");
         }
 
         private void DrawTasksMenu()

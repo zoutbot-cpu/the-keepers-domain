@@ -18,5 +18,6 @@ namespace KeepersDomain.Creatures
         public float Craftmanship;
         public float Armor;
         public float Lifesteal;
+        public float AggroRadius;
     }
 }

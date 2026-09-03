@@ -104,6 +104,7 @@ namespace KeepersDomain.Core
         public static void ReturnToMainMenu()
         {
             KeeperContext.All = null;
+            StanceRegistry.Current = null;
 
             foreach (var root in UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects())
             {
@@ -391,6 +392,16 @@ namespace KeepersDomain.Core
             // session (a "Main Menu -> Start Game" bounce) before anything
             // can read the static registry.
             KeeperContext.All = null;
+
+            // One combat-stance table per game (see design-doc.md's Combat
+            // section) — every keeper defaults to Aggressive toward every
+            // other, so combat only actually happens on a multi-keeper
+            // level. A stance-editing UI would call StanceRegistry.Set.
+            StanceRegistry.Current = new StanceRegistry();
+
+            // "Finish off enemies" starts off every game — the player opts
+            // in via BottomMenuBar's Settings menu.
+            KeepersDomain.Creatures.Combatant.AllowFinishOffEnemies = false;
 
             // Clears out the menu camera created by ShowMainMenu — the real
             // iso camera below replaces it.
@@ -1113,7 +1124,7 @@ namespace KeepersDomain.Core
 
             ctx.Throne = CreateComponent<ThroneRoom>($"ThroneRoom P{owner + 1}", parent);
             ctx.Throne.PlayerColor = spec.Color;
-            ctx.Throne.Initialize(throneCoord, grid, spec.StartingMana);
+            ctx.Throne.Initialize(throneCoord, grid, owner, spec.StartingMana);
 
             ctx.Portal = CreateComponent<Portal>($"Portal P{owner + 1}", parent);
             ctx.Portal.Initialize(portalCoord, grid);

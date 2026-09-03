@@ -45,6 +45,15 @@ namespace KeepersDomain.Creatures
         private DungeonGrid _grid;
         private Creature _creature;
 
+        // 1 for a creature; larger for a bigger host (the Throne Room passes
+        // ~4 so its ring circles the 3x3 platform). Scales the ring radius
+        // and every segment/track dimension that grows with it.
+        private float _radiusScale = 1f;
+
+        // The Throne's ring is only meant to show when it's hurt — a
+        // creature's is always on (it doubles as the ownership marker).
+        private bool _hideWhenFull;
+
         private GameObject _container;
         private readonly GameObject[] _fillSegments = new GameObject[SegmentCount];
         private readonly Renderer[] _fillRenderers = new Renderer[SegmentCount];
@@ -53,13 +62,16 @@ namespace KeepersDomain.Creatures
         private Color _fillColor = new Color(0f, 0f, 0f, 0f);
 
         /// Adds the ring to host and wires it to creature/grid — call once
-        /// from the creature agent's Initialize.
-        public static CreatureHealthRing Attach(GameObject host, Creature creature, DungeonGrid grid)
+        /// from the creature agent's Initialize (or ThroneRoom's).
+        public static CreatureHealthRing Attach(GameObject host, Creature creature, DungeonGrid grid,
+            float radiusScale = 1f, bool hideWhenFull = false)
         {
             var ring = host.AddComponent<CreatureHealthRing>();
             ring._host = host.transform;
             ring._creature = creature;
             ring._grid = grid;
+            ring._radiusScale = radiusScale;
+            ring._hideWhenFull = hideWhenFull;
             ring.BuildContainer();
             return ring;
         }
@@ -77,7 +89,7 @@ namespace KeepersDomain.Creatures
             {
                 var angleDegrees = i * (360f / SegmentCount);
                 var rotation = Quaternion.Euler(0f, angleDegrees, 0f);
-                var offset = rotation * new Vector3(0f, 0f, Radius);
+                var offset = rotation * new Vector3(0f, 0f, Radius * _radiusScale);
 
                 var track = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 track.name = $"Track_{i}";
@@ -85,9 +97,9 @@ namespace KeepersDomain.Creatures
                 track.transform.localPosition = offset + new Vector3(0f, -TrackDropBelowFill, 0f);
                 track.transform.localRotation = rotation;
                 track.transform.localScale = new Vector3(
-                    SegmentLength + TrackLengthPadding,
+                    (SegmentLength + TrackLengthPadding) * _radiusScale,
                     SegmentHeight,
-                    SegmentRadialThickness + TrackRadialPadding);
+                    (SegmentRadialThickness + TrackRadialPadding) * _radiusScale);
                 track.GetComponent<Renderer>().material.color = TrackColor;
                 Destroy(track.GetComponent<Collider>());
 
@@ -96,7 +108,8 @@ namespace KeepersDomain.Creatures
                 fill.transform.SetParent(_container.transform, false);
                 fill.transform.localPosition = offset;
                 fill.transform.localRotation = rotation;
-                fill.transform.localScale = new Vector3(SegmentLength, SegmentHeight, SegmentRadialThickness);
+                fill.transform.localScale = new Vector3(
+                    SegmentLength * _radiusScale, SegmentHeight, SegmentRadialThickness * _radiusScale);
                 Destroy(fill.GetComponent<Collider>());
 
                 _fillSegments[i] = fill;
@@ -126,6 +139,21 @@ namespace KeepersDomain.Creatures
         {
             var maxHp = _creature.Stats.MaxHP;
             var fraction = maxHp > 0f ? Mathf.Clamp01(_creature.Stats.HP / maxHp) : 0f;
+
+            if (_hideWhenFull)
+            {
+                var shouldShow = fraction < 0.999f;
+                if (_container.activeSelf != shouldShow)
+                {
+                    _container.SetActive(shouldShow);
+                }
+
+                if (!shouldShow)
+                {
+                    return;
+                }
+            }
+
             var lit = Mathf.Clamp(Mathf.CeilToInt(fraction * SegmentCount), 0, SegmentCount);
             var ownerColor = _grid.GetOwnerColor(_creature.OwnerId);
 

@@ -22,5 +22,12 @@ namespace KeepersDomain.Creatures
         public float Craftmanship;
         public float Armor;
         public float Lifesteal;
+
+        /// How far (in tiles) this creature scans for hostiles in combat —
+        /// see design-doc.md's Combat section. Left at 0 on every existing
+        /// creature's block; Creature.RecalculateStats substitutes
+        /// Creature.DefaultAggroRadius (5) for a 0 here, so a block only
+        /// needs to set this when it wants a non-default value.
+        public float AggroRadius;
     }
 }

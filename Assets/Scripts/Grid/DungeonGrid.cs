@@ -715,6 +715,63 @@ namespace KeepersDomain.Grid
             }
         }
 
+        /// Whether a straight line between two tile centers is unobstructed
+        /// by a Rock wall — used by combat target acquisition (see
+        /// design-doc.md's Combat section / Combatant). Only Rock blocks
+        /// (Bedrock/Reinforced/resource walls are all TileType.Rock);
+        /// Floor/Water/Lava/Chasm/HolyGround and other creatures do not.
+        /// A supercover trace so a diagonal sightline can't slip through the
+        /// corner between two orthogonally-touching walls. Both endpoints
+        /// are excluded — a creature standing next to (or on) a wall still
+        /// sees out.
+        public bool HasLineOfSight(Vector2Int from, Vector2Int to)
+        {
+            if (from == to)
+            {
+                return true;
+            }
+
+            int x = from.x;
+            int y = from.y;
+            int nx = Mathf.Abs(to.x - from.x);
+            int ny = Mathf.Abs(to.y - from.y);
+            int signX = to.x > from.x ? 1 : -1;
+            int signY = to.y > from.y ? 1 : -1;
+
+            // Supercover walk from `from` to `to` — steps through every cell
+            // the segment passes through, corners included, so a diagonal
+            // sightline can't slip between two touching walls.
+            for (int ix = 0, iy = 0; ix < nx || iy < ny;)
+            {
+                int decision = (1 + 2 * ix) * ny - (1 + 2 * iy) * nx;
+                if (decision == 0)
+                {
+                    x += signX;
+                    y += signY;
+                    ix++;
+                    iy++;
+                }
+                else if (decision < 0)
+                {
+                    x += signX;
+                    ix++;
+                }
+                else
+                {
+                    y += signY;
+                    iy++;
+                }
+
+                var cell = new Vector2Int(x, y);
+                if (cell != to && GetTile(cell).Type == TileType.Rock)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         /// Marks a Floor tile as off-limits to pathfinding without changing
         /// its type/ownership — used by ThroneRoom to keep its center tile
         /// (the raised orb pedestal) out of reach for implings while it

@@ -31,6 +31,22 @@ namespace KeepersDomain.DebugUI
             }
         }
 
+        /// Owner-tagged line — prefixes "[P1] " / "[P2] " (or "[wild] " for
+        /// a negative/no-owner id) so a multi-keeper session's log shows
+        /// which keeper each event belongs to.
+        public static void Write(int ownerId, string message)
+        {
+            Write($"{OwnerTag(ownerId)}{message}");
+        }
+
+        /// "[P1] " / "[P2] " / … (trailing space), or "[wild] " for
+        /// ownerId &lt; 0. Public so callers can also tag a second party
+        /// inline (e.g. "P1's creature hits [P2] Foo").
+        public static string OwnerTag(int ownerId)
+        {
+            return ownerId >= 0 ? $"[P{ownerId + 1}] " : "[wild] ";
+        }
+
         private static void EnsureFreshFileForThisSession()
         {
             if (_startedThisSession)

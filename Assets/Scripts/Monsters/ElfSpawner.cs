@@ -50,7 +50,7 @@ namespace KeepersDomain.Monsters
 
             var agent = visual.AddComponent<ElfAgent>();
             agent.Initialize(_grid, _lairManager, _tavernManager, _treasuryManager, _portal, ownerId);
-            GameplayLog.Write($"{agent.Name} shuffled into existence, weak and worthless, at ({coord.x},{coord.y})");
+            GameplayLog.Write(agent.Creature.OwnerId, $"{agent.Name} shuffled into existence, weak and worthless, at ({coord.x},{coord.y})");
         }
     }
 }

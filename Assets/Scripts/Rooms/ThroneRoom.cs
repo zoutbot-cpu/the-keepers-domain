@@ -1,4 +1,6 @@
 using UnityEngine;
+using KeepersDomain.Creatures;
+using KeepersDomain.DebugUI;
 using KeepersDomain.Grid;
 
 namespace KeepersDomain.Rooms
@@ -10,9 +12,22 @@ namespace KeepersDomain.Rooms
     /// deposited here (see ImplingAgent's Depositing state /
     /// DepositManaCrystals) to raise it. The stat itself is read by
     /// BottomMenuBar's top-bar counter rather than shown in-world.
-    public class ThroneRoom : MonoBehaviour
+    public class ThroneRoom : MonoBehaviour, IAttackTarget
     {
         private const int PlatformTileSpan = 3;
+
+        /// The Throne is attackable (see design-doc.md's Combat section /
+        /// IAttackTarget) — a hostile creature with nothing else to fight
+        /// walks up and hits it. 1000 HP, regenerating 10/sec, so it takes a
+        /// sustained warband to actually crack. There's no lose-condition
+        /// wired to it hitting 0 yet — it just clamps there and regens back.
+        private const int ThroneMaxHp = 1000;
+        private const float ThroneHpRegenPerSecond = 10f;
+
+        // The health "foot-circle" (CreatureHealthRing, same as a creature's)
+        // circles the 3x3 platform, so it needs ~4x a creature ring's radius.
+        // Hidden while the Throne is at full HP.
+        private const float RingRadiusScale = 4.2f;
 
         /// Distance from the platform's center tile to its corners —
         /// GameBootstrap uses this to place the starting implings there
@@ -57,6 +72,17 @@ namespace KeepersDomain.Rooms
 
         public Vector2Int Coord { get; private set; }
 
+        private Creature _creature;
+
+        public int OwnerId { get; private set; }
+        public Vector3 Position => transform.position;
+        public bool IsAlive => true;
+        public string DisplayName => "Throne Room";
+
+        /// Live HP / max, for the HUD.
+        public int Hp => Mathf.RoundToInt(_creature != null ? _creature.Stats.HP : ThroneMaxHp);
+        public int MaxHp => ThroneMaxHp;
+
         /// Total capacity — starts at StartingMaxMana and is further raised
         /// by depositing mined mana crystals (see DepositManaCrystals).
         public int MaxMana { get; private set; }
@@ -69,18 +95,54 @@ namespace KeepersDomain.Rooms
         /// What's actually free to spend right now.
         public int CurrentMana => MaxMana - ReservedMana;
 
-        public void Initialize(Vector2Int center, DungeonGrid grid, int startingMaxMana = StartingMaxMana)
+        public void Initialize(Vector2Int center, DungeonGrid grid, int ownerId = 0, int startingMaxMana = StartingMaxMana)
         {
             Coord = center;
+            OwnerId = ownerId;
             transform.position = grid.GridToWorld(center);
             var platformHeight = grid.CellSize * PlatformHeightFactor;
             var ringHeight = grid.CellSize * RingHeightFactor;
 
             MaxMana = startingMaxMana > 0 ? startingMaxMana : StartingMaxMana;
 
+            _creature = new Creature(
+                new CreatureStatBlock { MaxHP = ThroneMaxHp, HPRegen = ThroneHpRegenPerSecond },
+                growthPerLevel: default,
+                expPerLevelStep: 100);
+            _creature.SetOwner(ownerId);
+            CreatureHealthRing.Attach(gameObject, _creature, grid, RingRadiusScale, hideWhenFull: true);
+            AttackTargets.All.Add(this);
+
             grid.SetBlocked(center, true);
 
             BuildThrone(grid.CellSize, grid.FloorSurfaceY, platformHeight, ringHeight);
+        }
+
+        private void Update()
+        {
+            // Creature.Tick regenerates HP toward MaxHP at HPRegen/sec — the
+            // Throne's only use of the Creature it holds.
+            _creature?.Tick(Time.deltaTime);
+        }
+
+        private void OnDestroy()
+        {
+            AttackTargets.All.Remove(this);
+        }
+
+        /// A hostile creature landed a hit (see Combatant). No armor, no
+        /// faint — just soak it. Regen (Update) claws it back.
+        public void ReceiveAttack(int rawDamage, ICombatant attacker)
+        {
+            if (rawDamage <= 0 || _creature == null)
+            {
+                return;
+            }
+
+            _creature.Stats.HP = Mathf.Max(0f, _creature.Stats.HP - rawDamage);
+            GameplayLog.Write(OwnerId,
+                $"Throne Room takes {rawDamage}{(attacker != null ? $" from {attacker.Name}" : "")}"
+                + $" ({_creature.Stats.HP:0}/{_creature.Stats.MaxHP:0} HP)");
         }
 
         /// Reserves amount out of CurrentMana if there's enough free,

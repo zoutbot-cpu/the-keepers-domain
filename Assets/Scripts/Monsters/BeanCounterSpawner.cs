@@ -107,7 +107,7 @@ namespace KeepersDomain.Monsters
 
             var agent = visual.AddComponent<BeanCounterAgent>();
             agent.Initialize(_grid, _lairManager, _tavernManager, _conversionClassManager, _jailManager, _treasuryManager, _portal, ownerId);
-            GameplayLog.Write($"{agent.Name} joined via the Portal at ({coord.x},{coord.y})");
+            GameplayLog.Write(agent.Creature.OwnerId, $"{agent.Name} joined via the Portal at ({coord.x},{coord.y})");
         }
     }
 }

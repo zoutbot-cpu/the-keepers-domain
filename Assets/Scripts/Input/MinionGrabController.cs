@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using KeepersDomain.Core;
+using KeepersDomain.Creatures;
 using KeepersDomain.Grid;
 using KeepersDomain.Implings;
 using KeepersDomain.Monsters;
@@ -52,6 +53,7 @@ namespace KeepersDomain.Input
 
         private bool _isCarrying;
         private Behaviour _carriedAgent;
+        private DownedBody _carriedBody;
         private Transform _carriedTransform;
         private Vector2Int _carryOriginCoord;
 
@@ -144,11 +146,30 @@ namespace KeepersDomain.Input
                 return;
             }
 
+            if (_carriedBody != null)
+            {
+                _carriedBody.transform.position = _grid.GridToWorld(_carryOriginCoord);
+                _carriedBody.DropFromCarry();
+                ClearBodyCarry();
+                return;
+            }
+
             DropAt(_carryOriginCoord);
         }
 
         private void TryGrab(Vector2Int coord)
         {
+            if (TryFindDownedBodyAt(coord, out var body))
+            {
+                _isCarrying = true;
+                _carriedBody = body;
+                _carriedTransform = body.transform;
+                _carryOriginCoord = coord;
+                body.BeginCarry();
+                SetOpen(false);
+                return;
+            }
+
             if (!TryFindMinionAt(coord, out var agent, out var creatureTransform))
             {
                 return;
@@ -174,6 +195,12 @@ namespace KeepersDomain.Input
 
         private void TryDrop(Vector2Int coord)
         {
+            if (_carriedBody != null)
+            {
+                TryDropBody(coord);
+                return;
+            }
+
             // An Imp can't be set down on unbridged Water/Lava any more
             // than it can walk onto one on its own (see DungeonGrid.
             // IsWalkable) — every other carried creature type ignores the
@@ -330,6 +357,70 @@ namespace KeepersDomain.Input
                     elf.ReplanPathFromCurrentPosition();
                     break;
             }
+        }
+
+        /// A knocked-out creature on coord, not already being carried — see
+        /// design-doc.md's Combat section. Unlike a live minion, ANY
+        /// keeper's downed body is grabbable: your own to carry home to a
+        /// Lair to recover, an enemy's to haul to your Jail.
+        private bool TryFindDownedBodyAt(Vector2Int coord, out DownedBody body)
+        {
+            foreach (var candidate in DownedBody.All)
+            {
+                if (candidate != null && !candidate.IsCarried
+                    && _grid.WorldToGrid(candidate.transform.position) == coord)
+                {
+                    body = candidate;
+                    return true;
+                }
+            }
+
+            body = null;
+            return false;
+        }
+
+        /// Sets a carried downed body down on coord: onto our Jail pit
+        /// captures it (feeding the existing Jail -> Conversion Class
+        /// pipeline), onto one of our own Lair tiles starts it recovering
+        /// there, onto Lava/Chasm kills it for good (DownedBody.Update
+        /// handles that), anywhere else just leaves it lying there.
+        private void TryDropBody(Vector2Int coord)
+        {
+            var tileType = _grid.GetTile(coord).Type;
+            if (!_grid.IsWalkable(coord) && tileType != TileType.Lava && tileType != TileType.Chasm)
+            {
+                return;
+            }
+
+            var body = _carriedBody;
+
+            if (!body.IsImp && _jailManager != null && _jailManager.IsPitTile(coord)
+                && _jailManager.TryCaptureBody(coord, body))
+            {
+                ClearBodyCarry();
+                return;
+            }
+
+            body.transform.position = _grid.GridToWorld(coord);
+
+            if (body.OwnerId == _active.OwnerId && _active.Lair != null && _active.Lair.IsLairTile(coord))
+            {
+                body.BeginRecovery();
+            }
+            else
+            {
+                body.DropFromCarry();
+            }
+
+            ClearBodyCarry();
+        }
+
+        private void ClearBodyCarry()
+        {
+            _isCarrying = false;
+            _carriedBody = null;
+            _carriedTransform = null;
+            SetOpen(true);
         }
 
         /// Checks every creature list in turn (implings first, same order

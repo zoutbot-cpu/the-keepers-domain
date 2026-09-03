@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using KeepersDomain.Creatures;
 using KeepersDomain.Grid;
 using KeepersDomain.DebugUI;
 
@@ -361,6 +362,56 @@ namespace KeepersDomain.Rooms
             return false;
         }
 
+        /// Whether any placed Jail has at least one unoccupied pit tile —
+        /// checked before an Imp starts a Capture Enemy job (see
+        /// ImplingAgent.TryStartDownedBodyJob / design-doc.md's Combat
+        /// section).
+        public bool HasFreePitTile()
+        {
+            foreach (var pitTiles in _pitTilesByRoom.Values)
+            {
+                foreach (var coord in pitTiles)
+                {
+                    if (!_prisoners.ContainsKey(coord))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        /// Nearest reachable unoccupied pit tile — where an Imp hauling a
+        /// captured enemy walks to before calling TryCapture.
+        public bool TryFindNearestFreePitTile(Vector2Int fromCoord, out Vector2Int targetCoord)
+        {
+            var distances = _grid.GetReachableFloorDistances(fromCoord);
+            var bestDistance = int.MaxValue;
+            targetCoord = default;
+            var found = false;
+
+            foreach (var pitTiles in _pitTilesByRoom.Values)
+            {
+                foreach (var coord in pitTiles)
+                {
+                    if (_prisoners.ContainsKey(coord))
+                    {
+                        continue;
+                    }
+
+                    if (distances.TryGetValue(coord, out var distance) && distance < bestDistance)
+                    {
+                        bestDistance = distance;
+                        targetCoord = coord;
+                        found = true;
+                    }
+                }
+            }
+
+            return found;
+        }
+
         /// Captures a creature into the nearest reachable, currently-empty
         /// pit tile of any placed Jail — called by MinionGrabController
         /// when a carried creature is dropped onto a Jail pit tile.
@@ -406,7 +457,40 @@ namespace KeepersDomain.Rooms
                 PitCoord = targetCoord
             };
             _prisonerVisuals[targetCoord] = BuildPrisonerVisual(targetCoord);
-            GameplayLog.Write($"{name} was thrown in the Jail at ({targetCoord.x},{targetCoord.y})");
+            GameplayLog.Write(_ownerId, $"{name} was thrown in the Jail at ({targetCoord.x},{targetCoord.y})");
+            return true;
+        }
+
+        /// Hauls an already-knocked-out creature (its DownedBody, carried in
+        /// by the Grab hand or an Imp's Capture Enemy job — see
+        /// design-doc.md's Combat section) into the nearest reachable empty
+        /// pit tile. Unlike TryCapture (which turns a still-live creature
+        /// into an inert gray blob), this parks the creature's own capsule
+        /// in the pit as the prisoner visual, tracked in _prisonerVisuals so
+        /// the existing release/sell cleanup tears it down. Opportunistic:
+        /// false (caller keeps the body) if no reachable empty pit tile.
+        public bool TryCaptureBody(Vector2Int nearCoord, DownedBody body)
+        {
+            if (body == null || !TryFindNearestFreePitTile(nearCoord, out var targetCoord))
+            {
+                return false;
+            }
+
+            _prisoners[targetCoord] = new JailedPrisoner
+            {
+                CreatureKind = body.Species,
+                Name = body.DisplayName,
+                Level = body.Level,
+                IsGoodAlignment = false,
+                PitCoord = targetCoord
+            };
+
+            var worldPos = _grid.GridToWorld(targetCoord);
+            body.transform.position = new Vector3(worldPos.x, _grid.FloorSurfaceY - PitDepth + 0.1f, worldPos.z);
+            body.MarkJailed();
+            _prisonerVisuals[targetCoord] = body.gameObject;
+
+            GameplayLog.Write(_ownerId, $"{body.DisplayName} was hauled into the Jail at ({targetCoord.x},{targetCoord.y})");
             return true;
         }
 

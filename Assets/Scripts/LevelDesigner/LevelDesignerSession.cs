@@ -404,7 +404,7 @@ namespace KeepersDomain.LevelDesigner
             if (kind == StructureKind.ThroneRoom)
             {
                 var throneRoom = structureGO.AddComponent<ThroneRoom>();
-                throneRoom.Initialize(center, _grid);
+                throneRoom.Initialize(center, _grid, ownerId);
             }
             else
             {

@@ -298,6 +298,16 @@ namespace KeepersDomain.Rooms
             return _claimedTiles.Contains(coord);
         }
 
+        /// Whether coord belongs to any placed Lair of this keeper — used
+        /// when a downed ally is set down on a Lair tile (by the Grab hand,
+        /// or a future Rescue Ally Imp job) to start it recovering there.
+        /// See design-doc.md's Combat section.
+        public bool IsLairTile(Vector2Int coord)
+        {
+            var roomId = _grid.GetTile(coord).RoomId;
+            return !string.IsNullOrEmpty(roomId) && _roomTiles.ContainsKey(roomId);
+        }
+
         /// Total tile count across every placed Lair, claimed or not — read
         /// by WarlockSpawner as one of a Warlock's join requirements ("at
         /// least one lair tile"), same TotalTileCount convention
@@ -357,6 +367,33 @@ namespace KeepersDomain.Rooms
                         continue;
                     }
 
+                    if (distances.TryGetValue(coord, out var distance) && distance < bestDistance)
+                    {
+                        bestDistance = distance;
+                        targetCoord = coord;
+                        found = true;
+                    }
+                }
+            }
+
+            return found;
+        }
+
+        /// Nearest reachable Lair tile of any kind (claimed or not) — where
+        /// an Imp running a Rescue Ally job lays a downed ally down to
+        /// recover (see design-doc.md's Combat section). A claimed tile
+        /// counts: a recovering body rests on the tile, it doesn't claim it.
+        public bool TryFindNearestLairTile(Vector2Int fromCoord, out Vector2Int targetCoord)
+        {
+            var distances = _grid.GetReachableFloorDistances(fromCoord);
+            var bestDistance = int.MaxValue;
+            targetCoord = default;
+            var found = false;
+
+            foreach (var tiles in _roomTiles.Values)
+            {
+                foreach (var coord in tiles)
+                {
                     if (distances.TryGetValue(coord, out var distance) && distance < bestDistance)
                     {
                         bestDistance = distance;

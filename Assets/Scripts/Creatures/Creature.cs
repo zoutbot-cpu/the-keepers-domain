@@ -11,6 +11,11 @@ namespace KeepersDomain.Creatures
     {
         public const int MaxLevel = 10;
 
+        /// Aggro scan radius used when a creature's stat block leaves
+        /// AggroRadius at 0 — "5 tiles for everyone to start" per
+        /// design-doc.md's Combat section, until per-creature tuning exists.
+        public const float DefaultAggroRadius = 5f;
+
         private readonly CreatureStatBlock _base;
         private readonly CreatureStatBlock _growth;
 
@@ -95,7 +100,8 @@ namespace KeepersDomain.Creatures
                 + $"Intelligence: {Stats.Intelligence:0.0}\n"
                 + $"Craftmanship: {Stats.Craftmanship:0.0}\n"
                 + $"Armor: {Stats.Armor:0.00}\n"
-                + $"Lifesteal: {Stats.Lifesteal:0.0}";
+                + $"Lifesteal: {Stats.Lifesteal:0.0}\n"
+                + $"Aggro radius: {Stats.AggroRadius:0.#} tiles";
         }
 
         /// initial: true sets HP/Mana to full (a fresh creature at spawn);
@@ -117,6 +123,12 @@ namespace KeepersDomain.Creatures
             Stats.Craftmanship = _base.Craftmanship + _growth.Craftmanship * levelsGained;
             Stats.Armor = _base.Armor + _growth.Armor * levelsGained;
             Stats.Lifesteal = _base.Lifesteal + _growth.Lifesteal * levelsGained;
+
+            // A block that never sets AggroRadius (every current creature)
+            // gets the shared default; one that does keeps its own value,
+            // growth included.
+            var aggro = _base.AggroRadius + _growth.AggroRadius * levelsGained;
+            Stats.AggroRadius = aggro > 0f ? aggro : DefaultAggroRadius;
 
             Stats.HP = initial ? Stats.MaxHP : Mathf.Min(Stats.HP, Stats.MaxHP);
             Stats.Mana = initial ? Stats.MaxMana : Mathf.Min(Stats.Mana, Stats.MaxMana);

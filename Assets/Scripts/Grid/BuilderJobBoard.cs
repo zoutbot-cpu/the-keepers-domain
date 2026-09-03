@@ -240,7 +240,7 @@ namespace KeepersDomain.Grid
                     open.Add(coord);
                 }
 
-                GameplayLog.Write($"{jobLabel} job promoted pending->open: {Coord(coord)}");
+                Log($"{jobLabel} job promoted pending->open: {Coord(coord)}");
             }
         }
 
@@ -254,7 +254,7 @@ namespace KeepersDomain.Grid
             if (!_pendingJobs.ContainsKey(coord) && !_openJobs.Contains(coord) && GetClaimCount(coord) < MaxWorkersPerJob)
             {
                 _pendingJobs[coord] = Time.time + ClaimDelaySeconds;
-                GameplayLog.Write($"Job queued (pending {ClaimDelaySeconds}s): {Coord(coord)}");
+                Log($"Job queued (pending {ClaimDelaySeconds}s): {Coord(coord)}");
             }
         }
 
@@ -274,7 +274,7 @@ namespace KeepersDomain.Grid
             if (!_pendingReinforceJobs.ContainsKey(coord) && !_openReinforceJobs.Contains(coord))
             {
                 _pendingReinforceJobs[coord] = Time.time + ClaimDelaySeconds;
-                GameplayLog.Write($"Reinforce job queued (pending {ClaimDelaySeconds}s): {Coord(coord)}");
+                Log($"Reinforce job queued (pending {ClaimDelaySeconds}s): {Coord(coord)}");
             }
         }
 
@@ -294,7 +294,7 @@ namespace KeepersDomain.Grid
             if (!_pendingBuildJobs.ContainsKey(coord) && !_openBuildJobs.Contains(coord))
             {
                 _pendingBuildJobs[coord] = Time.time + ClaimDelaySeconds;
-                GameplayLog.Write($"Build job queued (pending {ClaimDelaySeconds}s): {Coord(coord)}");
+                Log($"Build job queued (pending {ClaimDelaySeconds}s): {Coord(coord)}");
             }
         }
 
@@ -314,7 +314,7 @@ namespace KeepersDomain.Grid
             if (!_claimJobs.ContainsKey(coord))
             {
                 _claimJobs[coord] = false;
-                GameplayLog.Write($"Claim job queued: {Coord(coord)}");
+                Log($"Claim job queued: {Coord(coord)}");
             }
         }
 
@@ -332,7 +332,7 @@ namespace KeepersDomain.Grid
             if (!_claimJobs.ContainsKey(coord))
             {
                 _claimJobs[coord] = false;
-                GameplayLog.Write($"Claim job queued (pre-placed): {Coord(coord)}");
+                Log($"Claim job queued (pre-placed): {Coord(coord)}");
             }
         }
 
@@ -350,7 +350,7 @@ namespace KeepersDomain.Grid
             if (!_repairJobs.ContainsKey(coord))
             {
                 _repairJobs[coord] = false;
-                GameplayLog.Write($"Repair job queued: {Coord(coord)}");
+                Log($"Repair job queued: {Coord(coord)}");
             }
         }
 
@@ -372,7 +372,7 @@ namespace KeepersDomain.Grid
 
             _pendingJobs.Remove(coord);
             _openJobs.Remove(coord);
-            GameplayLog.Write($"Job canceled: {Coord(coord)}");
+            Log($"Job canceled: {Coord(coord)}");
             return true;
         }
 
@@ -397,7 +397,7 @@ namespace KeepersDomain.Grid
 
             _pendingReinforceJobs.Remove(coord);
             _openReinforceJobs.Remove(coord);
-            GameplayLog.Write($"Reinforce job canceled: {Coord(coord)}");
+            Log($"Reinforce job canceled: {Coord(coord)}");
             return true;
         }
 
@@ -419,7 +419,7 @@ namespace KeepersDomain.Grid
 
             _pendingBuildJobs.Remove(coord);
             _openBuildJobs.Remove(coord);
-            GameplayLog.Write($"Build job canceled: {Coord(coord)}");
+            Log($"Build job canceled: {Coord(coord)}");
             return true;
         }
 
@@ -563,7 +563,7 @@ namespace KeepersDomain.Grid
                 _openJobs.RemoveAt(bestIndex);
             }
 
-            GameplayLog.Write($"Dig job claimed: {Coord(coord)} slot {slotIndex} by {requester.Name} (travel dist {bestTravelDistance}, approach {Coord(approachCoord)})");
+            Log($"Dig job claimed: {Coord(coord)} slot {slotIndex} by {requester.Name} (travel dist {bestTravelDistance}, approach {Coord(approachCoord)})");
             return true;
         }
 
@@ -652,7 +652,7 @@ namespace KeepersDomain.Grid
             slotIndex = 0;
             _claimJobs[coord] = true;
 
-            GameplayLog.Write($"Claim job claimed: {Coord(coord)} by {requester.Name} (travel dist {bestTravelDistance}, approach {Coord(approachCoord)})");
+            Log($"Claim job claimed: {Coord(coord)} by {requester.Name} (travel dist {bestTravelDistance}, approach {Coord(approachCoord)})");
             return true;
         }
 
@@ -713,7 +713,7 @@ namespace KeepersDomain.Grid
             slotIndex = 0;
             _repairJobs[coord] = true;
 
-            GameplayLog.Write($"Repair job claimed: {Coord(coord)} by {requester.Name} (travel dist {bestTravelDistance}, approach {Coord(approachCoord)})");
+            Log($"Repair job claimed: {Coord(coord)} by {requester.Name} (travel dist {bestTravelDistance}, approach {Coord(approachCoord)})");
             return true;
         }
 
@@ -768,7 +768,7 @@ namespace KeepersDomain.Grid
             _openReinforceJobs.RemoveAt(bestIndex);
             _assignedReinforceJobs.Add(coord);
 
-            GameplayLog.Write($"Reinforce job claimed: {Coord(coord)} by {requester.Name} (travel dist {bestTravelDistance}, approach {Coord(approachCoord)})");
+            Log($"Reinforce job claimed: {Coord(coord)} by {requester.Name} (travel dist {bestTravelDistance}, approach {Coord(approachCoord)})");
             return true;
         }
 
@@ -824,7 +824,7 @@ namespace KeepersDomain.Grid
             _openBuildJobs.RemoveAt(bestIndex);
             _assignedBuildJobs.Add(coord);
 
-            GameplayLog.Write($"Build job claimed: {Coord(coord)} by {requester.Name} (travel dist {bestTravelDistance}, approach {Coord(approachCoord)})");
+            Log($"Build job claimed: {Coord(coord)} by {requester.Name} (travel dist {bestTravelDistance}, approach {Coord(approachCoord)})");
             return true;
         }
 
@@ -954,7 +954,7 @@ namespace KeepersDomain.Grid
             {
                 _claimCounts.Remove(coord);
                 _openJobs.Remove(coord);
-                GameplayLog.Write($"Job destroyed by hit: {Coord(coord)}");
+                Log($"Job destroyed by hit: {Coord(coord)}");
             }
 
             return destroyed;
@@ -976,7 +976,7 @@ namespace KeepersDomain.Grid
         {
             _grid.ClaimTile(coord, _ownerId);
             _claimJobs.Remove(coord);
-            GameplayLog.Write($"Claim job completed: {Coord(coord)}");
+            Log($"Claim job completed: {Coord(coord)}");
         }
 
         /// Snapshot of every tracked claim job (open or already assigned),
@@ -1016,7 +1016,7 @@ namespace KeepersDomain.Grid
             if (isFullyRepaired)
             {
                 _repairJobs.Remove(coord);
-                GameplayLog.Write($"Repair job completed: {Coord(coord)}");
+                Log($"Repair job completed: {Coord(coord)}");
             }
 
             return isFullyRepaired;
@@ -1055,7 +1055,7 @@ namespace KeepersDomain.Grid
         {
             _grid.CompleteReinforce(coord, _ownerId);
             _assignedReinforceJobs.Remove(coord);
-            GameplayLog.Write($"Reinforce job completed: {Coord(coord)}");
+            Log($"Reinforce job completed: {Coord(coord)}");
         }
 
         /// Snapshot of every tracked reinforce job (pending, open, or
@@ -1101,7 +1101,7 @@ namespace KeepersDomain.Grid
         {
             _grid.CompleteBuild(coord);
             _assignedBuildJobs.Remove(coord);
-            GameplayLog.Write($"Build job completed: {Coord(coord)}");
+            Log($"Build job completed: {Coord(coord)}");
         }
 
         /// Snapshot of every tracked build job (pending, open, or already
@@ -1169,5 +1169,9 @@ namespace KeepersDomain.Grid
         private int GetClaimCount(Vector2Int coord) => _claimCounts.TryGetValue(coord, out var count) ? count : 0;
 
         private static string Coord(Vector2Int coord) => $"({coord.x},{coord.y})";
+
+        /// All this board's log lines carry its keeper tag ([P1]/[P2]/…) so
+        /// a multi-keeper session's job traffic is attributable.
+        private void Log(string message) => GameplayLog.Write(_ownerId, message);
     }
 }
