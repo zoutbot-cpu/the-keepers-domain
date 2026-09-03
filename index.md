@@ -18,9 +18,9 @@ For the full brief and system-by-system design detail, see [project-brief.md](ht
 
 Phase 1's core loop is implemented and playable: **dig → claim → build → impling appears.** Beyond that, the prototype has grown a resource economy, six creature types, nine room types, five terrain tile variants beyond Rock/Floor, a real Jail capture/prisoner mechanic, a debug/UI layer well past the original Phase 1 brief, and — over the last two updates — a first pass at both **multiplayer** (per-keeper systems, owner-tinted visuals) and **creature-vs-creature combat**.
 
-**v0.0006, "Multiplayer Basics," splits the single-player gameplay stack into one per keeper.** Every player in a loaded roster now gets their own `KeeperContext` — its own job board, Portal + recruit pools, Throne Room mana pool, nine room managers (Treasury holds that keeper's gold), and six creature spawners — all layered on the one shared grid. Every live creature carries an owner now (`Creature.OwnerId`), not just tiles and walls. On a multi-keeper level each roster's reinforced-wall orbs, creature health rings, and claimed floor render in that player's own color. A debug player switcher (bottom bar, or number keys 1–9) repoints input, the grab hand, the HUD, and the camera at any keeper's stack so each roster can be inspected during testing; the view opens on the local player's Throne Room. Territory growth, the auto-reinforce sweep, room-placement eligibility, and population caps are all per-keeper, and room IDs are minted in disjoint per-owner bands so one keeper selling a room can't tear down another's tiles. **No AI drives the non-local keepers yet** — their creatures just run their own autonomous behavior off their own systems — and there is **no netcode**: this is per-keeper systems in one local process, not online play.
+**v0.0006, "Multiplayer Basics," splits the single-player gameplay stack into one per keeper.** Every player in a loaded roster now gets their own `KeeperContext` — its own job board, Portal + recruit pools, Throne Room mana pool, nine room managers (Treasury holds that keeper's gold), and six creature spawners — all layered on the one shared grid. Every live creature carries an owner now (`Creature.OwnerId`), not just tiles and walls. On a multi-keeper level each roster's reinforced-wall orbs, creature health rings, and claimed floor render in that player's own color. A debug player switcher (bottom bar, or number keys 1–9) repoints input, the grab hand, the HUD, and the camera at any keeper's stack so each roster can be inspected during testing; the view opens on the local player's Throne Room. Territory growth, the auto-reinforce sweep, room-placement eligibility, and population caps are all per-keeper, and room IDs are minted in disjoint per-owner bands so one keeper selling a room can't tear down another's tiles. **No AI drives the non-local keepers yet** — their creatures just run their own autonomous behavior off their own systems — and there is **no netcode**: this is per-keeper systems in one local process, not online play. This release also quietly gave **Treasury, Slime Hatchery, Jail, and Bridge** real dungeon_pack art (floor textures + prop meshes), leaving Conversion Class as the one room still on primitive cubes.
 
-**v0.0007, "Creature Combat," is the first creature-vs-creature fighting pass** — built and compiling, but **not yet balance-tested** (it was written without an Editor session, so numbers and edge cases need a live pass). Each keeper holds a directional **stance** toward every other — **Aggressive** (the default), **Neutral**, or **Friendly** — so combat only actually happens on a multi-keeper level. A composed `Combatant` on every creature handles a throttled aggro scan (a new 5-tile radius stat, gated by a line-of-sight grid trace), nearest-single-target, chase-to-a-tile-beside-the-target-and-hold, melee on the `1/Attackspeed` cadence, `Armor` as flat damage reduction, `Lifesteal`, combat exp (+1 per damage dealt, +0.5 per taken), an assist/alarm broadcast when a creature is hit, and break-off rules for low HP (flee to the Throne Room), hunger, bad mood, being grabbed, or chasing too far from where the fight started. A creature knocked to 0 HP **faints** rather than dies: it drops as a draggable **downed body** (10%-MaxHP "finish" buffer, comes to on its own after a minute) that a friendly Imp can haul to a Lair to recover, or an enemy Imp can haul to a Jail — the player's Grab hand can carry bodies too. Permadeath only happens if a body is deliberately finished off (an off-by-default **"Finish off enemies"** Setting) or dropped on Lava/Chasm. Imps flee every hostile except enemy Imps. The **Throne Room is now attackable** — 1000 HP, regenerating 10/sec, with a health "foot-circle" that only shows when it's hurt; there is **no lose-condition** on it hitting 0 yet. Every hit is logged, keeper-tagged (`[P1]` / `[P2]`).
+**v0.0007, "Creature Combat," is the first creature-vs-creature fighting pass** — built, and **first playtested on 2026-09-03**: the core fight loop holds up (both keepers engage across any claimed floor), with the numbers still needing a real balance pass and **jailing flagged for polish** (deferred). Each keeper holds a directional **stance** toward every other — **Aggressive** (the default), **Neutral**, or **Friendly** — so combat only actually happens on a multi-keeper level. A composed `Combatant` on every creature handles a throttled aggro scan (a new 5-tile radius stat, gated by a line-of-sight grid trace), nearest-single-target, chase-to-a-tile-beside-the-target-and-hold, melee on the `1/Attackspeed` cadence, `Armor` as flat damage reduction, `Lifesteal`, combat exp (+1 per damage dealt, +0.5 per taken), an assist/alarm broadcast when a creature is hit, and break-off rules for low HP (flee to the Throne Room), hunger, bad mood, being grabbed, or chasing too far from where the fight started. A creature knocked to 0 HP **faints** rather than dies: it drops as a draggable **downed body** (10%-MaxHP "finish" buffer, comes to on its own after a minute) that a friendly Imp can haul to a Lair to recover, or an enemy Imp can haul to a Jail — the player's Grab hand can carry bodies too. Permadeath only happens if a body is deliberately finished off (an off-by-default **"Finish off enemies"** Setting) or dropped on Lava/Chasm. Imps flee every hostile except enemy Imps. The **Throne Room is now attackable** — 1000 HP, regenerating 10/sec, with a health "foot-circle" that only shows when it's hurt; there is **no lose-condition** on it hitting 0 yet. Every hit is logged, keeper-tagged (`[P1]` / `[P2]`).
 
 ---
 
@@ -57,28 +57,28 @@ All six now carry a composed **`Combatant`** (below).
 
 **Rooms** — Lair, Treasury, Slime Hatchery, Tavern, Training Room, Library, Jail, Conversion Class, and Bridge. All (except Bridge) sellable through one generic Sell tool; most merge cleanly when extended.
 - **Jail** — a sunken pit ringed by a walkway, fence, and staircase/gate. Prisoners arrive three ways now: the Grab hand dropping a *live* creature on a pit tile (inert-blob prisoner), or an Imp / the Grab hand hauling a *knocked-out* creature in (the creature's own capsule stays in the pit). Held prisoners regen HP.
-- **Conversion Class** — a Bean Counter lectures a random held prisoner; rolls a per-creature-kind chance to rejoin the domain or transform into an Elf.
+- **Conversion Class** — a Bean Counter lectures a random held prisoner; rolls a per-creature-kind chance to rejoin the domain or transform into an Elf. The one room still on primitive-cube art (may be reworked before it gets real meshes).
 - **Tavern** — converts hauled-in slimes into bacon that non-Imp creatures eat to satisfy hunger. Real furniture/floor art as of v0.0005.
 
 **Terrain** — Water, Lava, Chasm, and Holy Ground beyond Rock/Floor, plus a permanently-unminable Bedrock wall. Walkability is creature-type-aware (Imps can't cross unbridged Water; nobody crosses Lava until it's bridged). **Bridge** rooms (straight-line paint gesture, Lava bridges decay after 5 min) let creatures cross. All five tile types are placed today via a dev-only Build-menu tool, standing in for a real map generator.
 
 **UI/Debug** — Permanent bottom menu bar (Build/Impling/Creatures/Tasks/Settings), F1/F2 debug panels, `Logs/gameplay-debug.log` (now keeper-tagged, and logs every combat hit). A **Main Menu** (logo + Start/Level Designer) gates entry. Settings menu carries the "Half wall" view toggle and a default-off **"Finish off enemies"** combat toggle; the top status bar shows Gold / Mana / Bacon / **Throne HP**.
 
-**Art & Visuals** — Real modular art from a purpose-bought "dungeon_pack" set across most of the dungeon: a real mesh per wall type (owner-tinted reinforced orbs), real Claimed/Unclaimed floor textures, real Throne Room / Portal props, animated Water & Lava, and real furniture/floor art for Lair / Training Room / Library / Tavern (v0.0005). Creatures are still placeholder capsules; a knocked-out one tips onto its side, and the Throne Room now carries a scaled-up health ring.
+**Art & Visuals** — Real modular art from a purpose-bought "dungeon_pack" set across most of the dungeon: a real mesh per wall type (owner-tinted reinforced orbs), real Claimed/Unclaimed floor textures, real Throne Room / Portal props, animated Water & Lava, and real furniture/floor art for **every room except Conversion Class** (Lair / Training Room / Library / Tavern in v0.0005; Treasury / Slime Hatchery / Jail / Bridge in v0.0006). Creatures are still placeholder capsules; a knocked-out one tips onto its side, and the Throne Room now carries a scaled-up health ring.
 
-**Level Designer & persistent starting level** — Placing a room (or loading a save) builds the exact same real room decorations gameplay builds, via a shared `IRestorableRoomManager`/`RestoreRoom` path. Per-tile ownership covers Reinforced walls; an **Edit mode** reassigns which player owns a tile/wall/room/structure/creature. **"Start Game" loads a persistent `level1` save** if one exists (real room managers, job board, spawners reconstruct it, including creatures as live agents); procedural generation still runs on a first-ever install and auto-saves its output as `level1`.
+**Level Designer & persistent starting level** — Placing a room (or loading a save) builds the exact same real room decorations gameplay builds, via a shared `IRestorableRoomManager`/`RestoreRoom` path. Per-tile ownership covers Reinforced walls; an **Edit mode** reassigns which player owns a tile/wall/room/structure/creature, and a **Remove mode** deletes any placed tile/wall/room/structure/creature (a room takes its whole footprint back to Rock). **"Start Game" loads a persistent `level1` save** if one exists (real room managers, job board, spawners reconstruct it, including creatures as live agents); procedural generation still runs on a first-ever install and auto-saves its output as `level1`.
 
 ## In Progress / Partially Implemented
 
-- **Combat is a first pass — unbalanced and un-playtested.** Time-to-kill, the 5-tile aggro radius, the 10%-MaxHP faint buffer, the 7-tile leash, the Throne's 1000 HP / 10-per-sec regen, and every per-creature stat block are placeholders that no Editor session has run yet. Expect to nudge several once seen live.
+- **Combat had its first playtest (2026-09-03) — the core loop works, the numbers don't yet.** Both keepers engage across any claimed floor and the fight/faint/haul chain runs; but time-to-kill, the 5-tile aggro radius, the 10%-MaxHP faint buffer, the 7-tile leash, the Throne's 1000 HP / 10-per-sec regen, and every per-creature stat block are still placeholders that need a real balance pass.
+- **Jailing needs polish** — flagged during the v0.0007 playtest as rough (capture flow / prisoner handling); deferred.
 - **No opponent AI.** Non-local keepers' creatures act autonomously (claim a Lair, eat, train, roam) but nothing *directs* them — combat currently only happens by dropping creatures into contact, or default-Aggressive creatures wandering into aggro range of each other or an enemy Throne.
 - **No netcode.** "Multiplayer" is per-keeper systems + a debug switcher in one local process. Real online play (host-authoritative is the intended model) is a separate track that hasn't started; combat's single damage funnel and stance lookup are shaped so it can slot in later.
 - **No lose-condition** — the Throne clamps at 0 HP and regenerates back; nothing happens when it's emptied.
 - **Structure owner retint** — reassigning a Throne Room / Portal owner in the Level Designer's Edit mode updates the saved data but doesn't retint the throne visual live.
 - **Room durability** — every room tile tracks 50 HP and Unhappy/Angry creatures chip it down, with a repair job now, but no HP UI.
 - **Mana economy** — crystals raise Max Mana 1-for-1, a placeholder ratio.
-- **Bridge rooms aren't part of room reconstruction** — a saved Bridge tile still loads as a flat placeholder cube.
-- **No "delete a room" tool in the Level Designer** — rooms can be placed and reassigned, not removed.
+- **Bridge rooms aren't part of room reconstruction** — a saved Bridge tile still loads as a flat placeholder cube (Bridge got real art in v0.0006, but its save/load reconstruction path was never added).
 - **The `GridMover` extraction is deferred** — `Combatant` carries its own copy of the path/move helpers; the five Monster agents still duplicate theirs. (Flagged as the first prerequisite for the netcode track.)
 
 ## Not Started
@@ -89,7 +89,7 @@ All six now carry a composed **`Combatant`** (below).
 - **Real netcode** — online host-authoritative multiplayer
 - Imp → full-size Imp growth (noted in brief, unimplemented)
 - Per-creature/per-level stat scaling curves (stats are flat placeholders past level 1)
-- Real art for creatures, and for five room types (Treasury, Slime Hatchery, Jail, Conversion Class, Bridge)
+- Real art for creatures, and for **Conversion Class** — the one room still on primitive-cube art (may be reworked first)
 - Additional creature races beyond the current six
 - Skill slots 2–6 (only slot 1, the basic attack, is defined) — where windup / cooldown / projectiles / mana costs / AoE will live
 - Saving mid-game progress (only the first "Start Game" run auto-saves itself as `level1`)
@@ -98,7 +98,7 @@ All six now carry a composed **`Combatant`** (below).
 
 | System | Placeholder | Where |
 | --- | --- | --- |
-| Creature combat stats / TTK | Unbalanced, un-playtested | per-agent `_baseStats` |
+| Creature combat stats / TTK | Unbalanced — one playtest (2026-09-03), core loop OK | per-agent `_baseStats` |
 | Aggro radius | 5 tiles, every creature | `Creature.DefaultAggroRadius` |
 | Faint-HP buffer | 10% of MaxHP | `DownedBody.cs` |
 | Downed recovery | 60s come-to / 25%-MaxHP/min in a Lair / 5%/min + 10% on entry in a Jail | `DownedBody.cs` |
@@ -118,7 +118,8 @@ All six now carry a composed **`Combatant`** (below).
 
 ## Next Steps (TODO)
 
-- [ ] **Playtest and balance combat** — TTK, aggro radius, faint-HP, leash, Throne HP/regen; verify the AI hand-offs (chase/hold, break-off, downed→rescue/capture) behave live
+- [ ] **Balance combat** — TTK, aggro radius, faint-HP, leash, Throne HP/regen (one playtest done, core loop verified; numbers untuned)
+- [ ] **Polish jailing** — capture flow / prisoner handling (rough in the v0.0007 playtest)
 - [ ] Wire a **lose-condition** to the Throne hitting 0 HP
 - [ ] An **AI opponent** so a rival keeper's creatures actually do something
 - [ ] **Player attack-commands** (send creatures somewhere, defend a point)
@@ -127,10 +128,9 @@ All six now carry a composed **`Combatant`** (below).
 - [ ] PvE: invading hero parties
 - [ ] Extend the Throne's `IAttackTarget` pattern to other structures worth defending
 - [ ] Bring Bridge into the same `IRestorableRoomManager` reconstruction as the other 8 room types
-- [ ] Add a "delete a room" tool to the Level Designer
 - [ ] A real "save my current game" flow, distinct from the one-time starting-level snapshot
 - [ ] Replace placeholder per-level stat curves with real per-creature scaling
-- [ ] Real art for the remaining five room types and for creatures
+- [ ] Real art for Conversion Class (last room on primitives — possibly after a rework) and for creatures
 - [ ] Real procedural placement for Water/Lava/Chasm/Holy Ground/Bedrock
 
 ---
