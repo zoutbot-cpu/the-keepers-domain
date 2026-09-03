@@ -635,6 +635,20 @@ namespace KeepersDomain.LevelDesigner
                 case TileType.Chasm:
                 case TileType.HolyGround:
                     _grid.EditorPaintTerrain(coord, data.Type);
+                    // A bridged Water/Lava tile carries a "Bridge_" RoomId —
+                    // defer it into the footprint map so RoomReconstruction
+                    // rebuilds it through BridgeManager, same as any other
+                    // room. Only Water/Lava ever get bridged.
+                    if ((data.Type == TileType.Water || data.Type == TileType.Lava) && !string.IsNullOrEmpty(data.RoomId))
+                    {
+                        if (!roomFootprints.TryGetValue(data.RoomId, out var bridgeFootprint))
+                        {
+                            bridgeFootprint = new List<Vector2Int>();
+                            roomFootprints[data.RoomId] = bridgeFootprint;
+                            roomOwners[data.RoomId] = data.OwnerId;
+                        }
+                        bridgeFootprint.Add(coord);
+                    }
                     break;
                 case TileType.Floor:
                     _grid.EditorPaintFloor(coord, data.Ownership == TileOwnership.Claimed, data.OwnerId);

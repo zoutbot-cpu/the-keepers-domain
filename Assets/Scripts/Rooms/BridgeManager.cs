@@ -41,7 +41,7 @@ namespace KeepersDomain.Rooms
     /// case follows. A Water bridge tile never decays. Selling (the generic
     /// Sell tool, via LairManager.RoomSold — see OnRoomSold) does refund,
     /// same as every other room type.
-    public class BridgeManager : MonoBehaviour
+    public class BridgeManager : MonoBehaviour, IRestorableRoomManager
     {
         /// Placeholder gold cost per tile, charged instantly on placement —
         /// unbalanced like every other room's current cost.
@@ -61,6 +61,12 @@ namespace KeepersDomain.Rooms
         private int _ownerId;
         private int _nextRoomId;
 
+        // False in the level designer (see GameBootstrap.
+        // CreateLevelDesignerRoomManagers) so a restored Lava bridge doesn't
+        // silently decay out from under someone editing a map — same reason
+        // SlimeHatcheryManager takes simulateBreeding.
+        private bool _simulateDecay = true;
+
         private GameObject _edgePrefab;
         private GameObject _middlePrefab;
         private GameObject _cornerPrefab;
@@ -77,12 +83,13 @@ namespace KeepersDomain.Rooms
 
         private enum BridgePiece { Edge, Middle, Corner, TJunction, FourWay }
 
-        public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager, int ownerId = 0)
+        public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager, int ownerId = 0, bool simulateDecay = true)
         {
             _grid = grid;
             _treasuryManager = treasuryManager;
             _ownerId = ownerId;
             _nextRoomId = ownerId * DungeonGrid.RoomIdOwnerStride;
+            _simulateDecay = simulateDecay;
             lairManager.RoomSold += OnRoomSold;
 
             // Same "load once, no scene wiring" convention JailManager and
@@ -96,7 +103,7 @@ namespace KeepersDomain.Rooms
 
         private void Update()
         {
-            if (_lavaDecayDeadline.Count == 0)
+            if (!_simulateDecay || _lavaDecayDeadline.Count == 0)
             {
                 return;
             }
@@ -173,8 +180,7 @@ namespace KeepersDomain.Rooms
                 return false;
             }
 
-            var roomId = $"Bridge_{_nextRoomId++}";
-            if (!_grid.TryAssignBridgeRoom(coord, roomId, _ownerId))
+            if (!CommitBridgeTile(coord, _ownerId))
             {
                 // Shouldn't happen — CanPlaceBridgeTile just verified this
                 // exact tile — but refund rather than silently eat the gold
@@ -183,22 +189,73 @@ namespace KeepersDomain.Rooms
                 return false;
             }
 
+            GameplayLog.Write(_ownerId, $"Bridge built at ({coord.x},{coord.y})");
+            return true;
+        }
+
+        /// Turns coord (already verified to be an unbridged Water/Lava tile)
+        /// into a bridge tile — claims it for ownerId, mints its own
+        /// per-tile roomId (Bridge_{n}, never merged — see the class
+        /// header), rebuilds its plank mesh and its neighbours', and starts
+        /// the Lava decay timer. Shared by live placement
+        /// (TryPlaceBridgeTile, after its adjacency + gold checks) and save
+        /// reconstruction (RestoreRoom, which skips both).
+        private bool CommitBridgeTile(Vector2Int coord, int ownerId)
+        {
+            var roomId = $"Bridge_{_nextRoomId++}";
+            if (!_grid.TryAssignBridgeRoom(coord, roomId, ownerId))
+            {
+                return false;
+            }
+
             _roomIdByCoord[coord] = roomId;
             _coordByRoomId[roomId] = coord;
 
-            // The new tile's edge/middle choice AND that of its existing
-            // neighbors can change now that this tile exists (an endpoint
-            // that was a dangling middle piece, an edge piece that should
-            // now point the other way, ...), so rebuild the whole cluster.
+            // This tile's edge/middle choice AND that of its existing
+            // neighbors can change now that it exists (an endpoint that was
+            // a dangling middle piece, an edge piece that should now point
+            // the other way, ...), so rebuild the whole cluster.
             RefreshTileAndNeighbours(coord);
 
-            if (_grid.GetTile(coord).Type == TileType.Lava)
+            if (_simulateDecay && _grid.GetTile(coord).Type == TileType.Lava)
             {
                 _lavaDecayDeadline[coord] = Time.time + LavaBridgeDecaySeconds;
             }
 
-            GameplayLog.Write(_ownerId, $"Bridge built at ({coord.x},{coord.y})");
             return true;
+        }
+
+        /// IRestorableRoomManager — rebuilds saved bridge tiles. Unlike
+        /// every other room manager (which gets a real rectangular
+        /// footprint), each bridge tile is its own 1x1 "room" (see the
+        /// class header), so RoomReconstruction hands this one call per
+        /// saved bridge tile with start == end. Only ever touches Water/Lava
+        /// tiles with no room yet, so a malformed multi-tile Bridge_
+        /// footprint still can't bridge dry land. Gold-free and
+        /// adjacency-free — the saved level is authoritative.
+        public bool RestoreRoom(Vector2Int start, Vector2Int end, int ownerId)
+        {
+            var minX = Mathf.Min(start.x, end.x);
+            var maxX = Mathf.Max(start.x, end.x);
+            var minY = Mathf.Min(start.y, end.y);
+            var maxY = Mathf.Max(start.y, end.y);
+
+            var placedAny = false;
+            for (int x = minX; x <= maxX; x++)
+            {
+                for (int y = minY; y <= maxY; y++)
+                {
+                    var coord = new Vector2Int(x, y);
+                    var tile = _grid.GetTile(coord);
+                    if ((tile.Type == TileType.Water || tile.Type == TileType.Lava) && !tile.HasRoom
+                        && CommitBridgeTile(coord, ownerId))
+                    {
+                        placedAny = true;
+                    }
+                }
+            }
+
+            return placedAny;
         }
 
         /// LairManager.RoomSold fires for every sold room — only react to

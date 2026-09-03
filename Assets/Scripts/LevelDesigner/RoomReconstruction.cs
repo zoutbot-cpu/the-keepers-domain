@@ -17,17 +17,16 @@ namespace KeepersDomain.LevelDesigner
     {
         /// Rebuilds every saved room's real decoration from its grouped
         /// tile footprint — one bounding-rectangle
-        /// IRestorableRoomManager.RestoreRoom call per RoomId (every room
-        /// in this game, merged or not, is always a filled rectangle —
-        /// see IRestorableRoomManager's own header), dispatched to the
-        /// right manager via ResolveRoomManager. Falls back to
-        /// DungeonGrid.EditorPlaceRoomTile's bare placeholder-colored-cube
-        /// tagging for anything that doesn't resolve to a known manager
-        /// (an unrecognized/stale prefix, "Bridge_..." since Bridge isn't
-        /// one of the 8 restorable room types, or RestoreRoom itself
-        /// rejecting the footprint), so nothing is ever silently dropped.
-        /// roomManagers may be null (treated as "nothing resolves") —
-        /// every entry just falls back to the placeholder tag.
+        /// IRestorableRoomManager.RestoreRoom call per RoomId, dispatched to
+        /// the right manager via ResolveRoomManager. Rectangular rooms fill
+        /// their bounding rectangle; a Bridge_ footprint is a single tile
+        /// (start == end), which BridgeManager.RestoreRoom handles. Falls
+        /// back to DungeonGrid.EditorPlaceRoomTile's bare placeholder-
+        /// colored-cube tagging for anything that doesn't resolve to a
+        /// known manager (an unrecognized/stale prefix, or RestoreRoom
+        /// itself rejecting the footprint), so nothing is ever silently
+        /// dropped. roomManagers may be null (treated as "nothing
+        /// resolves") — every entry just falls back to the placeholder tag.
         public static void RestoreRooms(DungeonGrid grid, Dictionary<string, List<Vector2Int>> roomFootprints, Dictionary<string, int> roomOwners, Dictionary<RoomDesignTool, IRestorableRoomManager> roomManagers)
         {
             foreach (var entry in roomFootprints)
@@ -66,9 +65,9 @@ namespace KeepersDomain.LevelDesigner
         /// The manager owning roomId, found by the same
         /// "{RoomDesignTool}_{index}" prefix convention every room
         /// manager's own roomId minting already uses (e.g. LairManager.
-        /// GetCostPerTileForRoomId) — null for anything that doesn't parse
-        /// to a known RoomDesignTool, isn't in roomManagers (e.g.
-        /// "Bridge_..."), or roomManagers itself is null. "BaconBeacon" is
+        /// GetCostPerTileForRoomId, BridgeManager's "Bridge_{n}") — null for
+        /// anything that doesn't parse to a known RoomDesignTool, isn't in
+        /// roomManagers, or roomManagers itself is null. "BaconBeacon" is
         /// special-cased as a legacy alias for RoomDesignTool.Tavern (its
         /// renamed successor, see TavernManager) so a level1.json saved
         /// before that rename still reconstructs its Tavern room(s)

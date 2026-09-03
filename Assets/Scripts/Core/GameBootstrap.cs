@@ -211,18 +211,22 @@ namespace KeepersDomain.Core
             SetUpLevelDesignerWorld(grid, session, initialLevelName: null, roomManagers);
         }
 
-        /// Creates and wires the 8 player-buildable room managers (every
-        /// RoomDesignTool value except None — BridgeManager isn't one of
-        /// them, see RoomDesignTool's own comment) for the Level Designer,
-        /// shared by BuildLevelDesignerWorld and LoadLevelDesignerWorld.
-        /// Same Initialize wiring BuildWorld uses, minus anything
-        /// gameplay-only that the Level Designer has no business running:
+        /// Creates and wires the nine player-buildable room managers (every
+        /// RoomDesignTool value except None) for the Level Designer, shared
+        /// by BuildLevelDesignerWorld and LoadLevelDesignerWorld. Same
+        /// Initialize wiring BuildWorld uses, minus anything gameplay-only
+        /// that the Level Designer has no business running:
         /// - No starting gold/PlaceStartingTreasury call — rooms placed
         ///   here are always gold-free anyway (see each manager's own
         ///   RestoreRoom).
         /// - SlimeHatcheryManager gets simulateBreeding: false so placing/
         ///   loading a Hatchery never starts spawning live SlimeAgents
         ///   while the map is just being edited.
+        /// - BridgeManager gets simulateDecay: false for the same reason —
+        ///   a restored Lava bridge must not decay while a map is being
+        ///   edited. It has no Rooms-menu button (a bridge is a line, not a
+        ///   rectangle) — it's here only so a saved bridge tile still
+        ///   reconstructs (see BridgeManager.RestoreRoom).
         /// - JailManager gets a null BuilderJobBoard (the Level Designer
         ///   has no dig-job queue, and BuilderJobBoard.Update auto-queues
         ///   real reinforce jobs across the whole grid, which the Level
@@ -262,6 +266,9 @@ namespace KeepersDomain.Core
             conversionClassManager.Initialize(grid, lairManager, treasuryManager, jailManager,
                 gremlinSpawner: null, warlockSpawner: null, mazeRattlerSpawner: null, elfSpawner: null);
 
+            var bridgeManager = CreateComponent<BridgeManager>("BridgeManager");
+            bridgeManager.Initialize(grid, lairManager, treasuryManager, ownerId: 0, simulateDecay: false);
+
             return new Dictionary<RoomDesignTool, IRestorableRoomManager>
             {
                 { RoomDesignTool.Lair, lairManager },
@@ -272,6 +279,7 @@ namespace KeepersDomain.Core
                 { RoomDesignTool.Library, libraryManager },
                 { RoomDesignTool.Jail, jailManager },
                 { RoomDesignTool.ConversionClass, conversionClassManager },
+                { RoomDesignTool.Bridge, bridgeManager },
             };
         }
 
@@ -950,6 +958,21 @@ namespace KeepersDomain.Core
                     case TileType.Chasm:
                     case TileType.HolyGround:
                         grid.EditorPaintTerrain(coord, tileData.Type);
+                        // A bridged Water/Lava tile carries a "Bridge_"
+                        // RoomId — defer it into the footprint map so the
+                        // RoomReconstruction dispatch below rebuilds it
+                        // through the owning keeper's BridgeManager, same as
+                        // any other room. Only Water/Lava ever get bridged.
+                        if ((tileData.Type == TileType.Water || tileData.Type == TileType.Lava) && !string.IsNullOrEmpty(tileData.RoomId))
+                        {
+                            if (!roomFootprints.TryGetValue(tileData.RoomId, out var bridgeFootprint))
+                            {
+                                bridgeFootprint = new List<Vector2Int>();
+                                roomFootprints[tileData.RoomId] = bridgeFootprint;
+                                roomOwners[tileData.RoomId] = tileData.OwnerId;
+                            }
+                            bridgeFootprint.Add(coord);
+                        }
                         break;
                     case TileType.Floor:
                         grid.EditorPaintFloor(coord, tileData.Ownership == TileOwnership.Claimed, tileData.OwnerId);
@@ -1225,6 +1248,7 @@ namespace KeepersDomain.Core
                     { RoomDesignTool.Library, ctx.Library },
                     { RoomDesignTool.Jail, ctx.Jail },
                     { RoomDesignTool.ConversionClass, ctx.ConversionClass },
+                    { RoomDesignTool.Bridge, ctx.Bridge },
                 };
                 RoomReconstruction.RestoreRooms(grid, ownFootprints, roomOwners, roomManagers);
             }

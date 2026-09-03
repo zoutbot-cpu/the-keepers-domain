@@ -30,10 +30,13 @@ namespace KeepersDomain.Input
         ClaimedFloor
     }
 
-    /// Every room the level designer's Rooms menu can stamp down — the
-    /// same 8 room types GameBootstrap's own gameplay setup wires up,
-    /// minus Bridge (a painted line over Water/Lava, not a rectangular
-    /// footprint — out of scope for this first pass).
+    /// Every room a `{RoomDesignTool}_{index}` roomId prefix can resolve to
+    /// (see RoomReconstruction.ResolveRoomManager) — the 8 rectangular room
+    /// types the level designer's Rooms menu stamps down, plus Bridge.
+    /// Bridge has no Rooms-menu button (it's a painted line over Water/Lava,
+    /// not a rectangular drag) and can't be authored in the level designer
+    /// yet — it's only here so a *saved* bridge tile reconstructs through
+    /// the same IRestorableRoomManager path every other room uses.
     public enum RoomDesignTool
     {
         None,
@@ -44,7 +47,8 @@ namespace KeepersDomain.Input
         TrainingRoom,
         Library,
         Jail,
-        ConversionClass
+        ConversionClass,
+        Bridge
     }
 
     /// What Edit mode's last tap actually selected — read by
