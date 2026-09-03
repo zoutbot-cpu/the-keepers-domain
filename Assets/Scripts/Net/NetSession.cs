@@ -56,10 +56,11 @@ namespace KeepersDomain.Net
 
         private void BuildNetworkManager()
         {
-            var go = new GameObject("NetworkManager");
-            go.transform.SetParent(transform, false);
-            _nm = go.AddComponent<NetworkManager>();
-            var utp = go.AddComponent<UnityTransport>();
+            // NetworkManager must live on a root GameObject (NGO forbids it
+            // being nested) — put it on THIS object, which Create() made a
+            // root + DontDestroyOnLoad.
+            var utp = gameObject.AddComponent<UnityTransport>();
+            _nm = gameObject.AddComponent<NetworkManager>();
 
             _nm.NetworkConfig = new NetworkConfig
             {
