@@ -1,84 +1,117 @@
 using System;
 using UnityEngine;
+using KeepersDomain.Net;
 
 namespace KeepersDomain.UI
 {
-    /// The very first screen shown on launch — logo plus Start/Quit, gating
-    /// GameBootstrap's world build until the player presses Start (see
-    /// GameBootstrap.ShowMainMenu/BuildWorld).
+    /// The very first screen shown on launch — logo plus Start / Level
+    /// Designer / Host / Join / Quit, gating GameBootstrap's world build
+    /// until the player picks one (see GameBootstrap.ShowMainMenu).
     public class MainMenu : MonoBehaviour
     {
         private const float LogoWidth = 480f;
         private const float LogoHeight = 240f;
         private const float ButtonWidth = 220f;
         private const float ButtonHeight = 48f;
-        private const float ButtonSpacing = 16f;
+        private const float ButtonSpacing = 12f;
 
         private Action _onStart;
         private Action _onLevelDesigner;
+        private Action _onHost;
+        private Action<string> _onJoin;
         private Texture2D _logo;
 
-        public void Initialize(Action onStart, Action onLevelDesigner)
+        private string _joinCodeInput = "";
+
+        public void Initialize(Action onStart, Action onLevelDesigner, Action onHost, Action<string> onJoin)
         {
             _onStart = onStart;
             _onLevelDesigner = onLevelDesigner;
+            _onHost = onHost;
+            _onJoin = onJoin;
             // Resources.Load, not a serialized field — every other object in
             // this prototype is created procedurally by GameBootstrap rather
-            // than wired up in the Inspector, so there's no scene asset slot
-            // to drag the logo into. Assets/Resources/UI/logo.png.
+            // than wired up in the Inspector. Assets/Resources/UI/logo.png.
             _logo = Resources.Load<Texture2D>("UI/logo");
         }
 
         private void OnGUI()
         {
+            var net = NetSession.Instance;
+
+            // Connection succeeded — the game/client world is being built;
+            // this menu's job is done.
+            if (net != null && (net.State == NetSession.Phase.Hosting || net.State == NetSession.Phase.Client))
+            {
+                Destroy(gameObject);
+                return;
+            }
+
             var centerX = Screen.width * 0.5f;
 
             if (_logo != null)
             {
-                var logoRect = new Rect(centerX - LogoWidth * 0.5f, Screen.height * 0.22f, LogoWidth, LogoHeight);
-                GUI.DrawTexture(logoRect, _logo, ScaleMode.ScaleToFit);
+                GUI.DrawTexture(new Rect(centerX - LogoWidth * 0.5f, Screen.height * 0.18f, LogoWidth, LogoHeight),
+                    _logo, ScaleMode.ScaleToFit);
             }
             else
             {
-                // Falls back to the game's name if the logo file is ever
-                // missing, rather than leaving a blank gap.
-                var titleRect = new Rect(centerX - LogoWidth * 0.5f, Screen.height * 0.3f, LogoWidth, 60f);
                 var style = new GUIStyle(GUI.skin.label) { fontSize = 32, alignment = TextAnchor.MiddleCenter };
-                GUI.Label(titleRect, "The Keeper's Domain", style);
+                GUI.Label(new Rect(centerX - LogoWidth * 0.5f, Screen.height * 0.26f, LogoWidth, 60f),
+                    "The Keeper's Domain", style);
             }
 
-            var buttonsTop = Screen.height * 0.55f;
-            var startRect = new Rect(centerX - ButtonWidth * 0.5f, buttonsTop, ButtonWidth, ButtonHeight);
-            var levelDesignerRect = new Rect(centerX - ButtonWidth * 0.5f, buttonsTop + (ButtonHeight + ButtonSpacing), ButtonWidth, ButtonHeight);
-            var quitRect = new Rect(centerX - ButtonWidth * 0.5f, buttonsTop + (ButtonHeight + ButtonSpacing) * 2f, ButtonWidth, ButtonHeight);
+            var connecting = net != null && net.State == NetSession.Phase.Connecting;
+            GUI.enabled = !connecting;
 
-            if (GUI.Button(startRect, "Start Game"))
+            var y = Screen.height * 0.5f;
+            float Row() { var r = y; y += ButtonHeight + ButtonSpacing; return r; }
+            Rect Btn(float rowY) => new Rect(centerX - ButtonWidth * 0.5f, rowY, ButtonWidth, ButtonHeight);
+
+            if (GUI.Button(Btn(Row()), "Start Game (offline)"))
             {
-                // Fire the callback before destroying this object — Initialize
-                // handed us GameBootstrap.StartGame, which loads "level1" if
-                // it exists or falls back to BuildWorld's fresh generation
-                // otherwise — either way, this is what actually kicks off
-                // GameBootstrap's dungeon construction.
                 _onStart?.Invoke();
                 Destroy(gameObject);
+                return;
             }
 
-            if (GUI.Button(levelDesignerRect, "Level Designer"))
+            if (GUI.Button(Btn(Row()), "Level Designer"))
             {
-                // The level-designer canvas itself doesn't exist yet — this
-                // hands off to its properties screen instead (see
-                // GameBootstrap.ShowLevelDesignerProperties), same
-                // fire-then-destroy pattern as Start Game above.
                 _onLevelDesigner?.Invoke();
                 Destroy(gameObject);
+                return;
             }
 
-            if (GUI.Button(quitRect, "Quit"))
+            if (GUI.Button(Btn(Row()), "Host Game"))
+            {
+                _onHost?.Invoke();
+            }
+
+            var joinRowY = Row();
+            _joinCodeInput = GUI.TextField(
+                new Rect(centerX - ButtonWidth * 0.5f, joinRowY, ButtonWidth - 90f, ButtonHeight), _joinCodeInput, 12);
+            if (GUI.Button(new Rect(centerX - ButtonWidth * 0.5f + ButtonWidth - 84f, joinRowY, 84f, ButtonHeight), "Join"))
+            {
+                _onJoin?.Invoke(_joinCodeInput);
+            }
+
+            if (GUI.Button(Btn(Row()), "Quit"))
             {
                 Application.Quit();
 #if UNITY_EDITOR
                 UnityEditor.EditorApplication.isPlaying = false;
 #endif
+            }
+
+            GUI.enabled = true;
+
+            var status = connecting ? "Connecting..."
+                : net != null && net.State == NetSession.Phase.Failed ? $"Failed: {net.LastError}"
+                : "";
+            if (status.Length > 0)
+            {
+                var s = new GUIStyle(GUI.skin.label) { alignment = TextAnchor.MiddleCenter, wordWrap = true };
+                GUI.Label(new Rect(centerX - 300f, y + 8f, 600f, 44f), status, s);
             }
         }
     }

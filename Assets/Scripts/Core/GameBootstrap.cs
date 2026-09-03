@@ -1,9 +1,11 @@
 using System.Collections.Generic;
 using UnityEngine;
+using Unity.Netcode;
 using KeepersDomain.Grid;
 using KeepersDomain.Input;
 using KeepersDomain.CameraControl;
 using KeepersDomain.LevelDesigner;
+using KeepersDomain.Net;
 using KeepersDomain.Rooms;
 using KeepersDomain.Implings;
 using KeepersDomain.Monsters;
@@ -88,6 +90,15 @@ namespace KeepersDomain.Core
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void Init()
         {
+            // The long-lived NetworkManager + Unity Gaming Services wrapper.
+            // Idle unless Host/Join is pressed — offline "Start Game" never
+            // touches it. Wired here so the callbacks survive a
+            // Main Menu <-> game bounce.
+            NetSession.Create();
+            NetSession.Instance.OnHostReady = OnHostReady;
+            NetSession.Instance.OnClientReady = BuildClientWorld;
+            NetSession.Instance.OnDisconnected = ReturnToMainMenu;
+
             // ShowMainMenu clears any stray camera itself (see its own
             // comment) — no need to do it again here.
             ShowMainMenu();
@@ -105,6 +116,14 @@ namespace KeepersDomain.Core
         {
             KeeperContext.All = null;
             StanceRegistry.Current = null;
+
+            // NetSession + its NetworkManager are DontDestroyOnLoad, so
+            // they're not in the active scene's roots — Leave() shuts the
+            // transport down without tearing the objects out.
+            if (NetSession.Instance != null && NetSession.Instance.IsNetworked)
+            {
+                NetSession.Instance.Leave();
+            }
 
             foreach (var root in UnityEngine.SceneManagement.SceneManager.GetActiveScene().GetRootGameObjects())
             {
@@ -134,7 +153,41 @@ namespace KeepersDomain.Core
             menuCamera.backgroundColor = new Color(0.05f, 0.05f, 0.07f);
 
             var menu = CreateComponent<MainMenu>("MainMenu");
-            menu.Initialize(StartGame, ShowLevelDesignerProperties);
+            menu.Initialize(StartGame, ShowLevelDesignerProperties, HostGame, JoinGame);
+        }
+
+        /// Main Menu "Host Game" — spins up a Relay session (join code) and,
+        /// once it's live (NetSession.OnHostReady -> OnHostReady below),
+        /// builds the authoritative world exactly as offline Start Game does.
+        private static void HostGame()
+        {
+            NetSession.Instance.StartHost();
+        }
+
+        /// Main Menu "Join Game" — connects to the host's session by code.
+        /// The render-only client world is built from NetGame's client-side
+        /// OnNetworkSpawn (-> NetSession.OnClientReady -> BuildClientWorld).
+        private static void JoinGame(string joinCode)
+        {
+            NetSession.Instance.JoinByCode(joinCode);
+        }
+
+        /// NetSession.OnHostReady — the transport is up and we're the host.
+        /// Build the world (same level1-or-fresh path Start Game uses), then
+        /// spawn the one session-lifetime networked object and bind it to
+        /// the grid so tile changes replicate.
+        private static void OnHostReady()
+        {
+            BuildWorld(LevelFileIO.Load("level1"));
+
+            var grid = Object.FindFirstObjectByType<DungeonGrid>();
+            var prefab = Resources.Load<GameObject>("Net/NetGame");
+            var netGameGo = Object.Instantiate(prefab);
+            var netObj = netGameGo.GetComponent<NetworkObject>();
+            netObj.Spawn(destroyWithScene: true);
+            netGameGo.GetComponent<NetGame>().HostBind(grid);
+
+            CreateComponent<NetHud>("NetHud").Initialize(isHost: true);
         }
 
         /// The Start Game button's actual callback — loads "level1" if
@@ -394,6 +447,46 @@ namespace KeepersDomain.Core
         /// gets populated does, so only those specific spots below branch
         /// on data; everything else runs unconditionally exactly as
         /// before.
+        /// The joined client's world (Milestone 1a) — deliberately thin: it
+        /// RENDERS, it never simulates. No KeeperContext, no job boards, no
+        /// room managers, no spawners, no StanceRegistry. Just a grid the
+        /// host's NetGame fills via a snapshot + live tile deltas (see
+        /// DungeonGrid.ApplyReplicatedTile), a local pan/zoom camera, and
+        /// the cosmetic liquid animator. Creature ghosts, HUD state and
+        /// client commands arrive in later milestones. Called synchronously
+        /// from NetGame's client-side OnNetworkSpawn, so the grid exists
+        /// before NetGame requests the snapshot on the next line there.
+        private static void BuildClientWorld()
+        {
+            KeeperContext.All = null;
+            StanceRegistry.Current = null;
+
+            RemoveStrayCameras();
+            CreateSun();
+
+            var netGame = NetGame.Instance;
+            var width = netGame != null ? Mathf.Max(1, netGame.MapWidth.Value) : GridWidth;
+            var height = netGame != null ? Mathf.Max(1, netGame.MapHeight.Value) : GridHeight;
+
+            var grid = CreateComponent<DungeonGrid>("DungeonGrid");
+            grid.Initialize(width, height, CellSize);
+
+            // Placeholder 2-colour palette so owner-tinted floor / orbs /
+            // rings read on the client until the real roster syncs (M1b).
+            grid.OwnerColors = new[] { LevelDesignerColors.Palette[0], LevelDesignerColors.Palette[1] };
+            grid.PlayerColor = grid.OwnerColors[0];
+            grid.TintFloorByOwner = true;
+
+            var liquidAnimator = CreateComponent<LiquidAnimator>("LiquidAnimator");
+            liquidAnimator.Initialize();
+
+            var panMargin = 22.5f;
+            var mapCenter = grid.GridToWorld(new Vector2Int(width / 2, height / 2));
+            CreateIsoCamera(grid, panMargin, mapCenter);
+
+            CreateComponent<NetHud>("NetHud").Initialize(isHost: false);
+        }
+
         private static void BuildWorld(LevelData data = null)
         {
             // Drop any stale KeeperContext references from a previous
