@@ -225,37 +225,22 @@ namespace KeepersDomain.Rooms
             return true;
         }
 
-        /// IRestorableRoomManager — rebuilds saved bridge tiles. Unlike
-        /// every other room manager (which gets a real rectangular
-        /// footprint), each bridge tile is its own 1x1 "room" (see the
-        /// class header), so RoomReconstruction hands this one call per
-        /// saved bridge tile with start == end. Only ever touches Water/Lava
-        /// tiles with no room yet, so a malformed multi-tile Bridge_
-        /// footprint still can't bridge dry land. Gold-free and
-        /// adjacency-free — the saved level is authoritative.
+        /// IRestorableRoomManager — restores one saved bridge tile. Each
+        /// bridge tile is its own 1x1 "room" (see the class header), so
+        /// RoomReconstruction dispatches this once per saved tile with
+        /// start == end (end is ignored). Only claims an unbridged
+        /// Water/Lava tile, so it can never bridge dry land even if handed
+        /// a stray coord. Gold-free and adjacency-free — the saved level is
+        /// authoritative.
         public bool RestoreRoom(Vector2Int start, Vector2Int end, int ownerId)
         {
-            var minX = Mathf.Min(start.x, end.x);
-            var maxX = Mathf.Max(start.x, end.x);
-            var minY = Mathf.Min(start.y, end.y);
-            var maxY = Mathf.Max(start.y, end.y);
-
-            var placedAny = false;
-            for (int x = minX; x <= maxX; x++)
+            var tile = _grid.GetTile(start);
+            if ((tile.Type != TileType.Water && tile.Type != TileType.Lava) || tile.HasRoom)
             {
-                for (int y = minY; y <= maxY; y++)
-                {
-                    var coord = new Vector2Int(x, y);
-                    var tile = _grid.GetTile(coord);
-                    if ((tile.Type == TileType.Water || tile.Type == TileType.Lava) && !tile.HasRoom
-                        && CommitBridgeTile(coord, ownerId))
-                    {
-                        placedAny = true;
-                    }
-                }
+                return false;
             }
 
-            return placedAny;
+            return CommitBridgeTile(start, ownerId);
         }
 
         /// LairManager.RoomSold fires for every sold room — only react to

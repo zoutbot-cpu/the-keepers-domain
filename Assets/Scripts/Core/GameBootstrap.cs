@@ -1220,6 +1220,13 @@ namespace KeepersDomain.Core
             {
                 var ctx = contexts[i];
                 var ownFootprints = new Dictionary<string, List<Vector2Int>>();
+                // The clamped owner, not the raw saved one — a stray/out-of-
+                // range owner is reassigned to keeper 0 here, and
+                // RoomReconstruction hands this value straight to
+                // RestoreRoom, so a manager that acts on it (BridgeManager
+                // stamps the tile's OwnerId with it) never sees an index
+                // with no KeeperContext.
+                var ownOwners = new Dictionary<string, int>();
                 foreach (var entry in roomFootprints)
                 {
                     var roomOwner = roomOwners.TryGetValue(entry.Key, out var o) ? o : 0;
@@ -1230,6 +1237,7 @@ namespace KeepersDomain.Core
                     if (roomOwner == i)
                     {
                         ownFootprints[entry.Key] = entry.Value;
+                        ownOwners[entry.Key] = roomOwner;
                     }
                 }
 
@@ -1250,7 +1258,7 @@ namespace KeepersDomain.Core
                     { RoomDesignTool.ConversionClass, ctx.ConversionClass },
                     { RoomDesignTool.Bridge, ctx.Bridge },
                 };
-                RoomReconstruction.RestoreRooms(grid, ownFootprints, roomOwners, roomManagers);
+                RoomReconstruction.RestoreRooms(grid, ownFootprints, ownOwners, roomManagers);
             }
         }
 

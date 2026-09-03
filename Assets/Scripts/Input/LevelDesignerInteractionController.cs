@@ -683,7 +683,12 @@ namespace KeepersDomain.Input
             if (tile.HasRoom)
             {
                 var footprint = _grid.GetRoomFootprint(tile.RoomId);
-                _lairManager?.TrySellRoom(coord);
+                // EditorRemoveRoomAt, not TrySellRoom — the latter refuses a
+                // room owned by another player (a gameplay-Sell guard), which
+                // would leave that room's manager still holding its visuals
+                // while the loop below clears the grid tiles out from under
+                // them.
+                _lairManager?.EditorRemoveRoomAt(coord);
                 foreach (var footprintCoord in footprint)
                 {
                     _grid.EditorResetToRock(footprintCoord);

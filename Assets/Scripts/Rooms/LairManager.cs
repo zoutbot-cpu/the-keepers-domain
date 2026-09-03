@@ -246,7 +246,26 @@ namespace KeepersDomain.Rooms
                 return false;
             }
 
-            var roomId = tile.RoomId;
+            RemoveRoom(tile.RoomId, refundGold: true);
+            return true;
+        }
+
+        /// The Level Designer's Remove tool — tears the room down regardless
+        /// of which player owns it (authoring, not a gameplay sell — there's
+        /// one LairManager at design time, not one per keeper) and with no
+        /// refund (no economy while editing). Still fires RoomSold, so every
+        /// room manager's OnRoomSold clears its own bookkeeping/visuals.
+        public void EditorRemoveRoomAt(Vector2Int coord)
+        {
+            var tile = _grid.GetTile(coord);
+            if (tile.HasRoom)
+            {
+                RemoveRoom(tile.RoomId, refundGold: false);
+            }
+        }
+
+        private void RemoveRoom(string roomId, bool refundGold)
+        {
             var clearedTileCount = _grid.RemoveRoomTiles(roomId);
 
             if (_roomTiles.TryGetValue(roomId, out var tiles))
@@ -260,13 +279,12 @@ namespace KeepersDomain.Rooms
             }
             _roomBounds.Remove(roomId);
 
-            if (_treasuryManager != null)
+            if (refundGold && _treasuryManager != null)
             {
                 _treasuryManager.AddGold(clearedTileCount * GetCostPerTileForRoomId(roomId));
             }
 
             RoomSold?.Invoke(roomId);
-            return true;
         }
 
         /// Which CostPerTile a sold room refunds at — determined by roomId's

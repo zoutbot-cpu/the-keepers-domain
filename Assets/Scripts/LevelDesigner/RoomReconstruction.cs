@@ -16,17 +16,18 @@ namespace KeepersDomain.LevelDesigner
     public static class RoomReconstruction
     {
         /// Rebuilds every saved room's real decoration from its grouped
-        /// tile footprint — one bounding-rectangle
-        /// IRestorableRoomManager.RestoreRoom call per RoomId, dispatched to
-        /// the right manager via ResolveRoomManager. Rectangular rooms fill
-        /// their bounding rectangle; a Bridge_ footprint is a single tile
-        /// (start == end), which BridgeManager.RestoreRoom handles. Falls
-        /// back to DungeonGrid.EditorPlaceRoomTile's bare placeholder-
-        /// colored-cube tagging for anything that doesn't resolve to a
-        /// known manager (an unrecognized/stale prefix, or RestoreRoom
-        /// itself rejecting the footprint), so nothing is ever silently
-        /// dropped. roomManagers may be null (treated as "nothing
-        /// resolves") — every entry just falls back to the placeholder tag.
+        /// tile footprint, dispatched to the right manager via
+        /// ResolveRoomManager. A rectangular room gets one
+        /// IRestorableRoomManager.RestoreRoom call per RoomId with the
+        /// footprint's bounding rectangle; BridgeManager (whose "rooms" are
+        /// single tiles, never rectangles) gets one call per footprint
+        /// tile with start == end. Falls back to DungeonGrid.
+        /// EditorPlaceRoomTile's bare placeholder-colored-cube tagging for
+        /// anything that doesn't resolve to a known manager (an
+        /// unrecognized/stale prefix, or RestoreRoom itself rejecting the
+        /// footprint), so nothing is ever silently dropped. roomManagers
+        /// may be null (treated as "nothing resolves") — every entry just
+        /// falls back to the placeholder tag.
         public static void RestoreRooms(DungeonGrid grid, Dictionary<string, List<Vector2Int>> roomFootprints, Dictionary<string, int> roomOwners, Dictionary<RoomDesignTool, IRestorableRoomManager> roomManagers)
         {
             foreach (var entry in roomFootprints)
@@ -34,8 +35,26 @@ namespace KeepersDomain.LevelDesigner
                 var roomId = entry.Key;
                 var footprint = entry.Value;
                 var manager = ResolveRoomManager(roomId, roomManagers);
+                var owner = roomOwners.TryGetValue(roomId, out var o) ? o : 0;
 
-                if (manager != null)
+                if (manager is BridgeManager)
+                {
+                    // A bridge isn't a rectangle — each tile is its own
+                    // Bridge_{n} "room" (see BridgeManager's class header),
+                    // so restore exactly the saved tiles. A bounding-box
+                    // call could otherwise swallow an unbridged Water/Lava
+                    // pool sitting between two of them.
+                    var restoredAny = false;
+                    foreach (var coord in footprint)
+                    {
+                        restoredAny |= manager.RestoreRoom(coord, coord, owner);
+                    }
+                    if (restoredAny)
+                    {
+                        continue;
+                    }
+                }
+                else if (manager != null)
                 {
                     var minX = int.MaxValue;
                     var maxX = int.MinValue;
@@ -49,7 +68,7 @@ namespace KeepersDomain.LevelDesigner
                         maxY = Mathf.Max(maxY, coord.y);
                     }
 
-                    if (manager.RestoreRoom(new Vector2Int(minX, minY), new Vector2Int(maxX, maxY), roomOwners[roomId]))
+                    if (manager.RestoreRoom(new Vector2Int(minX, minY), new Vector2Int(maxX, maxY), owner))
                     {
                         continue;
                     }
