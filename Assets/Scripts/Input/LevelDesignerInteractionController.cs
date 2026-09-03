@@ -10,9 +10,10 @@ namespace KeepersDomain.Input
     /// Every wall/terrain/floor tool the level designer's Map Design menu
     /// offers. Wall variants map straight to DungeonGrid.EditorPaintWall's
     /// own EditorWallVariant; UnclaimedFloor/ClaimedFloor map to
-    /// EditorPaintFloor. ClaimedFloor is the only one that reads the
-    /// owner selector (see LevelDesignerMenuBar) — every other tool
-    /// ignores it.
+    /// EditorPaintFloor; Bridge paints a bridge tile onto Water/Lava via
+    /// BridgeManager.EditorPaintBridgeTile. ClaimedFloor, ReinforcedWall
+    /// and Bridge read the owner selector (see LevelDesignerMenuBar) —
+    /// every other tool ignores it.
     public enum MapDesignTool
     {
         None,
@@ -27,16 +28,18 @@ namespace KeepersDomain.Input
         Chasm,
         HolyGround,
         UnclaimedFloor,
-        ClaimedFloor
+        ClaimedFloor,
+        Bridge
     }
 
     /// Every room a `{RoomDesignTool}_{index}` roomId prefix can resolve to
     /// (see RoomReconstruction.ResolveRoomManager) — the 8 rectangular room
     /// types the level designer's Rooms menu stamps down, plus Bridge.
-    /// Bridge has no Rooms-menu button (it's a painted line over Water/Lava,
-    /// not a rectangular drag) and can't be authored in the level designer
-    /// yet — it's only here so a *saved* bridge tile reconstructs through
-    /// the same IRestorableRoomManager path every other room uses.
+    /// Bridge has no Rooms-menu button (it isn't a rectangular drag) — it's
+    /// painted per-tile onto Water/Lava by the Map Design menu's Bridge
+    /// tool instead (MapDesignTool.Bridge) — but it still resolves here so
+    /// a saved bridge tile reconstructs through the same
+    /// IRestorableRoomManager path every other room uses.
     public enum RoomDesignTool
     {
         None,
@@ -91,6 +94,9 @@ namespace KeepersDomain.Input
         // tool uses (fires RoomSold, so every room manager tears down its
         // own decoration), then the editor resets the footprint to Rock.
         private LairManager _lairManager;
+        // Also pulled out of _roomManagers — the Map Design menu's Bridge
+        // tool paints bridge tiles onto Water/Lava directly through it.
+        private BridgeManager _bridgeManager;
 
         private MapDesignTool _mapDesignTool = MapDesignTool.None;
         private RoomDesignTool _roomTool = RoomDesignTool.None;
@@ -162,6 +168,9 @@ namespace KeepersDomain.Input
             _roomManagers = roomManagers;
             _lairManager = roomManagers != null && roomManagers.TryGetValue(RoomDesignTool.Lair, out var lair)
                 ? lair as LairManager
+                : null;
+            _bridgeManager = roomManagers != null && roomManagers.TryGetValue(RoomDesignTool.Bridge, out var bridge)
+                ? bridge as BridgeManager
                 : null;
         }
 
@@ -802,6 +811,12 @@ namespace KeepersDomain.Input
                     // as the dedicated Unclaimed tool, rather than a
                     // contradictory claimed-but-unowned tile.
                     _grid.EditorPaintFloor(coord, claimed: _selectedOwnerId >= 0, ownerId: _selectedOwnerId);
+                    break;
+                case MapDesignTool.Bridge:
+                    // No-ops on anything that isn't an unbridged Water/Lava
+                    // tile, so a drag can sweep freely across the map and
+                    // only the wet tiles pick up a bridge.
+                    _bridgeManager?.EditorPaintBridgeTile(coord, _selectedOwnerId);
                     break;
             }
         }

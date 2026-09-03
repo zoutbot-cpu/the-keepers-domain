@@ -386,7 +386,14 @@ namespace KeepersDomain.UI
             DrawMapToolButton(MapDesignTool.ClaimedFloor, "Claimed");
             EndButtonRow();
 
-            if (activeTool == MapDesignTool.ClaimedFloor || activeTool == MapDesignTool.ReinforcedWall)
+            GUILayout.Space(8f);
+            GUILayout.Label("Bridge (paint over Water/Lava)");
+            BeginButtonRow();
+            DrawMapToolButton(MapDesignTool.Bridge, "Bridge");
+            EndButtonRow();
+
+            if (activeTool == MapDesignTool.ClaimedFloor || activeTool == MapDesignTool.ReinforcedWall
+                || activeTool == MapDesignTool.Bridge)
             {
                 GUILayout.Space(8f);
                 DrawOwnerSelector("Belongs to:");

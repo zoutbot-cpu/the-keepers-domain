@@ -225,23 +225,28 @@ namespace KeepersDomain.Rooms
             return true;
         }
 
-        /// IRestorableRoomManager — restores one saved bridge tile. Each
-        /// bridge tile is its own 1x1 "room" (see the class header), so
-        /// RoomReconstruction dispatches this once per saved tile with
-        /// start == end (end is ignored). Only claims an unbridged
-        /// Water/Lava tile, so it can never bridge dry land even if handed
-        /// a stray coord. Gold-free and adjacency-free — the saved level is
-        /// authoritative.
-        public bool RestoreRoom(Vector2Int start, Vector2Int end, int ownerId)
+        /// Turns coord into a bridge tile for ownerId if it's an unbridged
+        /// Water/Lava tile — gold-free and adjacency-free (authoring, not a
+        /// gameplay build), so a can't-bridge-dry-land guard is the only
+        /// check. Returns whether it did anything. Backs both the Level
+        /// Designer's Bridge tool and save reconstruction (see RestoreRoom).
+        public bool EditorPaintBridgeTile(Vector2Int coord, int ownerId)
         {
-            var tile = _grid.GetTile(start);
+            var tile = _grid.GetTile(coord);
             if ((tile.Type != TileType.Water && tile.Type != TileType.Lava) || tile.HasRoom)
             {
                 return false;
             }
 
-            return CommitBridgeTile(start, ownerId);
+            return CommitBridgeTile(coord, ownerId);
         }
+
+        /// IRestorableRoomManager — restores one saved bridge tile. Each
+        /// bridge tile is its own 1x1 "room" (see the class header), so
+        /// RoomReconstruction dispatches this once per saved tile with
+        /// start == end (end is ignored).
+        public bool RestoreRoom(Vector2Int start, Vector2Int end, int ownerId) =>
+            EditorPaintBridgeTile(start, ownerId);
 
         /// LairManager.RoomSold fires for every sold room — only react to
         /// our own (by roomId prefix, same convention every other room
