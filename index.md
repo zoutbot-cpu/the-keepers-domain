@@ -78,7 +78,7 @@ All six now carry a composed **`Combatant`** (below).
 - **Structure owner retint** — reassigning a Throne Room / Portal owner in the Level Designer's Edit mode updates the saved data but doesn't retint the throne visual live.
 - **Room durability** — every room tile tracks 50 HP and Unhappy/Angry creatures chip it down, with a repair job now, but no HP UI.
 - **Mana economy** — crystals raise Max Mana 1-for-1, a placeholder ratio.
-- **Bridge rooms aren't part of room reconstruction** — a saved Bridge tile still loads as a flat placeholder cube (Bridge got real art in v0.0006, but its save/load reconstruction path was never added).
+- **The Level Designer can't author Bridges yet** — `BridgeManager` now implements `IRestorableRoomManager` like every other room manager, so a *saved* bridge tile reconstructs correctly (as a real plank mesh, not a placeholder), but there's still no Bridge tool in the Level Designer's toolbar (a bridge is a painted line, not a rectangle drag), so the only way a bridge tile currently reaches a save is a hand-authored `level1.json`.
 - **The `GridMover` extraction is deferred** — `Combatant` carries its own copy of the path/move helpers; the five Monster agents still duplicate theirs. (Flagged as the first prerequisite for the netcode track.)
 
 ## Not Started
@@ -127,7 +127,7 @@ All six now carry a composed **`Combatant`** (below).
 - [ ] A **stance UI** (currently every keeper is hard-Aggressive to every other)
 - [ ] PvE: invading hero parties
 - [ ] Extend the Throne's `IAttackTarget` pattern to other structures worth defending
-- [ ] Bring Bridge into the same `IRestorableRoomManager` reconstruction as the other 8 room types
+- [ ] Add a **Bridge tool to the Level Designer** (reconstruction is done — `BridgeManager` implements `IRestorableRoomManager` now — but there's no way to author one in the editor)
 - [ ] A real "save my current game" flow, distinct from the one-time starting-level snapshot
 - [ ] Replace placeholder per-level stat curves with real per-creature scaling
 - [ ] Real art for Conversion Class (last room on primitives — possibly after a rework) and for creatures
