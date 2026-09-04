@@ -500,10 +500,13 @@ namespace KeepersDomain.Core
 
             var panMargin = 22.5f;
             var mapCenter = grid.GridToWorld(new Vector2Int(width / 2, height / 2));
-            CreateIsoCamera(grid, panMargin, mapCenter);
+            var camera = CreateIsoCamera(grid, panMargin, mapCenter);
 
             CreateComponent<NetHud>("NetHud").Initialize(isHost: false);
             CreateComponent<ClientHud>("ClientHud");
+            // Milestone 1c's two commands (queue a dig, summon an impling) —
+            // see NetGame.RequestDigRpc/RequestSummonImplingRpc.
+            CreateComponent<ClientInputController>("ClientInputController").Initialize(camera, grid);
 
             // Room decoration from the tile snapshot — same gold-free,
             // simulation-off managers the Level Designer's load path uses.

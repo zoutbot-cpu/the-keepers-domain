@@ -471,5 +471,46 @@ namespace KeepersDomain.Net
                 treasury.ApplyReplicatedGold(coord, amount);
             }
         }
+
+        // ---- client commands (Milestone 1c) ----
+
+        // Exactly one client can ever connect in M1 (NetSession.
+        // ApproveConnection caps the session at 2 total), and it's always
+        // assigned keeper 1 -- the same fixed assignment ClientHud.
+        // LocalOwnerId and KeeperNetState's HUD lookups already rely on.
+        // Real per-connection clientId -> ownerId mapping is M2, once more
+        // than one client can join.
+        private const int ClientOwnerId = 1;
+
+        /// Client — ClientInputController's Mine command. Routes to the
+        /// exact same DungeonGrid.RequestDig every local player's Mine tool
+        /// calls (TileInteractionController), so it's no-op-safe on
+        /// anything that isn't a valid dig target and picks up
+        /// BuilderJobBoard's own job-assignment/pathing unchanged. The
+        /// result replicates back to every client through the normal tile
+        /// delta path, not a direct reply.
+        [Rpc(SendTo.Server)]
+        public void RequestDigRpc(NetCoord coord)
+        {
+            if (_grid != null)
+            {
+                _grid.RequestDig(coord.ToVector2Int(), ClientOwnerId);
+            }
+        }
+
+        /// Client — ClientInputController's Summon Impling command. Routes
+        /// to keeper 1's own ImplingSpawner, the same mana-gated method the
+        /// offline Impling menu's Spawn button calls locally. The new
+        /// impling replicates back as a creature ghost (CreatureNetView),
+        /// same as any host-spawned creature.
+        [Rpc(SendTo.Server)]
+        public void RequestSummonImplingRpc(NetCoord coord)
+        {
+            var ctx = KeeperContext.ForOwner(ClientOwnerId);
+            if (ctx != null && ctx.ImplingSpawner != null)
+            {
+                ctx.ImplingSpawner.SpawnImplingAt(coord.ToVector2Int());
+            }
+        }
     }
 }
