@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using KeepersDomain.Grid;
@@ -97,6 +98,34 @@ namespace KeepersDomain.Rooms
         private readonly Dictionary<Vector2Int, int> _goldPileTiers = new Dictionary<Vector2Int, int>();
 
         private readonly List<GameObject> _previewMarkers = new List<GameObject>();
+
+        /// Fired whenever a tile's stored gold actually changes (Deposit,
+        /// TrySpendGold, AddGold — all funnel through RefreshGoldPileVisual)
+        /// — the host's NetGame relays this to the client so its own
+        /// (gold-free) TreasuryManager can mirror the pile visual instead of
+        /// showing bare floor forever (see ApplyReplicatedGold).
+        public event Action<Vector2Int, int> GoldChanged;
+
+        /// Every registered tile's current stored gold — read once by the
+        /// host's NetGame to catch a newly-joined client up on gold that
+        /// was deposited before it connected (live deltas only cover
+        /// changes from here on).
+        public IEnumerable<KeyValuePair<Vector2Int, int>> StoredGoldByTile => _storedGold;
+
+        /// Client-side mirror of a host tile's stored gold, applied off
+        /// NetGame's replication rather than any real deposit/spend — a
+        /// no-op if coord isn't a tile this (gold-free) TreasuryManager
+        /// knows about yet (RestoreRoom/RegisterTile hasn't run for it).
+        public void ApplyReplicatedGold(Vector2Int coord, int amount)
+        {
+            if (!_storedGold.ContainsKey(coord))
+            {
+                return;
+            }
+
+            _storedGold[coord] = amount;
+            RefreshGoldPileVisual(coord);
+        }
 
         /// Gold in reserves — summed across every registered Treasury tile.
         /// Read by the top-bar counter in BottomMenuBar.
@@ -568,6 +597,8 @@ namespace KeepersDomain.Rooms
         /// hasn't been set up yet (Tools > DungeonPack > Setup Props).
         private void RefreshGoldPileVisual(Vector2Int coord)
         {
+            GoldChanged?.Invoke(coord, _storedGold[coord]);
+
             var tier = GetGoldTier(_storedGold[coord]);
             if (_goldPileTiers.TryGetValue(coord, out var currentTier) && currentTier == tier)
             {

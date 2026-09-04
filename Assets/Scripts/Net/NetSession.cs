@@ -75,6 +75,7 @@ namespace KeepersDomain.Net
             RegisterPrefab("Net/NetGame");
             RegisterPrefab("Net/CreatureNetView");
             RegisterPrefab("Net/KeeperNetState");
+            RegisterPrefab("Net/SlimeNetView");
 
             _nm.ConnectionApprovalCallback = ApproveConnection;
             _nm.OnClientDisconnectCallback += HandleClientDisconnect;

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using KeepersDomain.Grid;
+using KeepersDomain.Net;
 
 namespace KeepersDomain.Rooms
 {
@@ -190,8 +191,23 @@ namespace KeepersDomain.Rooms
         private void SpawnSlime(string roomId)
         {
             var spawnCoord = _structureCoords[roomId];
-            var go = new GameObject($"Slime_{roomId}");
-            go.transform.SetParent(transform, false);
+
+            // Hosting a networked game: spawn a real NetworkObject so the
+            // client renders a ghost of this slime (see SlimeNetView) —
+            // same "networked prefab body + host-only agent" split
+            // CreatureNetView's callers use. Offline (or on the client,
+            // which never breeds its own — simulateBreeding is false
+            // there): the plain unparented GameObject as before.
+            GameObject go;
+            if (SlimeNetView.HostActive)
+            {
+                go = SlimeNetView.CreateHostBody(_grid.GridToWorld(spawnCoord));
+            }
+            else
+            {
+                go = new GameObject($"Slime_{roomId}");
+                go.transform.SetParent(transform, false);
+            }
 
             var agent = go.AddComponent<SlimeAgent>();
             agent.Initialize(_grid, this, roomId, _roomTiles[roomId], spawnCoord);

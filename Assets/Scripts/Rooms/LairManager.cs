@@ -135,6 +135,19 @@ namespace KeepersDomain.Rooms
         /// evict or reassign whatever had claimed it.
         public event Action<string> RoomSold;
 
+        /// Fired whenever a Lair tile's claimed/unclaimed visual actually
+        /// changes (TryClaimLairTile/ReleaseLairTile) — the host's NetGame
+        /// relays this to the client so its own (gold-free) LairManager
+        /// shows the same nest-bed state instead of every tile reading
+        /// permanently unclaimed.
+        public event Action<Vector2Int, bool> ClaimChanged;
+
+        /// Every currently claimed tile across every placed Lair — read
+        /// once by the host's NetGame to catch a newly-joined client up on
+        /// claims made before it connected (live deltas only cover changes
+        /// from here on).
+        public IEnumerable<Vector2Int> ClaimedTiles => _claimedTiles;
+
         public void Initialize(DungeonGrid grid, TreasuryManager treasuryManager, int ownerId = 0)
         {
             _grid = grid;
@@ -442,6 +455,7 @@ namespace KeepersDomain.Rooms
 
             _claimedTiles.Add(coord);
             BuildClaimedVisual(coord);
+            ClaimChanged?.Invoke(coord, true);
             return true;
         }
 
@@ -456,6 +470,7 @@ namespace KeepersDomain.Rooms
             }
 
             BuildUnclaimedVisual(coord);
+            ClaimChanged?.Invoke(coord, false);
             return true;
         }
 

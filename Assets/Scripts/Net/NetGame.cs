@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
+using KeepersDomain.Core;
 using KeepersDomain.Grid;
 using KeepersDomain.Input;
 using KeepersDomain.LevelDesigner;
@@ -60,6 +61,44 @@ namespace KeepersDomain.Net
             _grid.TileChanged += OnTileChanged;
         }
 
+        /// Host only — called from GameBootstrap.OnHostReady once every
+        /// KeeperContext (and its room managers) exists, so a Lair tile
+        /// being claimed by a creature or a Treasury tile's gold changing
+        /// relays to the client the same way tile deltas do. Neither is
+        /// DungeonGrid tile state (a claim is LairManager's own per-tile
+        /// bookkeeping; gold is TreasuryManager's), so they need their own
+        /// small events/RPCs rather than riding NetTile.
+        public void HostBindKeeperRooms()
+        {
+            if (KeeperContext.All == null)
+            {
+                return;
+            }
+
+            foreach (var ctx in KeeperContext.All)
+            {
+                if (ctx.Lair != null)
+                {
+                    ctx.Lair.ClaimChanged += OnHostLairClaimChanged;
+                }
+
+                if (ctx.Treasury != null)
+                {
+                    ctx.Treasury.GoldChanged += OnHostTreasuryGoldChanged;
+                }
+            }
+        }
+
+        private void OnHostLairClaimChanged(Vector2Int coord, bool claimed)
+        {
+            LairClaimChangedRpc(NetCoord.From(coord), claimed);
+        }
+
+        private void OnHostTreasuryGoldChanged(Vector2Int coord, int amount)
+        {
+            TreasuryGoldChangedRpc(NetCoord.From(coord), amount);
+        }
+
         public override void OnNetworkSpawn()
         {
             Instance = this;
@@ -93,6 +132,22 @@ namespace KeepersDomain.Net
             if (_grid != null)
             {
                 _grid.TileChanged -= OnTileChanged;
+            }
+
+            if (KeeperContext.All != null)
+            {
+                foreach (var ctx in KeeperContext.All)
+                {
+                    if (ctx.Lair != null)
+                    {
+                        ctx.Lair.ClaimChanged -= OnHostLairClaimChanged;
+                    }
+
+                    if (ctx.Treasury != null)
+                    {
+                        ctx.Treasury.GoldChanged -= OnHostTreasuryGoldChanged;
+                    }
+                }
             }
 
             if (Instance == this)
@@ -141,6 +196,59 @@ namespace KeepersDomain.Net
             }
 
             SnapshotDoneRpc(target);
+            SendRoomVisualStateSnapshot(target);
+        }
+
+        /// Host — catches a newly-joined client up on room-manager visual
+        /// state that isn't part of DungeonGrid's own tile data (lair
+        /// claims, treasury gold), across every keeper. Sent right after
+        /// SnapshotDoneRpc so RoomReconstruction has already registered
+        /// every tile these calls target (RPCs from one object arrive in
+        /// send order, same ordering SnapshotTilesRpc/SnapshotDoneRpc
+        /// already rely on).
+        private void SendRoomVisualStateSnapshot(RpcTarget target)
+        {
+            if (KeeperContext.All == null)
+            {
+                return;
+            }
+
+            var claimedCoords = new List<NetCoord>();
+            var goldCoords = new List<NetCoord>();
+            var goldAmounts = new List<int>();
+
+            foreach (var ctx in KeeperContext.All)
+            {
+                if (ctx.Lair != null)
+                {
+                    foreach (var coord in ctx.Lair.ClaimedTiles)
+                    {
+                        claimedCoords.Add(NetCoord.From(coord));
+                    }
+                }
+
+                if (ctx.Treasury != null)
+                {
+                    foreach (var entry in ctx.Treasury.StoredGoldByTile)
+                    {
+                        if (entry.Value > 0)
+                        {
+                            goldCoords.Add(NetCoord.From(entry.Key));
+                            goldAmounts.Add(entry.Value);
+                        }
+                    }
+                }
+            }
+
+            if (claimedCoords.Count > 0)
+            {
+                LairClaimsSnapshotRpc(claimedCoords.ToArray(), target);
+            }
+
+            if (goldCoords.Count > 0)
+            {
+                TreasuryGoldSnapshotRpc(goldCoords.ToArray(), goldAmounts.ToArray(), target);
+            }
         }
 
         /// Untouched Rock is never sent — DungeonGrid.Initialize already
@@ -294,6 +402,73 @@ namespace KeepersDomain.Net
                 _clientReconstructedRooms.Add(roomId);
                 _clientRoomFootprints.Remove(roomId);
                 _clientRoomOwners.Remove(roomId);
+            }
+        }
+
+        // ---- room-manager visual state (lair claims, treasury gold) ----
+
+        [Rpc(SendTo.SpecifiedInParams)]
+        private void LairClaimsSnapshotRpc(NetCoord[] claimedCoords, RpcParams p)
+        {
+            foreach (var c in claimedCoords)
+            {
+                ApplyLairClaim(c.ToVector2Int(), claimed: true);
+            }
+        }
+
+        [Rpc(SendTo.NotServer)]
+        private void LairClaimChangedRpc(NetCoord coord, bool claimed)
+        {
+            ApplyLairClaim(coord.ToVector2Int(), claimed);
+        }
+
+        /// Client — calls straight into the (gold-free) LairManager's own
+        /// claim/release, exactly as if a creature had claimed it locally.
+        /// That method is pure visual + local bookkeeping (no gold cost, no
+        /// gameplay side effect), so replaying it here is safe and needs no
+        /// separate "apply replicated" path the way TreasuryManager's gold
+        /// does. A no-op if the tile's room hasn't reconstructed yet (the
+        /// snapshot ordering above prevents that) or claim/release itself
+        /// rejects it (e.g. it's already in that state).
+        private void ApplyLairClaim(Vector2Int coord, bool claimed)
+        {
+            if (_clientRoomManagers != null
+                && _clientRoomManagers.TryGetValue(RoomDesignTool.Lair, out var manager)
+                && manager is LairManager lair)
+            {
+                if (claimed)
+                {
+                    lair.TryClaimLairTile(coord);
+                }
+                else
+                {
+                    lair.ReleaseLairTile(coord);
+                }
+            }
+        }
+
+        [Rpc(SendTo.SpecifiedInParams)]
+        private void TreasuryGoldSnapshotRpc(NetCoord[] coords, int[] amounts, RpcParams p)
+        {
+            for (int i = 0; i < coords.Length; i++)
+            {
+                ApplyTreasuryGold(coords[i].ToVector2Int(), amounts[i]);
+            }
+        }
+
+        [Rpc(SendTo.NotServer)]
+        private void TreasuryGoldChangedRpc(NetCoord coord, int amount)
+        {
+            ApplyTreasuryGold(coord.ToVector2Int(), amount);
+        }
+
+        private void ApplyTreasuryGold(Vector2Int coord, int amount)
+        {
+            if (_clientRoomManagers != null
+                && _clientRoomManagers.TryGetValue(RoomDesignTool.Treasury, out var manager)
+                && manager is TreasuryManager treasury)
+            {
+                treasury.ApplyReplicatedGold(coord, amount);
             }
         }
     }

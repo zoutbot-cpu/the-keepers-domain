@@ -184,7 +184,12 @@ namespace KeepersDomain.Core
 
             var netGameGo = Object.Instantiate(Resources.Load<GameObject>("Net/NetGame"));
             netGameGo.GetComponent<NetworkObject>().Spawn(destroyWithScene: true);
-            netGameGo.GetComponent<NetGame>().HostBind(grid);
+            var netGame = netGameGo.GetComponent<NetGame>();
+            netGame.HostBind(grid);
+            // Every KeeperContext (and its room managers) exists by now —
+            // relay their lair-claim / treasury-gold visual state to
+            // whichever client joins (see NetGame.HostBindKeeperRooms).
+            netGame.HostBindKeeperRooms();
 
             // One economy mirror per keeper, for the client HUD.
             var keeperPrefab = Resources.Load<GameObject>("Net/KeeperNetState");

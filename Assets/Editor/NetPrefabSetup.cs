@@ -3,6 +3,7 @@ using Unity.Netcode;
 using Unity.Netcode.Components;
 using UnityEditor;
 using UnityEngine;
+using KeepersDomain.Grid;
 using KeepersDomain.Net;
 
 namespace KeepersDomain.EditorTools
@@ -55,16 +56,33 @@ namespace KeepersDomain.EditorTools
                 go.AddComponent<CreatureNetView>();
             });
 
+            // Networked bred slime (SlimeHatcheryManager.SpawnSlime) — a
+            // plain sphere, pre-scaled/tinted to match SlimeAgent's own
+            // BuildVisual (Radius 0.15 -> 0.3 diameter, the same default
+            // blue). Unlike CreatureNetView there's no per-instance
+            // identity to replicate (a slime has no species/owner/hp), so
+            // baked-in looks + NetworkTransform's position sync are enough.
+            Build("SlimeNetView", empty: false, go =>
+            {
+                go.transform.localScale = Vector3.one * 0.3f;
+                var nt = go.AddComponent<NetworkTransform>();
+                nt.SyncScaleX = false;
+                nt.SyncScaleY = false;
+                nt.SyncScaleZ = false;
+                go.AddComponent<SlimeNetView>();
+                Prims.Tint(go, new Color(0.25f, 0.55f, 0.95f));
+            }, PrimitiveType.Sphere);
+
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
             Debug.Log($"Netcode prefabs written to {Dir}");
         }
 
-        private static void Build(string name, bool empty, System.Action<GameObject> addComponents)
+        private static void Build(string name, bool empty, System.Action<GameObject> addComponents, PrimitiveType primitive = PrimitiveType.Capsule)
         {
             var go = empty
                 ? new GameObject(name)
-                : GameObject.CreatePrimitive(PrimitiveType.Capsule);
+                : GameObject.CreatePrimitive(primitive);
             go.name = name;
 
             var col = go.GetComponent<Collider>();

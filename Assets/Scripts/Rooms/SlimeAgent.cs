@@ -109,6 +109,17 @@ namespace KeepersDomain.Rooms
 
         private void BuildVisual()
         {
+            // A networked host body (see SlimeHatcheryManager.SpawnSlime ->
+            // SlimeNetView.CreateHostBody) already IS a pre-scaled, tinted
+            // sphere — its own Renderer, not an empty parent — so building
+            // a second child sphere here would just double it up (and
+            // z-fight). Only the offline path (an empty GameObject with no
+            // renderer of its own) needs this built.
+            if (GetComponent<Renderer>() != null)
+            {
+                return;
+            }
+
             var visual = GameObject.CreatePrimitive(PrimitiveType.Sphere);
             visual.name = "SlimeBall";
             visual.transform.SetParent(transform, false);
