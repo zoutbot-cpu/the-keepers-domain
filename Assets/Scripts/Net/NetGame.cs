@@ -39,11 +39,16 @@ namespace KeepersDomain.Net
         private readonly List<Vector2Int> _flush = new List<Vector2Int>();
 
         // Client: gold-free room managers (from BuildClientWorld) + the
-        // room footprints gathered from the snapshot, replayed through
-        // RoomReconstruction once the whole snapshot has landed.
+        // room footprints gathered from replicated tiles, replayed through
+        // RoomReconstruction — once the whole snapshot has landed, then
+        // again per new room a live delta introduces (a Lair/Treasury/...
+        // built after this client joined).
         private Dictionary<RoomDesignTool, IRestorableRoomManager> _clientRoomManagers;
         private readonly Dictionary<string, List<Vector2Int>> _clientRoomFootprints = new Dictionary<string, List<Vector2Int>>();
         private readonly Dictionary<string, int> _clientRoomOwners = new Dictionary<string, int>();
+        private readonly HashSet<string> _clientReconstructedRooms = new HashSet<string>();
+        private readonly Dictionary<string, List<Vector2Int>> _clientRoomScratch = new Dictionary<string, List<Vector2Int>>();
+        private readonly Dictionary<string, int> _clientRoomOwnerScratch = new Dictionary<string, int>();
 
         /// Host only — called from GameBootstrap.BuildWorld right after the
         /// NetGame is spawned, once the grid exists.
@@ -151,7 +156,7 @@ namespace KeepersDomain.Net
         [Rpc(SendTo.SpecifiedInParams)]
         private void SnapshotTilesRpc(NetTile[] tiles, RpcParams p)
         {
-            Apply(tiles);
+            Apply(tiles, live: false);
         }
 
         /// Client — the tile snapshot is fully applied; rebuild real room
@@ -168,6 +173,11 @@ namespace KeepersDomain.Net
             }
 
             RoomReconstruction.RestoreRooms(_grid, _clientRoomFootprints, _clientRoomOwners, _clientRoomManagers);
+            foreach (var roomId in _clientRoomFootprints.Keys)
+            {
+                _clientReconstructedRooms.Add(roomId);
+            }
+
             _clientRoomFootprints.Clear();
             _clientRoomOwners.Clear();
         }
@@ -207,10 +217,10 @@ namespace KeepersDomain.Net
         [Rpc(SendTo.NotServer)]
         private void SyncTilesRpc(NetTile[] tiles)
         {
-            Apply(tiles);
+            Apply(tiles, live: true);
         }
 
-        private void Apply(NetTile[] tiles)
+        private void Apply(NetTile[] tiles, bool live)
         {
             if (_grid == null)
             {
@@ -237,6 +247,53 @@ namespace KeepersDomain.Net
 
                     list.Add(t.Coord);
                 }
+            }
+
+            if (live)
+            {
+                ReconstructNewRooms();
+            }
+        }
+
+        /// A room built after this client joined arrives as ordinary tile
+        /// deltas (Claimed Floor + a RoomId). Its whole footprint lands in
+        /// one host frame (LairManager.TryPlaceLair etc. claim atomically),
+        /// so once any of its tiles have been seen we can reconstruct it —
+        /// guarded by _clientReconstructedRooms so a later delta touching
+        /// the same room (a tile re-tag) doesn't rebuild its decoration.
+        private void ReconstructNewRooms()
+        {
+            if (_clientRoomManagers == null)
+            {
+                return;
+            }
+
+            _clientRoomScratch.Clear();
+            _clientRoomOwnerScratch.Clear();
+            foreach (var entry in _clientRoomFootprints)
+            {
+                if (_clientReconstructedRooms.Contains(entry.Key))
+                {
+                    continue;
+                }
+
+                _clientRoomScratch[entry.Key] = entry.Value;
+                _clientRoomOwnerScratch[entry.Key] =
+                    _clientRoomOwners.TryGetValue(entry.Key, out var o) ? o : 0;
+            }
+
+            if (_clientRoomScratch.Count == 0)
+            {
+                return;
+            }
+
+            RoomReconstruction.RestoreRooms(_grid, _clientRoomScratch, _clientRoomOwnerScratch, _clientRoomManagers);
+
+            foreach (var roomId in _clientRoomScratch.Keys)
+            {
+                _clientReconstructedRooms.Add(roomId);
+                _clientRoomFootprints.Remove(roomId);
+                _clientRoomOwners.Remove(roomId);
             }
         }
     }

@@ -2018,6 +2018,36 @@ namespace KeepersDomain.Grid
                 _ => null
             };
             _queuedActionIcons[coord.x, coord.y] = iconRoot;
+
+            // Pickaxe / Shield float above a Rock wall; in "half wall" mode
+            // that wall is squashed, so drop the icon to match (Hammer sits
+            // on the floor and is unaffected — it keeps its own Y).
+            if (iconRoot != null && (icon == QueuedIcon.Pickaxe || icon == QueuedIcon.Shield))
+            {
+                iconRoot.transform.localPosition = new Vector3(0f, QueuedIconLocalY(coord), 0f);
+            }
+        }
+
+        /// Local Y for a wall-floating queued icon (Pickaxe / Shield): the
+        /// fixed float height at full wall size, dropped by the height the
+        /// wall mesh loses under "half wall" mode (see ApplyWallChildTransform
+        /// — squashed to half about its base, so it ends up one current
+        /// bounds-height shorter) so the icon still reads as marking that
+        /// specific tile rather than hovering in mid-air above it.
+        private float QueuedIconLocalY(Vector2Int coord)
+        {
+            var y = QueuedIconFloatHeight;
+            if (_halfWalls)
+            {
+                var child = _visualChildren[coord.x, coord.y];
+                var renderer = child != null ? child.GetComponentInChildren<Renderer>() : null;
+                if (renderer != null)
+                {
+                    y -= renderer.bounds.size.y;
+                }
+            }
+
+            return y;
         }
 
         /// A diagonal handle crossed by a shorter head near one end —
@@ -2219,6 +2249,16 @@ namespace KeepersDomain.Grid
                     if (child != null && GetWallMeshPrefab(_tiles[x, y]) != null)
                     {
                         ApplyWallChildTransform(child.transform);
+                    }
+
+                    // Re-seat any dig/reinforce icon on this tile at the new
+                    // wall height (UpdateQueuedActionIcon only runs on a tile
+                    // change, not on this toggle).
+                    var iconRoot = _queuedActionIcons[x, y];
+                    var iconKind = _queuedActionIconKind[x, y];
+                    if (iconRoot != null && (iconKind == QueuedIcon.Pickaxe || iconKind == QueuedIcon.Shield))
+                    {
+                        iconRoot.transform.localPosition = new Vector3(0f, QueuedIconLocalY(new Vector2Int(x, y)), 0f);
                     }
                 }
             }
