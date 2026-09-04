@@ -3,7 +3,6 @@ using Unity.Netcode;
 using Unity.Netcode.Components;
 using UnityEditor;
 using UnityEngine;
-using KeepersDomain.Grid;
 using KeepersDomain.Net;
 
 namespace KeepersDomain.EditorTools
@@ -34,6 +33,28 @@ namespace KeepersDomain.EditorTools
             {
                 var mat = new Material(Shader.Find("Universal Render Pipeline/Lit")) { name = "M_Prim" };
                 AssetDatabase.CreateAsset(mat, primMatPath);
+            }
+
+            // SlimeNetView's own pre-tinted material — a real asset for the
+            // same reason M_Prim is: this gets baked into a PREFAB by this
+            // Editor tool, not assigned at runtime, and Prims.Tint's
+            // `renderer.material = new Material(...)` only produces a
+            // proper persisted reference when called at runtime. Called at
+            // edit time to build a prefab, that instance doesn't survive
+            // PrefabUtility.SaveAsPrefabAsset — it came back magenta in a
+            // build. A saved .mat asset (Prims.NewMaterial's own approach,
+            // just persisted here instead of thrown away) sidesteps that.
+            var slimeMatPath = $"{SharedDir}/M_SlimeNetView.mat";
+            var slimeMat = AssetDatabase.LoadAssetAtPath<Material>(slimeMatPath);
+            if (slimeMat == null)
+            {
+                // Matches SlimeAgent's own default _color.
+                slimeMat = new Material(Shader.Find("Universal Render Pipeline/Lit"))
+                {
+                    name = "M_SlimeNetView",
+                    color = new Color(0.25f, 0.55f, 0.95f),
+                };
+                AssetDatabase.CreateAsset(slimeMat, slimeMatPath);
             }
 
             // Session-lifetime controller — no transform, just a
@@ -70,7 +91,7 @@ namespace KeepersDomain.EditorTools
                 nt.SyncScaleY = false;
                 nt.SyncScaleZ = false;
                 go.AddComponent<SlimeNetView>();
-                Prims.Tint(go, new Color(0.25f, 0.55f, 0.95f));
+                go.GetComponent<Renderer>().sharedMaterial = slimeMat;
             }, PrimitiveType.Sphere);
 
             AssetDatabase.SaveAssets();
