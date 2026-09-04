@@ -2,12 +2,17 @@ using UnityEngine;
 
 namespace KeepersDomain.Net
 {
-    /// Tiny corner overlay for a networked session — the host's join code
-    /// to share, or the client's connection state. Created by GameBootstrap
-    /// (OnHostReady / BuildClientWorld). Milestone 1a placeholder; folds
-    /// into the real HUD later.
+    /// Tiny top-center overlay for a networked session — the host's join
+    /// code to share, or the client's connection state. Created by
+    /// GameBootstrap (OnHostReady / BuildClientWorld). Milestone 1a
+    /// placeholder; folds into the real HUD later. Top-center rather than
+    /// a corner so it doesn't sit under ClientInputController's own
+    /// top-left toolbar/recruit buttons.
     public class NetHud : MonoBehaviour
     {
+        private const float BoxWidth = 260f;
+        private const float TopMargin = 10f;
+
         private bool _isHost;
 
         public void Initialize(bool isHost)
@@ -23,7 +28,7 @@ namespace KeepersDomain.Net
                 return;
             }
 
-            var box = new Rect(10f, 10f, 260f, _isHost ? 54f : 34f);
+            var box = new Rect((Screen.width - BoxWidth) * 0.5f, TopMargin, BoxWidth, _isHost ? 54f : 34f);
             GUI.Box(box, GUIContent.none);
 
             if (_isHost)
