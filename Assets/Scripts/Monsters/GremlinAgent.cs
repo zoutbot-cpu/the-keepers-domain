@@ -121,11 +121,20 @@ namespace KeepersDomain.Monsters
             Attackspeed = 0.8f
         };
 
+        // Basic per-level growth — no design-brief curve exists yet, so
+        // this just applies the same "roughly +10% Strength, +7.5%
+        // Attackspeed, +5% Movespeed per level, +1 Armor by level 10"
+        // ratios the Imp's own growth block already uses, scaled off this
+        // creature's own base stats instead of copying the Imp's numbers.
         [SerializeField]
         private CreatureStatBlock _growthPerLevel = new CreatureStatBlock
         {
             MaxHP = 8f,
-            HPRegen = 0.2f
+            HPRegen = 0.2f,
+            Strength = 1.5f,
+            Movespeed = 0.175f,
+            Attackspeed = 0.06f,
+            Armor = 1f / 9f
         };
 
         // Exp needed per level is Level * _expPerLevelStep (see

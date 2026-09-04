@@ -84,11 +84,19 @@ namespace KeepersDomain.Monsters
             Attackspeed = 0.5f
         };
 
+        // Same growth ratios as every other creature's block (+10%
+        // Strength, +7.5% Attackspeed, +5% Movespeed per level, +1 Armor
+        // by level 10) — an Elf still stays the weakest option at any given
+        // level since its base stats are so far below everyone else's.
         [SerializeField]
         private CreatureStatBlock _growthPerLevel = new CreatureStatBlock
         {
             MaxHP = 3f,
-            HPRegen = 0.1f
+            HPRegen = 0.1f,
+            Strength = 0.4f,
+            Movespeed = 0.15f,
+            Attackspeed = 0.04f,
+            Armor = 1f / 9f
         };
 
         [SerializeField] private int _expPerLevelStep = 100;

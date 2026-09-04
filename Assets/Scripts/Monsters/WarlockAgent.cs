@@ -124,11 +124,19 @@ namespace KeepersDomain.Monsters
             Attackspeed = 0.6f
         };
 
+        // Basic per-level growth — same "+10% Strength, +7.5% Attackspeed,
+        // +5% Movespeed per level, +1 Armor by level 10" ratios as Gremlin's
+        // own growth block, scaled off this creature's own (lower) base
+        // stats — no design-brief curve exists yet.
         [SerializeField]
         private CreatureStatBlock _growthPerLevel = new CreatureStatBlock
         {
             MaxHP = 8f,
-            HPRegen = 0.2f
+            HPRegen = 0.2f,
+            Strength = 1f,
+            Movespeed = 0.125f,
+            Attackspeed = 0.045f,
+            Armor = 1f / 9f
         };
 
         // Same default as Gremlin's for now — see design-doc.md's leveling

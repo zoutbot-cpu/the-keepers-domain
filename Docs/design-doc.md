@@ -20,7 +20,7 @@ Every creature has:
 - Armor
 - Lifesteal
 
-All of these scale up with level. Exact per-level scaling curve is TBD per stat (likely differs by creature — e.g. an Imp scales Strength/Craftmanship more than Intelligence).
+All of these scale up with level. Exact per-level scaling curve is still an unbalanced placeholder, but every creature now has a basic one covering HP, HP regen, Strength, Movespeed, Attackspeed, and Armor — Strength grows roughly +10%/level, Attackspeed +7.5%/level, Movespeed +5%/level (all off that creature's own base stat, so a weaker creature stays proportionally weaker), and Armor reaches +1 by level 10 for every creature. Mana/Intelligence/Craftmanship/Lifesteal still don't grow — nothing consumes them yet (see each creature's own implementation note).
 
 ### Leveling
 - Levels run 1–10.
