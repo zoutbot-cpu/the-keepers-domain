@@ -2121,7 +2121,7 @@ namespace KeepersDomain.Grid
             var closestDistance = float.MaxValue;
             for (int i = 0; i < palette.Length; i++)
             {
-                var distance = (palette[i] - color).sqrMagnitude;
+                var distance = ((Vector4)palette[i] - (Vector4)color).sqrMagnitude;
                 if (distance < closestDistance)
                 {
                     closestDistance = distance;
