@@ -39,16 +39,15 @@ namespace KeepersDomain.Creatures
             }
         }
 
-        /// Applies the species look to `body` (a capsule) and grounds it on
-        /// groundPos — the default capsule is 2 units tall at scale 1, so
-        /// half its height is `Height`, which is exactly the up-offset that
-        /// sits its feet on the tile. Strips the collider CreatePrimitive
-        /// adds (creatures don't collide).
-        public static void ShapeBody(GameObject body, EditorCreatureKind kind, Vector3 groundPos)
+        /// Species colour + capsule proportions only (no position) — used
+        /// on both sides of the wire: the host via ShapeBody, the client on
+        /// its CreatureNetView ghost (whose position is driven by
+        /// NetworkTransform, not us). Strips any collider — creatures don't
+        /// collide.
+        public static void ApplyLook(GameObject body, EditorCreatureKind kind)
         {
             var look = LookFor(kind);
             body.transform.localScale = new Vector3(look.Radius, look.Height, look.Radius);
-            body.transform.position = groundPos + Vector3.up * look.Height;
 
             var renderer = body.GetComponent<Renderer>();
             if (renderer != null)
@@ -62,6 +61,20 @@ namespace KeepersDomain.Creatures
                 Object.Destroy(collider);
             }
         }
+
+        /// ApplyLook plus grounding on groundPos — the default capsule is 2
+        /// units tall at scale 1, so half its height is `Height`, exactly
+        /// the up-offset that sits its feet on the tile. The host path.
+        public static void ShapeBody(GameObject body, EditorCreatureKind kind, Vector3 groundPos)
+        {
+            ApplyLook(body, kind);
+            body.transform.position = groundPos + Vector3.up * LookFor(kind).Height;
+        }
+
+        /// Half the capsule's height — the up-offset a body sits at above
+        /// its tile. The client uses it to place the health ring / read the
+        /// ground position back off a ghost.
+        public static float GroundOffset(EditorCreatureKind kind) => LookFor(kind).Height;
 
         /// Offline path — a fresh capsule primitive, shaped and named.
         public static GameObject CreateOfflineBody(EditorCreatureKind kind, Vector3 groundPos)

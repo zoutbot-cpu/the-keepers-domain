@@ -3,6 +3,7 @@ using KeepersDomain.Grid;
 using KeepersDomain.Rooms;
 using KeepersDomain.Creatures;
 using KeepersDomain.LevelDesigner;
+using KeepersDomain.Net;
 using KeepersDomain.DebugUI;
 
 namespace KeepersDomain.Implings
@@ -73,10 +74,13 @@ namespace KeepersDomain.Implings
                 return;
             }
 
-            var visual = CreatureFactory.CreateOfflineBody(EditorCreatureKind.Imp, homeWorldPos);
+            var visual = CreatureNetView.HostActive
+                ? CreatureNetView.CreateHostBody(EditorCreatureKind.Imp, homeWorldPos)
+                : CreatureFactory.CreateOfflineBody(EditorCreatureKind.Imp, homeWorldPos);
 
             var agent = visual.AddComponent<ImplingAgent>();
             agent.Initialize(_jobBoard, _grid, homeWorldPos, _treasuryManager, _throneRoom, _slimeHatchery, _tavern, ImplingManaUpkeep, ownerId);
+            CreatureNetView.HostFinalize(visual, EditorCreatureKind.Imp, agent.Creature);
             GameplayLog.Write(ownerId, $"{agent.Name} spawned at {_grid.WorldToGrid(homeWorldPos)}");
         }
     }

@@ -3,6 +3,7 @@ using KeepersDomain.Grid;
 using KeepersDomain.Rooms;
 using KeepersDomain.Creatures;
 using KeepersDomain.LevelDesigner;
+using KeepersDomain.Net;
 using KeepersDomain.DebugUI;
 
 namespace KeepersDomain.Monsters
@@ -99,10 +100,13 @@ namespace KeepersDomain.Monsters
         {
             var worldPos = _grid.GridToWorld(coord);
 
-            var visual = CreatureFactory.CreateOfflineBody(EditorCreatureKind.MazeRattler, worldPos);
+            var visual = CreatureNetView.HostActive
+                ? CreatureNetView.CreateHostBody(EditorCreatureKind.MazeRattler, worldPos)
+                : CreatureFactory.CreateOfflineBody(EditorCreatureKind.MazeRattler, worldPos);
 
             var agent = visual.AddComponent<MazeRattlerAgent>();
             agent.Initialize(_grid, _lairManager, _tavernManager, _trainingRoomManager, _jailManager, _treasuryManager, _portal, ownerId);
+            CreatureNetView.HostFinalize(visual, EditorCreatureKind.MazeRattler, agent.Creature);
             GameplayLog.Write(agent.Creature.OwnerId, $"{agent.Name} joined via the Portal at ({coord.x},{coord.y})");
         }
     }

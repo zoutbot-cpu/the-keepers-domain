@@ -3,6 +3,7 @@ using KeepersDomain.Grid;
 using KeepersDomain.Rooms;
 using KeepersDomain.Creatures;
 using KeepersDomain.LevelDesigner;
+using KeepersDomain.Net;
 using KeepersDomain.DebugUI;
 
 namespace KeepersDomain.Monsters
@@ -120,10 +121,13 @@ namespace KeepersDomain.Monsters
         {
             var worldPos = _grid.GridToWorld(coord);
 
-            var visual = CreatureFactory.CreateOfflineBody(EditorCreatureKind.Warlock, worldPos);
+            var visual = CreatureNetView.HostActive
+                ? CreatureNetView.CreateHostBody(EditorCreatureKind.Warlock, worldPos)
+                : CreatureFactory.CreateOfflineBody(EditorCreatureKind.Warlock, worldPos);
 
             var agent = visual.AddComponent<WarlockAgent>();
             agent.Initialize(_grid, _lairManager, _tavernManager, _libraryManager, _trainingRoomManager, _treasuryManager, _portal, ownerId);
+            CreatureNetView.HostFinalize(visual, EditorCreatureKind.Warlock, agent.Creature);
             GameplayLog.Write(agent.Creature.OwnerId, $"{agent.Name} joined via the Portal at ({coord.x},{coord.y})");
         }
     }

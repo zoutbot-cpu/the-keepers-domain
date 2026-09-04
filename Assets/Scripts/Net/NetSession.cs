@@ -70,20 +70,27 @@ namespace KeepersDomain.Net
                 TickRate = 30,
             };
 
-            // The single session-lifetime networked object (Resources/Net/
-            // NetGame). Built by Tools > Net > Setup Netcode Prefabs.
-            var netGame = Resources.Load<GameObject>("Net/NetGame");
-            if (netGame != null)
-            {
-                _nm.AddNetworkPrefab(netGame);
-            }
-            else
-            {
-                Debug.LogError("NetSession: Resources/Net/NetGame prefab missing — run Tools > Net > Setup Netcode Prefabs.");
-            }
+            // The networked prefabs GameBootstrap spawns at runtime. Built
+            // by Tools > Net > Setup Netcode Prefabs.
+            RegisterPrefab("Net/NetGame");
+            RegisterPrefab("Net/CreatureNetView");
+            RegisterPrefab("Net/KeeperNetState");
 
             _nm.ConnectionApprovalCallback = ApproveConnection;
             _nm.OnClientDisconnectCallback += HandleClientDisconnect;
+        }
+
+        private void RegisterPrefab(string resourcePath)
+        {
+            var prefab = Resources.Load<GameObject>(resourcePath);
+            if (prefab != null)
+            {
+                _nm.AddNetworkPrefab(prefab);
+            }
+            else
+            {
+                Debug.LogError($"NetSession: Resources/{resourcePath} prefab missing — run Tools > Net > Setup Netcode Prefabs.");
+            }
         }
 
         private void ApproveConnection(NetworkManager.ConnectionApprovalRequest req,

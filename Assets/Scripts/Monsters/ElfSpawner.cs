@@ -3,6 +3,7 @@ using KeepersDomain.Grid;
 using KeepersDomain.Rooms;
 using KeepersDomain.Creatures;
 using KeepersDomain.LevelDesigner;
+using KeepersDomain.Net;
 using KeepersDomain.DebugUI;
 
 namespace KeepersDomain.Monsters
@@ -37,10 +38,13 @@ namespace KeepersDomain.Monsters
         {
             var worldPos = _grid.GridToWorld(coord);
 
-            var visual = CreatureFactory.CreateOfflineBody(EditorCreatureKind.Elf, worldPos);
+            var visual = CreatureNetView.HostActive
+                ? CreatureNetView.CreateHostBody(EditorCreatureKind.Elf, worldPos)
+                : CreatureFactory.CreateOfflineBody(EditorCreatureKind.Elf, worldPos);
 
             var agent = visual.AddComponent<ElfAgent>();
             agent.Initialize(_grid, _lairManager, _tavernManager, _treasuryManager, _portal, ownerId);
+            CreatureNetView.HostFinalize(visual, EditorCreatureKind.Elf, agent.Creature);
             GameplayLog.Write(agent.Creature.OwnerId, $"{agent.Name} shuffled into existence, weak and worthless, at ({coord.x},{coord.y})");
         }
     }

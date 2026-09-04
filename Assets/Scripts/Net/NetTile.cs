@@ -70,10 +70,11 @@ namespace KeepersDomain.Net
             s.WallResourceType = (WallResourceType)WallResourceType;
             s.Hp = Hp;
             s.PitDepth = PitDepth;
-            s.RoomId = RoomId.IsEmpty ? null : RoomId.ToString();
-            // Floor/room tiles are buildable in gameplay; the client only
-            // renders, so any non-Rock tile can carry the default. Rooms
-            // set HasRoom via RoomId above.
+            // RoomId deliberately NOT applied — a room tile lands on the
+            // client as plain Claimed Floor so RoomReconstruction's
+            // TryAssignRoom can tag + decorate it (see NetGame). The RoomId
+            // is still carried on the wire (above) for NetGame's footprint
+            // bookkeeping.
             s.IsBuildable = (TileType)Type != TileType.Rock;
             return s;
         }

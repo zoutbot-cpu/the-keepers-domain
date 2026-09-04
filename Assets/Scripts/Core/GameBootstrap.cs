@@ -181,11 +181,22 @@ namespace KeepersDomain.Core
             BuildWorld(LevelFileIO.Load("level1"));
 
             var grid = Object.FindAnyObjectByType<DungeonGrid>();
-            var prefab = Resources.Load<GameObject>("Net/NetGame");
-            var netGameGo = Object.Instantiate(prefab);
-            var netObj = netGameGo.GetComponent<NetworkObject>();
-            netObj.Spawn(destroyWithScene: true);
+
+            var netGameGo = Object.Instantiate(Resources.Load<GameObject>("Net/NetGame"));
+            netGameGo.GetComponent<NetworkObject>().Spawn(destroyWithScene: true);
             netGameGo.GetComponent<NetGame>().HostBind(grid);
+
+            // One economy mirror per keeper, for the client HUD.
+            var keeperPrefab = Resources.Load<GameObject>("Net/KeeperNetState");
+            if (KeeperContext.All != null)
+            {
+                foreach (var ctx in KeeperContext.All)
+                {
+                    var go = Object.Instantiate(keeperPrefab);
+                    go.GetComponent<NetworkObject>().Spawn(destroyWithScene: true);
+                    go.GetComponent<KeeperNetState>().HostBind(ctx);
+                }
+            }
 
             CreateComponent<NetHud>("NetHud").Initialize(isHost: true);
         }
@@ -447,15 +458,17 @@ namespace KeepersDomain.Core
         /// gets populated does, so only those specific spots below branch
         /// on data; everything else runs unconditionally exactly as
         /// before.
-        /// The joined client's world (Milestone 1a) — deliberately thin: it
+        /// The joined client's world (Milestone 1b) — deliberately thin: it
         /// RENDERS, it never simulates. No KeeperContext, no job boards, no
-        /// room managers, no spawners, no StanceRegistry. Just a grid the
-        /// host's NetGame fills via a snapshot + live tile deltas (see
-        /// DungeonGrid.ApplyReplicatedTile), a local pan/zoom camera, and
-        /// the cosmetic liquid animator. Creature ghosts, HUD state and
-        /// client commands arrive in later milestones. Called synchronously
-        /// from NetGame's client-side OnNetworkSpawn, so the grid exists
-        /// before NetGame requests the snapshot on the next line there.
+        /// spawners, no StanceRegistry. A grid the host's NetGame fills via
+        /// a snapshot + live tile deltas (DungeonGrid.ApplyReplicatedTile),
+        /// a local pan/zoom camera, the cosmetic liquid animator, a slim
+        /// HUD, and a gold-free / sim-off room-manager set purely so
+        /// RoomReconstruction can rebuild room decoration from the snapshot
+        /// (NetGame drives that once the snapshot lands). Creature ghosts
+        /// self-render (CreatureNetView). Called synchronously from NetGame's
+        /// client-side OnNetworkSpawn, so the grid exists before NetGame
+        /// requests the snapshot on the next line there.
         private static void BuildClientWorld()
         {
             KeeperContext.All = null;
@@ -472,7 +485,7 @@ namespace KeepersDomain.Core
             grid.Initialize(width, height, CellSize);
 
             // Placeholder 2-colour palette so owner-tinted floor / orbs /
-            // rings read on the client until the real roster syncs (M1b).
+            // rings read on the client until the real roster syncs (M2).
             grid.OwnerColors = new[] { LevelDesignerColors.Palette[0], LevelDesignerColors.Palette[1] };
             grid.PlayerColor = grid.OwnerColors[0];
             grid.TintFloorByOwner = true;
@@ -485,6 +498,12 @@ namespace KeepersDomain.Core
             CreateIsoCamera(grid, panMargin, mapCenter);
 
             CreateComponent<NetHud>("NetHud").Initialize(isHost: false);
+            CreateComponent<ClientHud>("ClientHud");
+
+            // Room decoration from the tile snapshot — same gold-free,
+            // simulation-off managers the Level Designer's load path uses.
+            var roomManagers = CreateLevelDesignerRoomManagers(grid);
+            netGame?.ClientBindRooms(grid, roomManagers);
         }
 
         private static void BuildWorld(LevelData data = null)

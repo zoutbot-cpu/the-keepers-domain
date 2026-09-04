@@ -2,6 +2,9 @@ using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 using KeepersDomain.Grid;
+using KeepersDomain.Input;
+using KeepersDomain.LevelDesigner;
+using KeepersDomain.Rooms;
 
 namespace KeepersDomain.Net
 {
@@ -35,6 +38,13 @@ namespace KeepersDomain.Net
         private readonly HashSet<Vector2Int> _dirty = new HashSet<Vector2Int>();
         private readonly List<Vector2Int> _flush = new List<Vector2Int>();
 
+        // Client: gold-free room managers (from BuildClientWorld) + the
+        // room footprints gathered from the snapshot, replayed through
+        // RoomReconstruction once the whole snapshot has landed.
+        private Dictionary<RoomDesignTool, IRestorableRoomManager> _clientRoomManagers;
+        private readonly Dictionary<string, List<Vector2Int>> _clientRoomFootprints = new Dictionary<string, List<Vector2Int>>();
+        private readonly Dictionary<string, int> _clientRoomOwners = new Dictionary<string, int>();
+
         /// Host only — called from GameBootstrap.BuildWorld right after the
         /// NetGame is spawned, once the grid exists.
         public void HostBind(DungeonGrid grid)
@@ -54,11 +64,23 @@ namespace KeepersDomain.Net
                 return;
             }
 
-            // Client: build the render-only world (creates the DungeonGrid),
-            // then pull the current grid state from the host.
+            // Client: build the render-only world (creates the DungeonGrid
+            // and calls ClientBindRooms below), then pull the grid state.
             NetSession.Instance?.OnClientReady?.Invoke();
-            _grid = FindAnyObjectByType<DungeonGrid>();
+            if (_grid == null)
+            {
+                _grid = FindAnyObjectByType<DungeonGrid>();
+            }
+
             RequestSnapshotRpc();
+        }
+
+        /// Client — GameBootstrap.BuildClientWorld hands over the grid and
+        /// the gold-free room managers.
+        public void ClientBindRooms(DungeonGrid grid, Dictionary<RoomDesignTool, IRestorableRoomManager> roomManagers)
+        {
+            _grid = grid;
+            _clientRoomManagers = roomManagers;
         }
 
         public override void OnNetworkDespawn()
@@ -112,6 +134,8 @@ namespace KeepersDomain.Net
             {
                 SnapshotTilesRpc(batch.ToArray(), target);
             }
+
+            SnapshotDoneRpc(target);
         }
 
         /// Untouched Rock is never sent — DungeonGrid.Initialize already
@@ -128,6 +152,24 @@ namespace KeepersDomain.Net
         private void SnapshotTilesRpc(NetTile[] tiles, RpcParams p)
         {
             Apply(tiles);
+        }
+
+        /// Client — the tile snapshot is fully applied; rebuild real room
+        /// decoration (carpet/bookcases/pit/...) so rooms aren't flat pink.
+        /// Room tiles arrive from the snapshot already Claimed Floor but
+        /// WITHOUT a RoomId (see NetTile.ToTileState) so RestoreRoom's
+        /// TryAssignRoom can tag + decorate them here.
+        [Rpc(SendTo.SpecifiedInParams)]
+        private void SnapshotDoneRpc(RpcParams p)
+        {
+            if (_grid == null || _clientRoomManagers == null || _clientRoomFootprints.Count == 0)
+            {
+                return;
+            }
+
+            RoomReconstruction.RestoreRooms(_grid, _clientRoomFootprints, _clientRoomOwners, _clientRoomManagers);
+            _clientRoomFootprints.Clear();
+            _clientRoomOwners.Clear();
         }
 
         // ---- live deltas ----
@@ -182,6 +224,19 @@ namespace KeepersDomain.Net
             foreach (var t in tiles)
             {
                 _grid.ApplyReplicatedTile(t.Coord, t.ToTileState());
+
+                if (!t.RoomId.IsEmpty)
+                {
+                    var roomId = t.RoomId.ToString();
+                    if (!_clientRoomFootprints.TryGetValue(roomId, out var list))
+                    {
+                        list = new List<Vector2Int>();
+                        _clientRoomFootprints[roomId] = list;
+                        _clientRoomOwners[roomId] = t.OwnerId;
+                    }
+
+                    list.Add(t.Coord);
+                }
             }
         }
     }
