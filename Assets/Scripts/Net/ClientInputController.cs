@@ -1,6 +1,7 @@
 using UnityEngine;
 using KeepersDomain.Grid;
 using KeepersDomain.Input;
+using KeepersDomain.LevelDesigner;
 
 namespace KeepersDomain.Net
 {
@@ -23,18 +24,33 @@ namespace KeepersDomain.Net
             Reinforce,
             Cancel,
             Sell,
+            Bridge,
             SummonImpling
         }
 
         // (command, button label) — order here is the order they're drawn
-        // in the toolbar.
+        // in the toolbar. Each of these needs a tile tap after arming.
         private static readonly (Command Command, string Label)[] Buttons =
         {
             (Command.Mine, "Mine"),
             (Command.Reinforce, "Reinforce"),
             (Command.Cancel, "Cancel"),
             (Command.Sell, "Sell"),
+            (Command.Bridge, "Bridge"),
             (Command.SummonImpling, "Summon Impling"),
+        };
+
+        // Recruit fires immediately on click — no tile target, so it's a
+        // separate row of plain buttons rather than an arm-then-tap toggle.
+        // No live pool-count/gating shown yet (that needs KeeperNetState to
+        // replicate each recruit pool — a later polish pass); the host's
+        // TryRecruitX already no-ops silently if nothing's available.
+        private static readonly (EditorCreatureKind Kind, string Label)[] RecruitButtons =
+        {
+            (EditorCreatureKind.Gremlin, "Recruit Gremlin"),
+            (EditorCreatureKind.Warlock, "Recruit Warlock"),
+            (EditorCreatureKind.MazeRattler, "Recruit Maze Rattler"),
+            (EditorCreatureKind.BeanCounter, "Recruit Bean Counter"),
         };
 
         private const float ToolbarMargin = 10f;
@@ -46,6 +62,7 @@ namespace KeepersDomain.Net
         private DungeonGrid _grid;
         private Command _command = Command.None;
         private Rect _toolbarRect;
+        private Rect _recruitRect;
 
         public void Initialize(Camera camera, DungeonGrid grid)
         {
@@ -86,6 +103,26 @@ namespace KeepersDomain.Net
             }
 
             _command = anyOn ? newCommand : Command.None;
+
+            // Recruit row — plain instant buttons, drawn right below the
+            // tile-tap toolbar.
+            _recruitRect = new Rect(ToolbarMargin, _toolbarRect.yMax + ToolbarButtonSpacing, ToolbarWidth,
+                (ToolbarButtonHeight + ToolbarButtonSpacing) * RecruitButtons.Length + ToolbarButtonSpacing);
+            GUI.Box(_recruitRect, GUIContent.none);
+
+            for (int i = 0; i < RecruitButtons.Length; i++)
+            {
+                var rect = new Rect(
+                    _recruitRect.x + ToolbarButtonSpacing,
+                    _recruitRect.y + ToolbarButtonSpacing + i * (ToolbarButtonHeight + ToolbarButtonSpacing),
+                    ToolbarWidth - ToolbarButtonSpacing * 2f,
+                    ToolbarButtonHeight);
+
+                if (GUI.Button(rect, RecruitButtons[i].Label) && NetGame.Instance != null)
+                {
+                    NetGame.Instance.RequestRecruitRpc(RecruitButtons[i].Kind);
+                }
+            }
         }
 
         private void Update()
@@ -100,9 +137,10 @@ namespace KeepersDomain.Net
 
             // GUI space is top-left-origin, screenPos (Input System) is
             // bottom-left-origin — flip Y before testing against the
-            // toolbar rect so a tap on the buttons doesn't also queue a
-            // command on whatever tile happens to sit behind them.
-            if (_toolbarRect.Contains(new Vector2(screenPos.x, Screen.height - screenPos.y)))
+            // toolbar/recruit rects so a tap on a button doesn't also queue
+            // a command on whatever tile happens to sit behind it.
+            var guiSpacePos = new Vector2(screenPos.x, Screen.height - screenPos.y);
+            if (_toolbarRect.Contains(guiSpacePos) || _recruitRect.Contains(guiSpacePos))
             {
                 return;
             }
@@ -126,6 +164,9 @@ namespace KeepersDomain.Net
                     break;
                 case Command.Sell:
                     NetGame.Instance.RequestSellRoomRpc(netCoord);
+                    break;
+                case Command.Bridge:
+                    NetGame.Instance.RequestBridgeTileRpc(netCoord);
                     break;
                 case Command.SummonImpling:
                     NetGame.Instance.RequestSummonImplingRpc(netCoord);

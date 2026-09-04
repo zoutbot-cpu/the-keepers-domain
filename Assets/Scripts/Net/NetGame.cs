@@ -572,5 +572,52 @@ namespace KeepersDomain.Net
                 ctx.Lair.TrySellRoom(coord.ToVector2Int());
             }
         }
+
+        /// Client — ClientInputController's Bridge command. Routes to
+        /// keeper 1's own BridgeManager.TryPlaceBridgeTile, the same
+        /// instant gold-charged line-paint action the offline Bridge tool
+        /// uses (one call per tile the gesture passes over).
+        [Rpc(SendTo.Server)]
+        public void RequestBridgeTileRpc(NetCoord coord)
+        {
+            var ctx = KeeperContext.ForOwner(ClientOwnerId);
+            if (ctx != null && ctx.Bridge != null)
+            {
+                ctx.Bridge.TryPlaceBridgeTile(coord.ToVector2Int());
+            }
+        }
+
+        /// Client — ClientInputController's Recruit buttons. Routes to
+        /// keeper 1's own spawner for that species, the exact mana/pool-
+        /// gated method the offline Creatures menu's Recruit button calls
+        /// (TryRecruitX already no-ops if the pool's empty or the join
+        /// requirements aren't met — nothing to validate here beyond
+        /// picking the right spawner). Elf has no recruit path (see
+        /// ElfSpawner's own header) so isn't included.
+        [Rpc(SendTo.Server)]
+        public void RequestRecruitRpc(EditorCreatureKind kind)
+        {
+            var ctx = KeeperContext.ForOwner(ClientOwnerId);
+            if (ctx == null)
+            {
+                return;
+            }
+
+            switch (kind)
+            {
+                case EditorCreatureKind.Gremlin:
+                    if (ctx.GremlinSpawner != null) ctx.GremlinSpawner.TryRecruitGremlin();
+                    break;
+                case EditorCreatureKind.Warlock:
+                    if (ctx.WarlockSpawner != null) ctx.WarlockSpawner.TryRecruitWarlock();
+                    break;
+                case EditorCreatureKind.MazeRattler:
+                    if (ctx.MazeRattlerSpawner != null) ctx.MazeRattlerSpawner.TryRecruitMazeRattler();
+                    break;
+                case EditorCreatureKind.BeanCounter:
+                    if (ctx.BeanCounterSpawner != null) ctx.BeanCounterSpawner.TryRecruitBeanCounter();
+                    break;
+            }
+        }
     }
 }
