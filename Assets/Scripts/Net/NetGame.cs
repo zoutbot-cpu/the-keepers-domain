@@ -206,7 +206,7 @@ namespace KeepersDomain.Net
         /// every tile these calls target (RPCs from one object arrive in
         /// send order, same ordering SnapshotTilesRpc/SnapshotDoneRpc
         /// already rely on).
-        private void SendRoomVisualStateSnapshot(RpcTarget target)
+        private void SendRoomVisualStateSnapshot(BaseRpcTarget target)
         {
             if (KeeperContext.All == null)
             {
