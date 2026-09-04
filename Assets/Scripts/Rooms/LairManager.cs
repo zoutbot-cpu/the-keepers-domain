@@ -583,7 +583,7 @@ namespace KeepersDomain.Rooms
             marker.transform.SetParent(transform, false);
             marker.transform.localPosition = new Vector3(worldPos.x, centerY, worldPos.z);
             marker.transform.localScale = new Vector3(cellSize * PreviewFootprintScale, PreviewHeight, cellSize * PreviewFootprintScale);
-            marker.GetComponent<Renderer>().material.color = color;
+            Prims.Tint(marker, color);
             Destroy(marker.GetComponent<Collider>());
             return marker;
         }

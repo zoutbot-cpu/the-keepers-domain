@@ -467,7 +467,7 @@ namespace KeepersDomain.Grid
             _wallMeshReinforced = Resources.Load<GameObject>("Dungeon/Wall_Reinforced");
             _waterMesh = Resources.Load<GameObject>("Dungeon/Tile_Water");
             _lavaMesh = Resources.Load<GameObject>("Dungeon/Tile_Lava");
-            _plainFloorMaterial = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            _plainFloorMaterial = Prims.NewMaterial();
             _floorUnclaimedMaterial = Resources.Load<Material>("Dungeon/Floors/M_FloorUnclaimed");
             _floorClaimedMaterial = Resources.Load<Material>("Dungeon/Floors/M_FloorClaimed");
             _claimedTileTextures = new[]
@@ -2036,7 +2036,7 @@ namespace KeepersDomain.Grid
             handle.transform.SetParent(root.transform, false);
             handle.transform.localRotation = Quaternion.Euler(0f, 45f, 0f);
             handle.transform.localScale = new Vector3(0.06f, 0.06f, 0.5f);
-            handle.GetComponent<Renderer>().material.color = new Color(0.4f, 0.28f, 0.15f);
+            Prims.Tint(handle, new Color(0.4f, 0.28f, 0.15f));
             Destroy(handle.GetComponent<Collider>());
 
             var head = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -2045,7 +2045,7 @@ namespace KeepersDomain.Grid
             head.transform.localPosition = new Vector3(0.1f, 0f, 0.1f);
             head.transform.localRotation = Quaternion.Euler(0f, -45f, 0f);
             head.transform.localScale = new Vector3(0.05f, 0.05f, 0.32f);
-            head.GetComponent<Renderer>().material.color = new Color(0.55f, 0.55f, 0.58f);
+            Prims.Tint(head, new Color(0.55f, 0.55f, 0.58f));
             Destroy(head.GetComponent<Collider>());
 
             return root;
@@ -2063,7 +2063,7 @@ namespace KeepersDomain.Grid
             disc.name = "Disc";
             disc.transform.SetParent(root.transform, false);
             disc.transform.localScale = new Vector3(0.32f, 0.03f, 0.32f);
-            disc.GetComponent<Renderer>().material.color = new Color(0.55f, 0.6f, 0.68f);
+            Prims.Tint(disc, new Color(0.55f, 0.6f, 0.68f));
             Destroy(disc.GetComponent<Collider>());
 
             var boss = GameObject.CreatePrimitive(PrimitiveType.Sphere);
@@ -2071,7 +2071,7 @@ namespace KeepersDomain.Grid
             boss.transform.SetParent(root.transform, false);
             boss.transform.localPosition = Vector3.up * 0.02f;
             boss.transform.localScale = Vector3.one * 0.12f;
-            boss.GetComponent<Renderer>().material.color = new Color(0.85f, 0.75f, 0.3f);
+            Prims.Tint(boss, new Color(0.85f, 0.75f, 0.3f));
             Destroy(boss.GetComponent<Collider>());
 
             return root;
@@ -2098,7 +2098,7 @@ namespace KeepersDomain.Grid
             handle.name = "HammerHandle";
             handle.transform.SetParent(root.transform, false);
             handle.transform.localScale = new Vector3(0.05f, 0.4f, 0.05f);
-            handle.GetComponent<Renderer>().material.color = new Color(0.4f, 0.28f, 0.15f);
+            Prims.Tint(handle, new Color(0.4f, 0.28f, 0.15f));
             Destroy(handle.GetComponent<Collider>());
 
             var head = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -2106,7 +2106,7 @@ namespace KeepersDomain.Grid
             head.transform.SetParent(root.transform, false);
             head.transform.localPosition = Vector3.up * 0.2f;
             head.transform.localScale = new Vector3(0.22f, 0.1f, 0.1f);
-            head.GetComponent<Renderer>().material.color = new Color(0.5f, 0.5f, 0.52f);
+            Prims.Tint(head, new Color(0.5f, 0.5f, 0.52f));
             Destroy(head.GetComponent<Collider>());
 
             return root;
@@ -2119,7 +2119,7 @@ namespace KeepersDomain.Grid
             bar.transform.SetParent(parent, false);
             bar.transform.localPosition = localPosition;
             bar.transform.localScale = localScale;
-            bar.GetComponent<Renderer>().material.color = Color.yellow;
+            Prims.Tint(bar, Color.yellow);
             Destroy(bar.GetComponent<Collider>());
         }
 
@@ -2371,7 +2371,7 @@ namespace KeepersDomain.Grid
                     ((float)rng.NextDouble() - 0.5f) * 0.8f);
                 var scale = 0.07f + (float)rng.NextDouble() * 0.05f;
                 nugget.transform.localScale = Vector3.one * scale;
-                nugget.GetComponent<Renderer>().material.color = nuggetColor;
+                Prims.Tint(nugget, nuggetColor);
                 Destroy(nugget.GetComponent<Collider>());
             }
         }
@@ -2412,7 +2412,7 @@ namespace KeepersDomain.Grid
                     (float)rng.NextDouble() * 360f,
                     ((float)rng.NextDouble() - 0.5f) * 20f);
                 spike.transform.localScale = new Vector3(ChasmSpikeRadius, ChasmSpikeHeight, ChasmSpikeRadius);
-                spike.GetComponent<Renderer>().material.color = _chasmSpikeColor;
+                Prims.Tint(spike, _chasmSpikeColor);
                 Destroy(spike.GetComponent<Collider>());
             }
         }
@@ -2444,7 +2444,7 @@ namespace KeepersDomain.Grid
                 bar.transform.position = new Vector3(worldPos.x, starY, worldPos.z);
                 bar.transform.rotation = Quaternion.Euler(0f, angleDegrees, 0f);
                 bar.transform.localScale = new Vector3(_cellSize * HolyGroundStarLength, HolyGroundStarThickness, HolyGroundStarThickness);
-                bar.GetComponent<Renderer>().material.color = _holyGroundStarColor;
+                Prims.Tint(bar, _holyGroundStarColor);
                 Destroy(bar.GetComponent<Collider>());
             }
         }

@@ -43,10 +43,13 @@ namespace KeepersDomain.Net
             return go;
         }
 
-        /// Host — bind to the live Creature (HP/level mirror source), set
-        /// the identity netvars, then Spawn. A no-op on an offline body
-        /// (which has no CreatureNetView), so spawners can call it
-        /// unconditionally.
+        /// Host — bind to the live Creature (HP/level mirror source), Spawn,
+        /// then set the identity netvars. A NetworkVariable can only be
+        /// written once its NetworkObject is spawned, so Spawn() must come
+        /// first; the client's ClientInit reads _species.Value (and
+        /// subscribes to OnValueChanged) after the spawn arrives, so it
+        /// still sees the right species. A no-op on an offline body (which
+        /// has no CreatureNetView), so spawners can call it unconditionally.
         public static void HostFinalize(GameObject go, EditorCreatureKind kind, Creature creature)
         {
             var view = go.GetComponent<CreatureNetView>();
@@ -56,13 +59,13 @@ namespace KeepersDomain.Net
             }
 
             view._creature = creature;
+            go.GetComponent<NetworkObject>().Spawn();
+
             view._species.Value = kind;
             view._owner.Value = creature.OwnerId;
             view._maxHp.Value = creature.Stats.MaxHP;
             view._hp.Value = creature.Stats.HP;
             view._level.Value = creature.Level;
-
-            go.GetComponent<NetworkObject>().Spawn();
         }
 
         private void Update()

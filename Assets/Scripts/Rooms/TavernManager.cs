@@ -693,7 +693,7 @@ namespace KeepersDomain.Rooms
             marker.transform.SetParent(transform, false);
             marker.transform.localPosition = new Vector3(worldPos.x, centerY, worldPos.z);
             marker.transform.localScale = new Vector3(cellSize * PreviewFootprintScale, PreviewHeight, cellSize * PreviewFootprintScale);
-            marker.GetComponent<Renderer>().material.color = color;
+            Prims.Tint(marker, color);
             Destroy(marker.GetComponent<Collider>());
             return marker;
         }
@@ -762,7 +762,7 @@ namespace KeepersDomain.Rooms
                 dais.transform.SetParent(container.transform, false);
                 dais.transform.position = basePosition + Vector3.up * (DaisHeight * 0.5f);
                 dais.transform.localScale = new Vector3(cellSize * DaisFootprintScale, DaisHeight, cellSize * DaisFootprintScale);
-                dais.GetComponent<Renderer>().material.color = _daisColor;
+                Prims.Tint(dais, _daisColor);
                 Destroy(dais.GetComponent<Collider>());
             }
 
@@ -815,7 +815,7 @@ namespace KeepersDomain.Rooms
             // Unity's cylinder primitive is 2 units tall at scale 1, so its
             // height scale is TubeHeight * 0.5.
             tube.transform.localScale = new Vector3(TubeRadius * 2f, TubeHeight * 0.5f, TubeRadius * 2f);
-            tube.GetComponent<Renderer>().material.color = color;
+            Prims.Tint(tube, color);
             Destroy(tube.GetComponent<Collider>());
         }
 
@@ -851,7 +851,7 @@ namespace KeepersDomain.Rooms
             seam.transform.SetParent(parent, false);
             seam.transform.position = basePosition;
             seam.transform.localScale = new Vector3(cellSize * SeamFootprintScale, SeamHeight, cellSize * SeamFootprintScale);
-            seam.GetComponent<Renderer>().material.color = _seamColor;
+            Prims.Tint(seam, _seamColor);
             Destroy(seam.GetComponent<Collider>());
 
             var border = GameObject.CreatePrimitive(PrimitiveType.Cube);

@@ -1151,7 +1151,7 @@ namespace KeepersDomain.Implings
             drop.name = $"ImplingSweat_{coord.x}_{coord.y}";
             drop.transform.position = new Vector3(worldPos.x, _grid.FloorSurfaceY, worldPos.z);
             drop.transform.localScale = Vector3.one * _sweatDropScale;
-            drop.GetComponent<Renderer>().material.color = _sweatColor;
+            Prims.Tint(drop, _sweatColor);
             Destroy(drop.GetComponent<Collider>());
             Destroy(drop, _sweatDropLifetime);
         }

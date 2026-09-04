@@ -1,4 +1,5 @@
 using UnityEngine;
+using KeepersDomain.Grid;
 using KeepersDomain.LevelDesigner;
 
 namespace KeepersDomain.Creatures
@@ -49,11 +50,7 @@ namespace KeepersDomain.Creatures
             var look = LookFor(kind);
             body.transform.localScale = new Vector3(look.Radius, look.Height, look.Radius);
 
-            var renderer = body.GetComponent<Renderer>();
-            if (renderer != null)
-            {
-                renderer.material.color = look.Color;
-            }
+            Prims.Tint(body, look.Color);
 
             var collider = body.GetComponent<Collider>();
             if (collider != null)

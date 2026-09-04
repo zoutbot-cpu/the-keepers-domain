@@ -248,7 +248,7 @@ namespace KeepersDomain.Rooms
                 cellSize * PlatformTileSpan * 0.95f,
                 ringHeight,
                 cellSize * PlatformTileSpan * 0.95f);
-            ring.GetComponent<Renderer>().material.color = _platformColor;
+            Prims.Tint(ring, _platformColor);
             Destroy(ring.GetComponent<Collider>());
 
             var pedestalHeight = platformHeight - ringHeight;
@@ -257,7 +257,7 @@ namespace KeepersDomain.Rooms
             pedestal.transform.SetParent(transform, false);
             pedestal.transform.localPosition = new Vector3(0f, floorSurfaceY + ringHeight + pedestalHeight * 0.5f, 0f);
             pedestal.transform.localScale = new Vector3(cellSize * 0.95f, pedestalHeight, cellSize * 0.95f);
-            pedestal.GetComponent<Renderer>().material.color = _platformColor;
+            Prims.Tint(pedestal, _platformColor);
             Destroy(pedestal.GetComponent<Collider>());
         }
 
@@ -271,7 +271,7 @@ namespace KeepersDomain.Rooms
             orb.transform.SetParent(transform, false);
             orb.transform.localPosition = new Vector3(0f, floorSurfaceY + platformHeight + orbDiameter * 0.5f, 0f);
             orb.transform.localScale = Vector3.one * orbDiameter;
-            orb.GetComponent<Renderer>().material.color = _playerColor;
+            Prims.Tint(orb, _playerColor);
             Destroy(orb.GetComponent<Collider>());
         }
     }

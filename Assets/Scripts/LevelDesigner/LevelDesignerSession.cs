@@ -262,7 +262,7 @@ namespace KeepersDomain.LevelDesigner
                 ring.transform.SetParent(root.transform, false);
                 ring.transform.localPosition = new Vector3(0f, 0.03f, 0f);
                 ring.transform.localScale = new Vector3(OwnerRingDiameter, OwnerRingThickness, OwnerRingDiameter);
-                ring.GetComponent<Renderer>().material.color = _players[ownerId].Color;
+                Prims.Tint(ring, _players[ownerId].Color);
                 Destroy(ring.GetComponent<Collider>());
             }
 
@@ -271,7 +271,7 @@ namespace KeepersDomain.LevelDesigner
             body.transform.SetParent(root.transform, false);
             body.transform.localScale = Vector3.one * CreatureScale;
             body.transform.localPosition = Vector3.up * CreatureScale;
-            body.GetComponent<Renderer>().material.color = SpeciesColors.TryGetValue(kind, out var color) ? color : Color.white;
+            Prims.Tint(body, SpeciesColors.TryGetValue(kind, out var color) ? color : Color.white);
             Destroy(body.GetComponent<Collider>());
 
             return root;

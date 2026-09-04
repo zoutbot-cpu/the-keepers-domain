@@ -602,7 +602,7 @@ namespace KeepersDomain.Rooms
             marker.transform.SetParent(transform, false);
             marker.transform.localPosition = new Vector3(worldPos.x, centerY, worldPos.z);
             marker.transform.localScale = new Vector3(cellSize * PreviewFootprintScale, PreviewHeight, cellSize * PreviewFootprintScale);
-            marker.GetComponent<Renderer>().material.color = color;
+            Prims.Tint(marker, color);
             Destroy(marker.GetComponent<Collider>());
             return marker;
         }
@@ -651,7 +651,7 @@ namespace KeepersDomain.Rooms
             {
                 // Fallback flat color — see _groundColor's own header for
                 // why this branch exists at all.
-                field.GetComponent<Renderer>().material.color = _groundColor;
+                Prims.Tint(field, _groundColor);
             }
             Destroy(field.GetComponent<Collider>());
 
@@ -685,7 +685,7 @@ namespace KeepersDomain.Rooms
                 spot.transform.SetParent(parent, false);
                 spot.transform.position = new Vector3(spotX, spotY, spotZ);
                 spot.transform.localScale = new Vector3(radius * 2f, SpotHeight * 0.5f, radius * 2f);
-                spot.GetComponent<Renderer>().material.color = _spotColor;
+                Prims.Tint(spot, _spotColor);
                 Destroy(spot.GetComponent<Collider>());
             }
         }
@@ -735,7 +735,7 @@ namespace KeepersDomain.Rooms
             // Cylinder primitive is 2 units tall at scale 1, so the height
             // scale needed for a world-space length is half that length.
             log.transform.localScale = new Vector3(FenceLogRadius * 2f, cellSize * FenceLogLengthScale * 0.5f, FenceLogRadius * 2f);
-            log.GetComponent<Renderer>().material.color = _fenceLogColor;
+            Prims.Tint(log, _fenceLogColor);
             Destroy(log.GetComponent<Collider>());
         }
 
@@ -767,7 +767,7 @@ namespace KeepersDomain.Rooms
             box.transform.SetParent(container.transform, false);
             box.transform.position = basePosition + Vector3.up * (CoopBoxHeight * 0.5f);
             box.transform.localScale = new Vector3(cellSize * CoopBoxFootprintScale, CoopBoxHeight, cellSize * CoopBoxFootprintScale);
-            box.GetComponent<Renderer>().material.color = _coopBoxColor;
+            Prims.Tint(box, _coopBoxColor);
             Destroy(box.GetComponent<Collider>());
 
             var roof = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -775,7 +775,7 @@ namespace KeepersDomain.Rooms
             roof.transform.SetParent(container.transform, false);
             roof.transform.position = basePosition + Vector3.up * (CoopBoxHeight + CoopRoofHeight * 0.5f);
             roof.transform.localScale = new Vector3(cellSize * CoopRoofFootprintScale, CoopRoofHeight, cellSize * CoopRoofFootprintScale);
-            roof.GetComponent<Renderer>().material.color = _coopRoofColor;
+            Prims.Tint(roof, _coopRoofColor);
             Destroy(roof.GetComponent<Collider>());
 
             return container;

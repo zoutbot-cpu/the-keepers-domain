@@ -631,7 +631,7 @@ namespace KeepersDomain.Rooms
             marker.transform.SetParent(transform, false);
             marker.transform.localPosition = new Vector3(worldPos.x, centerY, worldPos.z);
             marker.transform.localScale = new Vector3(cellSize * PreviewFootprintScale, PreviewHeight, cellSize * PreviewFootprintScale);
-            marker.GetComponent<Renderer>().material.color = color;
+            Prims.Tint(marker, color);
             Destroy(marker.GetComponent<Collider>());
             return marker;
         }
@@ -669,7 +669,7 @@ namespace KeepersDomain.Rooms
             // while still visibly sitting lower than Border/Fill.
             seam.transform.position = basePosition;
             seam.transform.localScale = new Vector3(cellSize * SeamFootprintScale, SeamHeight, cellSize * SeamFootprintScale);
-            seam.GetComponent<Renderer>().material.color = _seamColor;
+            Prims.Tint(seam, _seamColor);
             Destroy(seam.GetComponent<Collider>());
 
             var border = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -722,7 +722,7 @@ namespace KeepersDomain.Rooms
             // Cylinder primitive is 2 units tall at scale 1, so the height
             // scale needed for a world-space length is half that length.
             post.transform.localScale = new Vector3(PostRadius * 2f, PostHeight * 0.5f, PostRadius * 2f);
-            post.GetComponent<Renderer>().material.color = _postColor;
+            Prims.Tint(post, _postColor);
             Destroy(post.GetComponent<Collider>());
 
             var crossbar = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
@@ -731,7 +731,7 @@ namespace KeepersDomain.Rooms
             crossbar.transform.position = basePosition + Vector3.up * (PostHeight * CrossbarHeightFraction);
             crossbar.transform.rotation = Quaternion.Euler(0f, 0f, 90f);
             crossbar.transform.localScale = new Vector3(CrossbarRadius * 2f, CrossbarLength * 0.5f, CrossbarRadius * 2f);
-            crossbar.GetComponent<Renderer>().material.color = _postColor;
+            Prims.Tint(crossbar, _postColor);
             Destroy(crossbar.GetComponent<Collider>());
 
             var head = GameObject.CreatePrimitive(PrimitiveType.Sphere);
@@ -739,7 +739,7 @@ namespace KeepersDomain.Rooms
             head.transform.SetParent(container.transform, false);
             head.transform.position = basePosition + Vector3.up * (PostHeight + HeadRadius);
             head.transform.localScale = Vector3.one * (HeadRadius * 2f);
-            head.GetComponent<Renderer>().material.color = _headColor;
+            Prims.Tint(head, _headColor);
             Destroy(head.GetComponent<Collider>());
 
             return container;

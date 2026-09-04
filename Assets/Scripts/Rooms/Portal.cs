@@ -150,7 +150,7 @@ namespace KeepersDomain.Rooms
                 step.transform.SetParent(transform, false);
                 step.transform.localPosition = new Vector3(offsetAlongTile, floorSurfaceY + stepHeight * 0.5f, 0f);
                 step.transform.localScale = new Vector3(stepDepth * 0.95f, stepHeight, cellSize * 0.9f);
-                step.GetComponent<Renderer>().material.color = _stepColor;
+                Prims.Tint(step, _stepColor);
                 Destroy(step.GetComponent<Collider>());
             }
         }

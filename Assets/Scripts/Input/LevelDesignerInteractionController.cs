@@ -302,7 +302,7 @@ namespace KeepersDomain.Input
                 line.name = isVertical ? "MirrorXLine" : "MirrorYLine";
                 line.transform.SetParent(transform, false);
                 Destroy(line.GetComponent<Collider>());
-                line.GetComponent<Renderer>().material.color = isVertical ? MirrorXLineColor : MirrorYLineColor;
+                Prims.Tint(line, isVertical ? MirrorXLineColor : MirrorYLineColor);
 
                 var mapWidthWorld = _grid.Width * _grid.CellSize;
                 var mapHeightWorld = _grid.Height * _grid.CellSize;

@@ -557,7 +557,7 @@ namespace KeepersDomain.Rooms
             var groundY = _grid.FloorSurfaceY - PitDepth;
             var worldPos = _grid.GridToWorld(coord);
             visual.transform.position = new Vector3(worldPos.x, groundY + PrisonerHeightScale, worldPos.z);
-            visual.GetComponent<Renderer>().material.color = _prisonerColor;
+            Prims.Tint(visual, _prisonerColor);
             Destroy(visual.GetComponent<Collider>());
             return visual;
         }
@@ -1030,7 +1030,7 @@ namespace KeepersDomain.Rooms
             seam.transform.SetParent(container.transform, false);
             seam.transform.position = basePosition;
             seam.transform.localScale = new Vector3(cellSize * SeamFootprintScale, SeamHeight, cellSize * SeamFootprintScale);
-            seam.GetComponent<Renderer>().material.color = _seamColor;
+            Prims.Tint(seam, _seamColor);
             Destroy(seam.GetComponent<Collider>());
 
             var floor = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -1047,7 +1047,7 @@ namespace KeepersDomain.Rooms
             }
             else
             {
-                floor.GetComponent<Renderer>().material.color = _dirtFloorColor;
+                Prims.Tint(floor, _dirtFloorColor);
             }
             Destroy(floor.GetComponent<Collider>());
 
@@ -1075,7 +1075,7 @@ namespace KeepersDomain.Rooms
             seam.transform.SetParent(container.transform, false);
             seam.transform.position = basePosition;
             seam.transform.localScale = new Vector3(cellSize * SeamFootprintScale, SeamHeight, cellSize * SeamFootprintScale);
-            seam.GetComponent<Renderer>().material.color = _seamColor;
+            Prims.Tint(seam, _seamColor);
             Destroy(seam.GetComponent<Collider>());
 
             var panel = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -1093,7 +1093,7 @@ namespace KeepersDomain.Rooms
                 return container;
             }
 
-            panel.GetComponent<Renderer>().material.color = _rimWallColor;
+            Prims.Tint(panel, _rimWallColor);
             Destroy(panel.GetComponent<Collider>());
 
             // The cross sits proud of the panel (raised further up by
@@ -1107,7 +1107,7 @@ namespace KeepersDomain.Rooms
             barX.transform.SetParent(container.transform, false);
             barX.transform.position = new Vector3(basePosition.x, crossY, basePosition.z);
             barX.transform.localScale = new Vector3(cellSize, GrateCrossBarThickness, GrateCrossBarThickness);
-            barX.GetComponent<Renderer>().material.color = _grateCrossColor;
+            Prims.Tint(barX, _grateCrossColor);
             Destroy(barX.GetComponent<Collider>());
 
             var barZ = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -1115,7 +1115,7 @@ namespace KeepersDomain.Rooms
             barZ.transform.SetParent(container.transform, false);
             barZ.transform.position = new Vector3(basePosition.x, crossY, basePosition.z);
             barZ.transform.localScale = new Vector3(GrateCrossBarThickness, GrateCrossBarThickness, cellSize);
-            barZ.GetComponent<Renderer>().material.color = _grateCrossColor;
+            Prims.Tint(barZ, _grateCrossColor);
             Destroy(barZ.GetComponent<Collider>());
 
             return container;
@@ -1201,7 +1201,7 @@ namespace KeepersDomain.Rooms
                 wall.transform.localScale = isEastWestEdge
                     ? new Vector3(RimWallThickness, RimWallDepth, cellSize * 0.98f)
                     : new Vector3(cellSize * 0.98f, RimWallDepth, RimWallThickness);
-                wall.GetComponent<Renderer>().material.color = _rimWallColor;
+                Prims.Tint(wall, _rimWallColor);
                 Destroy(wall.GetComponent<Collider>());
             }
 
@@ -1260,7 +1260,7 @@ namespace KeepersDomain.Rooms
                 rail.transform.localScale = isEastWestEdge
                     ? new Vector3(FenceRailThickness, FenceRailHeight, cellSize * 0.9f)
                     : new Vector3(cellSize * 0.9f, FenceRailHeight, FenceRailThickness);
-                rail.GetComponent<Renderer>().material.color = _fenceColor;
+                Prims.Tint(rail, _fenceColor);
                 Destroy(rail.GetComponent<Collider>());
             }
 
@@ -1326,7 +1326,7 @@ namespace KeepersDomain.Rooms
                 step.transform.SetParent(container.transform, false);
                 step.transform.localPosition = new Vector3(0f, pitFloorY + stepHeight * 0.5f, offsetZ);
                 step.transform.localScale = new Vector3(cellSize * 0.9f, stepHeight, stepDepth * 0.95f);
-                step.GetComponent<Renderer>().material.color = _stepColor;
+                Prims.Tint(step, _stepColor);
                 Destroy(step.GetComponent<Collider>());
             }
 
@@ -1373,7 +1373,7 @@ namespace KeepersDomain.Rooms
                 // that length (same trick TrainingRoomManager.
                 // BuildDummyVisual's post uses).
                 post.transform.localScale = new Vector3(GatePostRadius * 2f, GatePostHeight * 0.5f, GatePostRadius * 2f);
-                post.GetComponent<Renderer>().material.color = _gatePostColor;
+                Prims.Tint(post, _gatePostColor);
                 Destroy(post.GetComponent<Collider>());
             }
 
@@ -1422,7 +1422,7 @@ namespace KeepersDomain.Rooms
             marker.transform.SetParent(transform, false);
             marker.transform.localPosition = new Vector3(worldPos.x, centerY, worldPos.z);
             marker.transform.localScale = new Vector3(cellSize * PreviewFootprintScale, PreviewHeight, cellSize * PreviewFootprintScale);
-            marker.GetComponent<Renderer>().material.color = color;
+            Prims.Tint(marker, color);
             Destroy(marker.GetComponent<Collider>());
             return marker;
         }

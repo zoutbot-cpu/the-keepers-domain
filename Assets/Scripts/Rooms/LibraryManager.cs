@@ -480,7 +480,7 @@ namespace KeepersDomain.Rooms
             body.transform.SetParent(parent, false);
             body.transform.position = basePosition + Vector3.up * (BookcaseBodyHeight * 0.5f);
             body.transform.localScale = new Vector3(length, BookcaseBodyHeight, cellSize * BookcaseDepthScale);
-            body.GetComponent<Renderer>().material.color = _bookcaseBodyColor;
+            Prims.Tint(body, _bookcaseBodyColor);
             Destroy(body.GetComponent<Collider>());
 
             var trim = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -488,7 +488,7 @@ namespace KeepersDomain.Rooms
             trim.transform.SetParent(parent, false);
             trim.transform.position = basePosition + Vector3.up * (BookcaseBodyHeight + BookcaseTrimHeight * 0.5f);
             trim.transform.localScale = new Vector3(length, BookcaseTrimHeight, cellSize * BookcaseDepthScale * 1.05f);
-            trim.GetComponent<Renderer>().material.color = _bookcaseTrimColor;
+            Prims.Tint(trim, _bookcaseTrimColor);
             Destroy(trim.GetComponent<Collider>());
         }
 
@@ -666,7 +666,7 @@ namespace KeepersDomain.Rooms
             marker.transform.SetParent(transform, false);
             marker.transform.localPosition = new Vector3(worldPos.x, centerY, worldPos.z);
             marker.transform.localScale = new Vector3(cellSize * PreviewFootprintScale, PreviewHeight, cellSize * PreviewFootprintScale);
-            marker.GetComponent<Renderer>().material.color = color;
+            Prims.Tint(marker, color);
             Destroy(marker.GetComponent<Collider>());
             return marker;
         }
@@ -701,7 +701,7 @@ namespace KeepersDomain.Rooms
             // while still visibly sitting lower than Border.
             seam.transform.position = basePosition;
             seam.transform.localScale = new Vector3(cellSize * SeamFootprintScale, SeamHeight, cellSize * SeamFootprintScale);
-            seam.GetComponent<Renderer>().material.color = _seamColor;
+            Prims.Tint(seam, _seamColor);
             Destroy(seam.GetComponent<Collider>());
 
             var border = GameObject.CreatePrimitive(PrimitiveType.Cube);

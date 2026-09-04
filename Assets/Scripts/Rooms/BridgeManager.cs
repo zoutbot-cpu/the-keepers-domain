@@ -540,7 +540,7 @@ namespace KeepersDomain.Rooms
             plank.transform.SetParent(transform, false);
             plank.transform.position = basePosition;
             plank.transform.localScale = new Vector3(cellSize * PlankFootprintScale, PlankFloorHeight, cellSize * PlankFootprintScale);
-            plank.GetComponent<Renderer>().material.color = _plankColor;
+            Prims.Tint(plank, _plankColor);
             Destroy(plank.GetComponent<Collider>());
             return plank;
         }

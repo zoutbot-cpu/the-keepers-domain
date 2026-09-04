@@ -120,7 +120,7 @@ namespace KeepersDomain.Creatures
                     (SegmentLength + TrackLengthPadding) * _radiusScale,
                     SegmentHeight,
                     (SegmentRadialThickness + TrackRadialPadding) * _radiusScale);
-                track.GetComponent<Renderer>().material.color = TrackColor;
+                Prims.Tint(track, TrackColor);
                 Destroy(track.GetComponent<Collider>());
 
                 var fill = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -190,7 +190,7 @@ namespace KeepersDomain.Creatures
                 _fillSegments[i].SetActive(isLit);
                 if (isLit)
                 {
-                    _fillRenderers[i].material.color = ownerColor;
+                    Prims.Tint(_fillRenderers[i], ownerColor);
                 }
             }
         }

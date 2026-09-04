@@ -543,7 +543,7 @@ namespace KeepersDomain.Input
             palm.name = "Palm";
             palm.transform.SetParent(_handRoot.transform, false);
             palm.transform.localScale = new Vector3(_palmSize, _palmSize * 0.45f, _palmSize * 0.9f);
-            palm.GetComponent<Renderer>().material.color = _handColor;
+            Prims.Tint(palm, _handColor);
             Destroy(palm.GetComponent<Collider>());
 
             var fingerOffsets = new[]
@@ -565,7 +565,7 @@ namespace KeepersDomain.Input
                 finger.transform.SetParent(socket.transform, false);
                 finger.transform.localPosition = new Vector3(0f, 0f, _fingerLength * 0.5f);
                 finger.transform.localScale = new Vector3(_fingerThickness, _fingerThickness, _fingerLength);
-                finger.GetComponent<Renderer>().material.color = _handColor;
+                Prims.Tint(finger, _handColor);
                 Destroy(finger.GetComponent<Collider>());
 
                 _fingerSockets.Add(socket.transform);

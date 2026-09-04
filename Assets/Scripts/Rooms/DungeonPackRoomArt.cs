@@ -25,7 +25,7 @@ namespace KeepersDomain.Rooms
                 return null;
             }
 
-            var material = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+            var material = KeepersDomain.Grid.Prims.NewMaterial();
             material.SetTexture("_BaseMap", texture);
             return material;
         }

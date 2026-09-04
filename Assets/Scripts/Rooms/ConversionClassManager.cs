@@ -374,7 +374,7 @@ namespace KeepersDomain.Rooms
             body.transform.SetParent(parent, false);
             body.transform.position = basePosition + Vector3.up * (BenchBodyHeight * 0.5f);
             body.transform.localScale = new Vector3(cellSize * BenchDepthScale, BenchBodyHeight, length);
-            body.GetComponent<Renderer>().material.color = _benchBodyColor;
+            Prims.Tint(body, _benchBodyColor);
             Destroy(body.GetComponent<Collider>());
 
             var trim = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -382,7 +382,7 @@ namespace KeepersDomain.Rooms
             trim.transform.SetParent(parent, false);
             trim.transform.position = basePosition + Vector3.up * (BenchBodyHeight + BenchTrimHeight * 0.5f);
             trim.transform.localScale = new Vector3(cellSize * BenchDepthScale * 1.05f, BenchTrimHeight, length);
-            trim.GetComponent<Renderer>().material.color = _benchTrimColor;
+            Prims.Tint(trim, _benchTrimColor);
             Destroy(trim.GetComponent<Collider>());
         }
 
@@ -407,7 +407,7 @@ namespace KeepersDomain.Rooms
             panel.transform.SetParent(container.transform, false);
             panel.transform.position = new Vector3(boardX, boardCenterY, worldPos.z);
             panel.transform.localScale = new Vector3(WallBoardThickness, WallBoardHeight, cellSize * WallBoardWidthScale);
-            panel.GetComponent<Renderer>().material.color = _wallBoardColor;
+            Prims.Tint(panel, _wallBoardColor);
             Destroy(panel.GetComponent<Collider>());
 
             BuildBroccoliIcon(container.transform, new Vector3(boardX + WallBoardThickness * 0.5f + BroccoliReliefOffset, boardCenterY, worldPos.z));
@@ -425,7 +425,7 @@ namespace KeepersDomain.Rooms
             stem.transform.SetParent(parent, false);
             stem.transform.position = center + Vector3.down * (BroccoliStemHeight * 0.3f);
             stem.transform.localScale = new Vector3(BroccoliStemRadius * 2f, BroccoliStemHeight * 0.5f, BroccoliStemRadius * 2f);
-            stem.GetComponent<Renderer>().material.color = _broccoliStemColor;
+            Prims.Tint(stem, _broccoliStemColor);
             Destroy(stem.GetComponent<Collider>());
 
             var floretOffsets = new[]
@@ -443,7 +443,7 @@ namespace KeepersDomain.Rooms
                 floret.transform.SetParent(parent, false);
                 floret.transform.position = center + offset;
                 floret.transform.localScale = Vector3.one * (BroccoliFloretRadius * 2f);
-                floret.GetComponent<Renderer>().material.color = _broccoliFloretColor;
+                Prims.Tint(floret, _broccoliFloretColor);
                 Destroy(floret.GetComponent<Collider>());
             }
         }
@@ -720,7 +720,7 @@ namespace KeepersDomain.Rooms
             marker.transform.SetParent(transform, false);
             marker.transform.localPosition = new Vector3(worldPos.x, centerY, worldPos.z);
             marker.transform.localScale = new Vector3(cellSize * PreviewFootprintScale, PreviewHeight, cellSize * PreviewFootprintScale);
-            marker.GetComponent<Renderer>().material.color = color;
+            Prims.Tint(marker, color);
             Destroy(marker.GetComponent<Collider>());
             return marker;
         }
@@ -746,7 +746,7 @@ namespace KeepersDomain.Rooms
             border.transform.SetParent(container.transform, false);
             border.transform.position = basePosition;
             border.transform.localScale = new Vector3(cellSize * GroundFootprintScale, GroundTileHeight, cellSize * GroundFootprintScale);
-            border.GetComponent<Renderer>().material.color = _groundBorderColor;
+            Prims.Tint(border, _groundBorderColor);
             Destroy(border.GetComponent<Collider>());
 
             var fill = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -754,7 +754,7 @@ namespace KeepersDomain.Rooms
             fill.transform.SetParent(container.transform, false);
             fill.transform.position = basePosition + Vector3.up * (GroundFillHeightMargin * 0.5f);
             fill.transform.localScale = new Vector3(cellSize * GroundFillFootprintScale, GroundTileHeight + GroundFillHeightMargin, cellSize * GroundFillFootprintScale);
-            fill.GetComponent<Renderer>().material.color = _groundFillColor;
+            Prims.Tint(fill, _groundFillColor);
             Destroy(fill.GetComponent<Collider>());
 
             return container;

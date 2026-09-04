@@ -467,7 +467,7 @@ namespace KeepersDomain.Rooms
             marker.transform.SetParent(transform, false);
             marker.transform.localPosition = new Vector3(worldPos.x, centerY, worldPos.z);
             marker.transform.localScale = new Vector3(cellSize * PreviewFootprintScale, PreviewHeight, cellSize * PreviewFootprintScale);
-            marker.GetComponent<Renderer>().material.color = color;
+            Prims.Tint(marker, color);
             Destroy(marker.GetComponent<Collider>());
             return marker;
         }
@@ -502,7 +502,7 @@ namespace KeepersDomain.Rooms
             seam.transform.SetParent(container.transform, false);
             seam.transform.position = basePosition;
             seam.transform.localScale = new Vector3(cellSize * SeamFootprintScale, SeamHeight, cellSize * SeamFootprintScale);
-            seam.GetComponent<Renderer>().material.color = _seamColor;
+            Prims.Tint(seam, _seamColor);
             Destroy(seam.GetComponent<Collider>());
 
             var border = GameObject.CreatePrimitive(PrimitiveType.Cube);
@@ -519,7 +519,7 @@ namespace KeepersDomain.Rooms
             }
             else
             {
-                border.GetComponent<Renderer>().material.color = _borderColor;
+                Prims.Tint(border, _borderColor);
             }
             Destroy(border.GetComponent<Collider>());
 

@@ -113,7 +113,7 @@ namespace KeepersDomain.Rooms
             visual.name = "SlimeBall";
             visual.transform.SetParent(transform, false);
             visual.transform.localScale = Vector3.one * (Radius * 2f);
-            visual.GetComponent<Renderer>().material.color = _color;
+            Prims.Tint(visual, _color);
             Destroy(visual.GetComponent<Collider>());
         }
 

@@ -7,19 +7,33 @@ using KeepersDomain.Net;
 
 namespace KeepersDomain.EditorTools
 {
-    /// One-time setup: builds the network prefabs GameBootstrap loads at
-    /// runtime (Resources/Net/...). Same "a Tools menu item generates the
-    /// asset from code" pattern as DungeonPack > Setup Props. Re-run after
-    /// a fresh clone if the prefabs are missing (NetSession logs an error
-    /// pointing here). Safe to re-run — overwrites in place.
+    /// One-time setup: builds the runtime assets GameBootstrap / Prims load
+    /// from Resources (the network prefabs + the shared URP material every
+    /// procedural primitive tints). Same "a Tools menu item generates the
+    /// asset from code" pattern as DungeonPack > Setup Props. Re-run after a
+    /// fresh clone if things are magenta or NetSession logs a missing
+    /// prefab. Safe to re-run — overwrites in place.
     public static class NetPrefabSetup
     {
         private const string Dir = "Assets/Resources/Net";
+        private const string SharedDir = "Assets/Resources/Shared";
 
         [MenuItem("Tools/Net/Setup Netcode Prefabs")]
         public static void Setup()
         {
             Directory.CreateDirectory(Dir);
+            Directory.CreateDirectory(SharedDir);
+
+            // The URP material Prims.Tint clones for every CreatePrimitive
+            // primitive — a real asset so its shader variants ship in the
+            // player build (a runtime `new Material(Shader.Find(...))` is
+            // magenta in a build).
+            var primMatPath = $"{SharedDir}/M_Prim.mat";
+            if (AssetDatabase.LoadAssetAtPath<Material>(primMatPath) == null)
+            {
+                var mat = new Material(Shader.Find("Universal Render Pipeline/Lit")) { name = "M_Prim" };
+                AssetDatabase.CreateAsset(mat, primMatPath);
+            }
 
             // Session-lifetime controller — no transform, just a
             // NetworkObject so the host can spawn it and the client gets
