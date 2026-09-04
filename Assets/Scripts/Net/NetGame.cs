@@ -512,5 +512,65 @@ namespace KeepersDomain.Net
                 ctx.ImplingSpawner.SpawnImplingAt(coord.ToVector2Int());
             }
         }
+
+        // ---- client commands (Milestone 2, first slice) ----
+
+        /// Client — ClientInputController's Reinforce command. Routes to
+        /// the exact same DungeonGrid.RequestReinforce every local player's
+        /// Reinforce tool calls.
+        [Rpc(SendTo.Server)]
+        public void RequestReinforceRpc(NetCoord coord)
+        {
+            if (_grid != null)
+            {
+                _grid.RequestReinforce(coord.ToVector2Int(), ClientOwnerId);
+            }
+        }
+
+        /// Client — ClientInputController's Cancel command. Tries a queued
+        /// dig first, then a queued reinforce, same as
+        /// TileInteractionController's own Unqueue gesture does per
+        /// BuildMode — except the client has one Cancel toggle covering
+        /// both instead of a separate mode per job kind, since it only
+        /// ever needs to cancel jobs it can see are queued right there on
+        /// the tile. Keeper 1's own BuilderJobBoard gates which jobs it'll
+        /// actually let go (a job already claimed by a creature mid-walk
+        /// isn't cancelable), same as offline.
+        [Rpc(SendTo.Server)]
+        public void RequestCancelJobRpc(NetCoord coord)
+        {
+            var ctx = KeeperContext.ForOwner(ClientOwnerId);
+            if (ctx == null || ctx.JobBoard == null || _grid == null)
+            {
+                return;
+            }
+
+            var c = coord.ToVector2Int();
+            if (ctx.JobBoard.CancelJob(c))
+            {
+                _grid.CancelDig(c);
+                return;
+            }
+
+            if (ctx.JobBoard.CancelReinforceJob(c))
+            {
+                _grid.CancelReinforce(c);
+            }
+        }
+
+        /// Client — ClientInputController's Sell command. Routes to keeper
+        /// 1's own LairManager.TrySellRoom, the same generic Sell tool
+        /// every room type shares offline — it already rejects a tile that
+        /// isn't keeper 1's own (see TrySellRoom's own owner check), so a
+        /// stray/mistaken call can't tear down the host's rooms.
+        [Rpc(SendTo.Server)]
+        public void RequestSellRoomRpc(NetCoord coord)
+        {
+            var ctx = KeeperContext.ForOwner(ClientOwnerId);
+            if (ctx != null && ctx.Lair != null)
+            {
+                ctx.Lair.TrySellRoom(coord.ToVector2Int());
+            }
+        }
     }
 }
