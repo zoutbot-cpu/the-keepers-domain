@@ -1,6 +1,8 @@
 using UnityEngine;
 using KeepersDomain.Grid;
 using KeepersDomain.Rooms;
+using KeepersDomain.Creatures;
+using KeepersDomain.LevelDesigner;
 using KeepersDomain.DebugUI;
 
 namespace KeepersDomain.Monsters
@@ -16,13 +18,6 @@ namespace KeepersDomain.Monsters
         /// Training Room tiles (summed across every placed Training Room)
         /// required before a Gremlin can join, per the design brief.
         private const int RequiredTrainingRoomTiles = 9;
-
-        // Green-blue-ish per the brief, and noticeably thinner/smaller than
-        // an Impling's capsule (radius scale well under Impling's uniform
-        // 0.33) so the two read as different creatures at a glance.
-        [SerializeField] private Color _gremlinColor = new Color(0.3f, 0.75f, 0.65f);
-        [SerializeField] private float _gremlinRadiusScale = 0.22f;
-        [SerializeField] private float _gremlinHeightScale = 0.4f;
 
         private DungeonGrid _grid;
         private Portal _portal;
@@ -115,15 +110,7 @@ namespace KeepersDomain.Monsters
         {
             var worldPos = _grid.GridToWorld(coord);
 
-            var visual = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            visual.name = "Gremlin";
-            visual.transform.localScale = new Vector3(_gremlinRadiusScale, _gremlinHeightScale, _gremlinRadiusScale);
-            // Default capsule is 2 units tall at scale 1, so half its actual
-            // height is _gremlinHeightScale — grounds it on worldPos instead
-            // of burying half of it in the floor.
-            visual.transform.position = worldPos + Vector3.up * _gremlinHeightScale;
-            visual.GetComponent<Renderer>().material.color = _gremlinColor;
-            Destroy(visual.GetComponent<Collider>());
+            var visual = CreatureFactory.CreateOfflineBody(EditorCreatureKind.Gremlin, worldPos);
 
             var agent = visual.AddComponent<GremlinAgent>();
             agent.Initialize(_grid, _lairManager, _tavernManager, _trainingRoomManager, _treasuryManager, _portal, ownerId);

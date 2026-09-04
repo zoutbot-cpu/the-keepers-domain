@@ -1,6 +1,8 @@
 using UnityEngine;
 using KeepersDomain.Grid;
 using KeepersDomain.Rooms;
+using KeepersDomain.Creatures;
+using KeepersDomain.LevelDesigner;
 using KeepersDomain.DebugUI;
 
 namespace KeepersDomain.Monsters
@@ -18,13 +20,6 @@ namespace KeepersDomain.Monsters
         /// MazeRattlersPerJail uses, counted per Conversion Class *room*
         /// (ConversionClassManager.RoomCount), not per tile.
         private const int BeanCountersPerConversionClass = 3;
-
-        // Sickly yellow-green per the brief's zealot flavor — a placeholder
-        // capsule until a real model exists, same shape every other
-        // creature's own placeholder uses.
-        [SerializeField] private Color _beanCounterColor = new Color(0.68f, 0.72f, 0.3f);
-        [SerializeField] private float _beanCounterRadiusScale = 0.22f;
-        [SerializeField] private float _beanCounterHeightScale = 0.4f;
 
         private DungeonGrid _grid;
         private Portal _portal;
@@ -98,12 +93,7 @@ namespace KeepersDomain.Monsters
         {
             var worldPos = _grid.GridToWorld(coord);
 
-            var visual = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            visual.name = "BeanCounter";
-            visual.transform.localScale = new Vector3(_beanCounterRadiusScale, _beanCounterHeightScale, _beanCounterRadiusScale);
-            visual.transform.position = worldPos + Vector3.up * _beanCounterHeightScale;
-            visual.GetComponent<Renderer>().material.color = _beanCounterColor;
-            Destroy(visual.GetComponent<Collider>());
+            var visual = CreatureFactory.CreateOfflineBody(EditorCreatureKind.BeanCounter, worldPos);
 
             var agent = visual.AddComponent<BeanCounterAgent>();
             agent.Initialize(_grid, _lairManager, _tavernManager, _conversionClassManager, _jailManager, _treasuryManager, _portal, ownerId);

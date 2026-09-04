@@ -1,6 +1,8 @@
 using UnityEngine;
 using KeepersDomain.Grid;
 using KeepersDomain.Rooms;
+using KeepersDomain.Creatures;
+using KeepersDomain.LevelDesigner;
 using KeepersDomain.DebugUI;
 
 namespace KeepersDomain.Implings
@@ -19,8 +21,6 @@ namespace KeepersDomain.Implings
         /// actually gets reserved here.
         public const int ImplingManaUpkeep = 20;
 
-        [SerializeField] private Color _implingColor = new Color(0.8f, 0.2f, 0.2f);
-        [SerializeField] private float _implingScale = 0.33f;
 
         private BuilderJobBoard _jobBoard;
         private DungeonGrid _grid;
@@ -73,13 +73,7 @@ namespace KeepersDomain.Implings
                 return;
             }
 
-            var visual = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            visual.name = "Impling";
-            visual.transform.localScale = Vector3.one * _implingScale;
-            // Default capsule is 2 units tall at scale 1, so half-height == scale.
-            visual.transform.position = homeWorldPos + Vector3.up * _implingScale;
-            visual.GetComponent<Renderer>().material.color = _implingColor;
-            Destroy(visual.GetComponent<Collider>());
+            var visual = CreatureFactory.CreateOfflineBody(EditorCreatureKind.Imp, homeWorldPos);
 
             var agent = visual.AddComponent<ImplingAgent>();
             agent.Initialize(_jobBoard, _grid, homeWorldPos, _treasuryManager, _throneRoom, _slimeHatchery, _tavern, ImplingManaUpkeep, ownerId);

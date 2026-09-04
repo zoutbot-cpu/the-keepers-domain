@@ -1,6 +1,8 @@
 using UnityEngine;
 using KeepersDomain.Grid;
 using KeepersDomain.Rooms;
+using KeepersDomain.Creatures;
+using KeepersDomain.LevelDesigner;
 using KeepersDomain.DebugUI;
 
 namespace KeepersDomain.Monsters
@@ -18,13 +20,6 @@ namespace KeepersDomain.Monsters
         /// comment for why a tile-based ratio doesn't make sense for Jail's
         /// much bigger minimum footprint.
         private const int MazeRattlersPerJail = 5;
-
-        // Brown per the brief ("make the visual Brown for now") — a
-        // placeholder capsule until a real model exists, same shape
-        // GremlinAgent/WarlockAgent's own placeholders use.
-        [SerializeField] private Color _mazeRattlerColor = new Color(0.45f, 0.3f, 0.15f);
-        [SerializeField] private float _mazeRattlerRadiusScale = 0.22f;
-        [SerializeField] private float _mazeRattlerHeightScale = 0.4f;
 
         private DungeonGrid _grid;
         private Portal _portal;
@@ -104,15 +99,7 @@ namespace KeepersDomain.Monsters
         {
             var worldPos = _grid.GridToWorld(coord);
 
-            var visual = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            visual.name = "MazeRattler";
-            visual.transform.localScale = new Vector3(_mazeRattlerRadiusScale, _mazeRattlerHeightScale, _mazeRattlerRadiusScale);
-            // Default capsule is 2 units tall at scale 1, so half its actual
-            // height is _mazeRattlerHeightScale — grounds it on worldPos
-            // instead of burying half of it in the floor.
-            visual.transform.position = worldPos + Vector3.up * _mazeRattlerHeightScale;
-            visual.GetComponent<Renderer>().material.color = _mazeRattlerColor;
-            Destroy(visual.GetComponent<Collider>());
+            var visual = CreatureFactory.CreateOfflineBody(EditorCreatureKind.MazeRattler, worldPos);
 
             var agent = visual.AddComponent<MazeRattlerAgent>();
             agent.Initialize(_grid, _lairManager, _tavernManager, _trainingRoomManager, _jailManager, _treasuryManager, _portal, ownerId);

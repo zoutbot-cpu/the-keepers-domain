@@ -1,6 +1,8 @@
 using UnityEngine;
 using KeepersDomain.Grid;
 using KeepersDomain.Rooms;
+using KeepersDomain.Creatures;
+using KeepersDomain.LevelDesigner;
 using KeepersDomain.DebugUI;
 
 namespace KeepersDomain.Monsters
@@ -22,12 +24,6 @@ namespace KeepersDomain.Monsters
         /// the "at least a 3x3 library" requirement (see
         /// LibraryManager.HasLibraryAtLeast).
         private const int RequiredLibrarySize = 3;
-
-        // Dark purple per the brief — a placeholder capsule ("a pill"),
-        // same shape convention GremlinAgent's placeholder capsule uses.
-        [SerializeField] private Color _warlockColor = new Color(0.35f, 0.15f, 0.5f);
-        [SerializeField] private float _warlockRadiusScale = 0.22f;
-        [SerializeField] private float _warlockHeightScale = 0.4f;
 
         private DungeonGrid _grid;
         private Portal _portal;
@@ -124,15 +120,7 @@ namespace KeepersDomain.Monsters
         {
             var worldPos = _grid.GridToWorld(coord);
 
-            var visual = GameObject.CreatePrimitive(PrimitiveType.Capsule);
-            visual.name = "Warlock";
-            visual.transform.localScale = new Vector3(_warlockRadiusScale, _warlockHeightScale, _warlockRadiusScale);
-            // Default capsule is 2 units tall at scale 1, so half its actual
-            // height is _warlockHeightScale — grounds it on worldPos instead
-            // of burying half of it in the floor.
-            visual.transform.position = worldPos + Vector3.up * _warlockHeightScale;
-            visual.GetComponent<Renderer>().material.color = _warlockColor;
-            Destroy(visual.GetComponent<Collider>());
+            var visual = CreatureFactory.CreateOfflineBody(EditorCreatureKind.Warlock, worldPos);
 
             var agent = visual.AddComponent<WarlockAgent>();
             agent.Initialize(_grid, _lairManager, _tavernManager, _libraryManager, _trainingRoomManager, _treasuryManager, _portal, ownerId);
