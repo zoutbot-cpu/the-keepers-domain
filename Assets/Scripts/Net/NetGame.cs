@@ -80,7 +80,6 @@ namespace KeepersDomain.Net
                 if (ctx.Lair != null)
                 {
                     ctx.Lair.ClaimChanged += OnHostLairClaimChanged;
-                    ctx.Lair.RoomSold += OnHostRoomSold;
                 }
 
                 if (ctx.Treasury != null)
@@ -88,6 +87,14 @@ namespace KeepersDomain.Net
                     ctx.Treasury.GoldChanged += OnHostTreasuryGoldChanged;
                 }
             }
+
+            // A sold/removed room is deliberately NOT relayed as its own
+            // event here (unlike claims/gold above) -- see Apply's
+            // ApplyRoomRemoved, which detects it from the ordinary tile
+            // delta instead. LairManager.RoomSold's own roomId string is
+            // host-local (each side mints its own independent counter
+            // during RestoreRoom), so relaying it directly would tell the
+            // client to look up a room it never had under that name.
         }
 
         private void OnHostLairClaimChanged(Vector2Int coord, bool claimed)
@@ -98,23 +105,6 @@ namespace KeepersDomain.Net
         private void OnHostTreasuryGoldChanged(Vector2Int coord, int amount)
         {
             TreasuryGoldChangedRpc(NetCoord.From(coord), amount);
-        }
-
-        /// LairManager.RoomSold fires for every sold room regardless of
-        /// kind (see its own header) -- the Sell tool tears down the
-        /// host's own decoration but nothing told the client's matching
-        /// (gold-free, shared-across-owners) room managers to do the same,
-        /// so a sold room's carpet/nest/pile/etc. GameObjects just sat
-        /// there stale on the client even after the tile itself replicated
-        /// back to plain floor. Relaying it here and replaying it against
-        /// the client's own LairManager fixes that the same way it's fixed
-        /// host-side: every other room manager already listens for
-        /// LairManager.RoomSold itself (each one subscribes in its own
-        /// Initialize), so one relay tears down every room type, not just
-        /// Lairs.
-        private void OnHostRoomSold(string roomId)
-        {
-            RoomSoldRpc(roomId);
         }
 
         public override void OnNetworkSpawn()
@@ -159,7 +149,6 @@ namespace KeepersDomain.Net
                     if (ctx.Lair != null)
                     {
                         ctx.Lair.ClaimChanged -= OnHostLairClaimChanged;
-                        ctx.Lair.RoomSold -= OnHostRoomSold;
                     }
 
                     if (ctx.Treasury != null)
@@ -360,26 +349,73 @@ namespace KeepersDomain.Net
 
             foreach (var t in tiles)
             {
+                // A room being removed (sold, or any other teardown) is NOT
+                // carried as its own message -- it shows up here as an
+                // ordinary tile update whose RoomId has gone from set to
+                // empty. Read the client's own CURRENT tag before
+                // overwriting it: the host's roomId string is meaningless
+                // client-side (RestoreRoom mints a fresh id locally instead
+                // of reusing the saved/replicated one -- see
+                // ApplyRoomRemoved's own header), so this is the only
+                // reliable way to know "a room just went away here."
+                var previousRoomId = _grid.GetTile(t.Coord).RoomId;
+
                 _grid.ApplyReplicatedTile(t.Coord, t.ToTileState());
 
-                if (!t.RoomId.IsEmpty)
+                if (t.RoomId.IsEmpty)
                 {
-                    var roomId = t.RoomId.ToString();
-                    if (!_clientRoomFootprints.TryGetValue(roomId, out var list))
+                    if (!string.IsNullOrEmpty(previousRoomId))
                     {
-                        list = new List<Vector2Int>();
-                        _clientRoomFootprints[roomId] = list;
-                        _clientRoomOwners[roomId] = t.OwnerId;
+                        ApplyRoomRemoved(previousRoomId);
                     }
 
-                    list.Add(t.Coord);
+                    continue;
                 }
+
+                var roomId = t.RoomId.ToString();
+                if (!_clientRoomFootprints.TryGetValue(roomId, out var list))
+                {
+                    list = new List<Vector2Int>();
+                    _clientRoomFootprints[roomId] = list;
+                    _clientRoomOwners[roomId] = t.OwnerId;
+                }
+
+                list.Add(t.Coord);
             }
 
             if (live)
             {
                 ReconstructNewRooms();
             }
+        }
+
+        /// A room's tile lost its RoomId (see Apply's own comment) -- tear
+        /// down its decoration via the client's OWN LairManager, using the
+        /// CLIENT's locally-minted roomId (previousRoomId, read off the
+        /// grid a moment ago) rather than whatever string the host used --
+        /// each side mints its own independent roomId counter during
+        /// RestoreRoom/TryPlaceX, so the host's original id was never
+        /// meaningful here in the first place. Every other room manager
+        /// (Treasury, SlimeHatchery, Tavern, ...) already listens for
+        /// LairManager.RoomSold itself (each subscribes in its own
+        /// Initialize, same wiring the host's real per-keeper managers
+        /// use), so this one call tears down whichever room type it
+        /// actually was, not just Lairs. Safe to call more than once for
+        /// the same room (a multi-tile room's other tiles arriving in the
+        /// same batch each land here too, but RemoveRoom is a no-op once
+        /// its bookkeeping is already gone) -- in practice only the first
+        /// tile processed actually does anything, since RemoveRoom clears
+        /// every remaining tile's RoomId as a side effect.
+        private void ApplyRoomRemoved(string roomId)
+        {
+            if (_clientRoomManagers != null
+                && _clientRoomManagers.TryGetValue(RoomDesignTool.Lair, out var manager)
+                && manager is LairManager lair)
+            {
+                lair.ApplyReplicatedRoomSold(roomId);
+            }
+
+            _clientReconstructedRooms.Remove(roomId);
         }
 
         /// A room built after this client joined arrives as ordinary tile
@@ -439,26 +475,6 @@ namespace KeepersDomain.Net
         private void LairClaimChangedRpc(NetCoord coord, bool claimed)
         {
             ApplyLairClaim(coord.ToVector2Int(), claimed);
-        }
-
-        /// Client — a room (any kind — see LairManager.RoomSold's own
-        /// header) was sold on the host. Replaying it against the
-        /// client's own LairManager tears down every room type's
-        /// decoration for roomId, not just Lairs — Treasury/SlimeHatchery/
-        /// Tavern/etc. all subscribe to LairManager.RoomSold themselves in
-        /// their own Initialize, the same wiring the host's real per-
-        /// keeper managers use.
-        [Rpc(SendTo.NotServer)]
-        private void RoomSoldRpc(string roomId)
-        {
-            if (_clientRoomManagers != null
-                && _clientRoomManagers.TryGetValue(RoomDesignTool.Lair, out var manager)
-                && manager is LairManager lair)
-            {
-                lair.ApplyReplicatedRoomSold(roomId);
-            }
-
-            _clientReconstructedRooms.Remove(roomId);
         }
 
         /// Client — calls straight into the (gold-free) LairManager's own
