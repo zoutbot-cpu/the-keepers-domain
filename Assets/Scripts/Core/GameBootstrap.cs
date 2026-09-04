@@ -309,34 +309,34 @@ namespace KeepersDomain.Core
         /// Returned as a RoomDesignTool -> manager lookup, the same shape
         /// both LevelDesignerInteractionController's live Rooms tool and
         /// LevelDesignerSession's save/load path need.
-        private static Dictionary<RoomDesignTool, IRestorableRoomManager> CreateLevelDesignerRoomManagers(DungeonGrid grid)
+        private static Dictionary<RoomDesignTool, IRestorableRoomManager> CreateLevelDesignerRoomManagers(DungeonGrid grid, int ownerId = 0)
         {
             var lairManager = CreateComponent<LairManager>("LairManager");
             var treasuryManager = CreateComponent<TreasuryManager>("TreasuryManager");
-            treasuryManager.Initialize(grid, lairManager);
-            lairManager.Initialize(grid, treasuryManager);
+            treasuryManager.Initialize(grid, lairManager, ownerId);
+            lairManager.Initialize(grid, treasuryManager, ownerId);
 
             var slimeHatcheryManager = CreateComponent<SlimeHatcheryManager>("SlimeHatcheryManager");
-            slimeHatcheryManager.Initialize(grid, lairManager, treasuryManager, simulateBreeding: false);
+            slimeHatcheryManager.Initialize(grid, lairManager, treasuryManager, simulateBreeding: false, ownerId: ownerId);
 
             var tavernManager = CreateComponent<TavernManager>("TavernManager");
-            tavernManager.Initialize(grid, lairManager, treasuryManager);
+            tavernManager.Initialize(grid, lairManager, treasuryManager, ownerId);
 
             var trainingRoomManager = CreateComponent<TrainingRoomManager>("TrainingRoomManager");
-            trainingRoomManager.Initialize(grid, lairManager, treasuryManager);
+            trainingRoomManager.Initialize(grid, lairManager, treasuryManager, ownerId);
 
             var libraryManager = CreateComponent<LibraryManager>("LibraryManager");
-            libraryManager.Initialize(grid, lairManager, treasuryManager);
+            libraryManager.Initialize(grid, lairManager, treasuryManager, ownerId);
 
             var jailManager = CreateComponent<JailManager>("JailManager");
-            jailManager.Initialize(grid, jobBoard: null, lairManager, treasuryManager);
+            jailManager.Initialize(grid, jobBoard: null, lairManager, treasuryManager, ownerId);
 
             var conversionClassManager = CreateComponent<ConversionClassManager>("ConversionClassManager");
             conversionClassManager.Initialize(grid, lairManager, treasuryManager, jailManager,
-                gremlinSpawner: null, warlockSpawner: null, mazeRattlerSpawner: null, elfSpawner: null);
+                gremlinSpawner: null, warlockSpawner: null, mazeRattlerSpawner: null, elfSpawner: null, ownerId: ownerId);
 
             var bridgeManager = CreateComponent<BridgeManager>("BridgeManager");
-            bridgeManager.Initialize(grid, lairManager, treasuryManager, ownerId: 0, simulateDecay: false);
+            bridgeManager.Initialize(grid, lairManager, treasuryManager, ownerId: ownerId, simulateDecay: false);
 
             return new Dictionary<RoomDesignTool, IRestorableRoomManager>
             {
@@ -491,8 +491,19 @@ namespace KeepersDomain.Core
 
             // Placeholder 2-colour palette so owner-tinted floor / orbs /
             // rings read on the client until the real roster syncs (M2).
-            grid.OwnerColors = new[] { LevelDesignerColors.Palette[0], LevelDesignerColors.Palette[1] };
-            grid.PlayerColor = grid.OwnerColors[0];
+            // PlayerColor first (fallback for -1/out-of-range owners), THEN
+            // OwnerColors -- the PlayerColor setter collapses OwnerColors to
+            // a single entry as a side effect (see its own header), so
+            // setting it first and overriding OwnerColors after is the only
+            // order that leaves the real 2-entry array in place (same
+            // ordering BuildWorld's own multi-player branch uses above).
+            // Doing it the other way around silently collapsed every
+            // owner's color to whichever one PlayerColor happened to be --
+            // every creature ring / claimed floor / wall orb read as one
+            // color regardless of actual OwnerId.
+            var clientOwnerColors = new[] { LevelDesignerColors.Palette[0], LevelDesignerColors.Palette[1] };
+            grid.PlayerColor = clientOwnerColors[0];
+            grid.OwnerColors = clientOwnerColors;
             grid.TintFloorByOwner = true;
 
             var liquidAnimator = CreateComponent<LiquidAnimator>("LiquidAnimator");
@@ -509,8 +520,18 @@ namespace KeepersDomain.Core
             CreateComponent<ClientInputController>("ClientInputController").Initialize(camera, grid);
 
             // Room decoration from the tile snapshot — same gold-free,
-            // simulation-off managers the Level Designer's load path uses.
-            var roomManagers = CreateLevelDesignerRoomManagers(grid);
+            // simulation-off managers the Level Designer's load path uses,
+            // but owner -1 (not the default 0): this ONE shared manager set
+            // decorates rooms for EVERY keeper, not just keeper 0, and
+            // RestoreRoom's placement check (CanBuildRoomOn(coord, ownerId))
+            // requires the tile's real OwnerId to match the manager's own
+            // -- offline gameplay avoids this by building one manager set
+            // PER keeper (see RestoreWorldRoomsPerOwner); the client can't,
+            // since it never builds per-keeper KeeperContexts. -1 is
+            // CanBuildRoomOn's documented "owner-agnostic" bypass, which is
+            // exactly right here: these tiles already carry the correct
+            // OwnerId from replication, so there's nothing left to enforce.
+            var roomManagers = CreateLevelDesignerRoomManagers(grid, ownerId: -1);
             netGame?.ClientBindRooms(grid, roomManagers);
         }
 
