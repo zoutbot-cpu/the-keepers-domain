@@ -80,6 +80,7 @@ namespace KeepersDomain.Net
                 if (ctx.Lair != null)
                 {
                     ctx.Lair.ClaimChanged += OnHostLairClaimChanged;
+                    ctx.Lair.RoomSold += OnHostRoomSold;
                 }
 
                 if (ctx.Treasury != null)
@@ -97,6 +98,23 @@ namespace KeepersDomain.Net
         private void OnHostTreasuryGoldChanged(Vector2Int coord, int amount)
         {
             TreasuryGoldChangedRpc(NetCoord.From(coord), amount);
+        }
+
+        /// LairManager.RoomSold fires for every sold room regardless of
+        /// kind (see its own header) -- the Sell tool tears down the
+        /// host's own decoration but nothing told the client's matching
+        /// (gold-free, shared-across-owners) room managers to do the same,
+        /// so a sold room's carpet/nest/pile/etc. GameObjects just sat
+        /// there stale on the client even after the tile itself replicated
+        /// back to plain floor. Relaying it here and replaying it against
+        /// the client's own LairManager fixes that the same way it's fixed
+        /// host-side: every other room manager already listens for
+        /// LairManager.RoomSold itself (each one subscribes in its own
+        /// Initialize), so one relay tears down every room type, not just
+        /// Lairs.
+        private void OnHostRoomSold(string roomId)
+        {
+            RoomSoldRpc(roomId);
         }
 
         public override void OnNetworkSpawn()
@@ -141,6 +159,7 @@ namespace KeepersDomain.Net
                     if (ctx.Lair != null)
                     {
                         ctx.Lair.ClaimChanged -= OnHostLairClaimChanged;
+                        ctx.Lair.RoomSold -= OnHostRoomSold;
                     }
 
                     if (ctx.Treasury != null)
@@ -420,6 +439,26 @@ namespace KeepersDomain.Net
         private void LairClaimChangedRpc(NetCoord coord, bool claimed)
         {
             ApplyLairClaim(coord.ToVector2Int(), claimed);
+        }
+
+        /// Client — a room (any kind — see LairManager.RoomSold's own
+        /// header) was sold on the host. Replaying it against the
+        /// client's own LairManager tears down every room type's
+        /// decoration for roomId, not just Lairs — Treasury/SlimeHatchery/
+        /// Tavern/etc. all subscribe to LairManager.RoomSold themselves in
+        /// their own Initialize, the same wiring the host's real per-
+        /// keeper managers use.
+        [Rpc(SendTo.NotServer)]
+        private void RoomSoldRpc(string roomId)
+        {
+            if (_clientRoomManagers != null
+                && _clientRoomManagers.TryGetValue(RoomDesignTool.Lair, out var manager)
+                && manager is LairManager lair)
+            {
+                lair.ApplyReplicatedRoomSold(roomId);
+            }
+
+            _clientReconstructedRooms.Remove(roomId);
         }
 
         /// Client — calls straight into the (gold-free) LairManager's own

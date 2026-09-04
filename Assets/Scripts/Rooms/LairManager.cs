@@ -277,6 +277,19 @@ namespace KeepersDomain.Rooms
             }
         }
 
+        /// Client — mirrors a host-side room sale by roomId directly (see
+        /// NetGame, which relays RoomSold below) rather than a coord like
+        /// EditorRemoveRoomAt — a sold room's tiles have already reverted
+        /// on the host by the time this fires, so there's no live tile to
+        /// read a roomId off of client-side. No refund, same "no economy"
+        /// reasoning EditorRemoveRoomAt uses: the client's TreasuryManager
+        /// is a decoration-only stand-in, not real gold state (that's
+        /// KeeperNetState.Gold's job).
+        public void ApplyReplicatedRoomSold(string roomId)
+        {
+            RemoveRoom(roomId, refundGold: false);
+        }
+
         private void RemoveRoom(string roomId, bool refundGold)
         {
             var clearedTileCount = _grid.RemoveRoomTiles(roomId);
