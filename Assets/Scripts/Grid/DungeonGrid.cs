@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using KeepersDomain.LevelDesigner;
 
 namespace KeepersDomain.Grid
 {
@@ -982,6 +983,7 @@ namespace KeepersDomain.Grid
             }
 
             tile.IsQueuedForDig = true;
+            tile.QueuedByOwnerId = ownerId;
             RefreshVisual(coord);
             DigRequested?.Invoke(coord, ownerId);
         }
@@ -1029,6 +1031,7 @@ namespace KeepersDomain.Grid
             }
 
             tile.IsQueuedForReinforce = true;
+            tile.QueuedByOwnerId = ownerId;
             RefreshVisual(coord);
             ReinforceRequested?.Invoke(coord, ownerId);
         }
@@ -1101,6 +1104,7 @@ namespace KeepersDomain.Grid
             }
 
             tile.IsQueuedForBuild = true;
+            tile.QueuedByOwnerId = ownerId;
             RefreshVisual(coord);
             BuildRequested?.Invoke(coord, ownerId);
         }
@@ -2012,54 +2016,147 @@ namespace KeepersDomain.Grid
             var parent = _visuals[coord.x, coord.y].transform;
             GameObject iconRoot = icon switch
             {
-                QueuedIcon.Pickaxe => BuildPickaxeIcon(parent),
-                QueuedIcon.Shield => BuildShieldIcon(parent),
+                QueuedIcon.Pickaxe => BuildPickaxeIcon(parent, tile.QueuedByOwnerId),
+                QueuedIcon.Shield => BuildShieldIcon(parent, tile.QueuedByOwnerId),
                 QueuedIcon.Hammer => BuildConstructIcon(parent),
                 _ => null
             };
             _queuedActionIcons[coord.x, coord.y] = iconRoot;
 
-            // Pickaxe / Shield float above a Rock wall; in "half wall" mode
-            // that wall is squashed, so drop the icon to match (Hammer sits
-            // on the floor and is unaffected — it keeps its own Y).
+            // Pickaxe / Shield sit right on the wall's own top surface
+            // (Hammer sits on the floor and is unaffected — it keeps its
+            // own Y, set inside BuildConstructIcon).
             if (iconRoot != null && (icon == QueuedIcon.Pickaxe || icon == QueuedIcon.Shield))
             {
-                iconRoot.transform.localPosition = new Vector3(0f, QueuedIconLocalY(coord), 0f);
+                iconRoot.transform.localPosition = new Vector3(0f, WallFaceIconLocalY(coord), 0f);
             }
         }
 
-        /// Local Y for a wall-floating queued icon (Pickaxe / Shield): the
-        /// fixed float height at full wall size, dropped by the height the
-        /// wall mesh loses under "half wall" mode (see ApplyWallChildTransform
-        /// — squashed to half about its base, so it ends up one current
-        /// bounds-height shorter) so the icon still reads as marking that
-        /// specific tile rather than hovering in mid-air above it.
-        private float QueuedIconLocalY(Vector2Int coord)
+        // "A tiny bit above the face of the wall" per the brief — not a
+        // fixed float height (that read as hovering far above the tile,
+        // especially with Half Walls on), but measured off the wall mesh's
+        // own current top so it hugs whatever's actually there.
+        private const float WallFaceIconGap = 0.03f;
+
+        /// Local Y for a wall-face queued icon (Pickaxe / Shield): the wall
+        /// mesh's own current top (works for both full and half-wall height
+        /// — see ApplyWallChildTransform — since it reads the live renderer
+        /// bounds rather than assuming a size) plus a small gap. Falls back
+        /// to the old fixed float height if there's no wall mesh yet (rare —
+        /// only reachable if the icon somehow builds before RefreshVisual's
+        /// own wall-mesh step, which precedes this call in practice).
+        private float WallFaceIconLocalY(Vector2Int coord)
         {
-            var y = QueuedIconFloatHeight;
-            if (_halfWalls)
+            var child = _visualChildren[coord.x, coord.y];
+            var renderer = child != null ? child.GetComponentInChildren<Renderer>() : null;
+            if (renderer == null)
             {
-                var child = _visualChildren[coord.x, coord.y];
-                var renderer = child != null ? child.GetComponentInChildren<Renderer>() : null;
-                if (renderer != null)
+                return QueuedIconFloatHeight;
+            }
+
+            var localTop = _visuals[coord.x, coord.y].transform
+                .InverseTransformPoint(new Vector3(0f, renderer.bounds.max.y, 0f)).y;
+            return localTop + WallFaceIconGap;
+        }
+
+        private const float QueuedIconTextureSize = 0.5f;
+
+        /// The queued-job icon's real look: a flat textured decal (see
+        /// Assets/Resources/Dungeon/Icons/{Pickaxe,Shield}) tinted per the
+        /// queuing keeper's own color at the source (one PNG per palette
+        /// color, not tinted at runtime) — "so we know who selected the
+        /// wall for mining," per the brief, ahead of allied-keeper
+        /// visibility later. Falls back to the original primitive-built
+        /// shape (see BuildPickaxeIconFallback/BuildShieldIconFallback) if
+        /// the matching texture hasn't been found, same graceful-
+        /// degradation convention every other DungeonPack-backed prop uses.
+        private GameObject BuildPickaxeIcon(Transform parent, int ownerId)
+        {
+            var texture = GetQueuedIconTexture("Pickaxe", ownerId);
+            return texture != null
+                ? BuildWallFaceIconQuad(parent, "QueuedIcon_Mine", texture)
+                : BuildPickaxeIconFallback(parent);
+        }
+
+        private GameObject BuildShieldIcon(Transform parent, int ownerId)
+        {
+            var texture = GetQueuedIconTexture("Shield", ownerId);
+            return texture != null
+                ? BuildWallFaceIconQuad(parent, "QueuedIcon_Reinforce", texture)
+                : BuildShieldIconFallback(parent);
+        }
+
+        // folder ("Pickaxe"/"Shield") -> 8 textures, one per
+        // LevelDesignerColors.Palette entry, loaded once and reused.
+        private readonly Dictionary<string, Texture2D[]> _queuedIconTextures = new Dictionary<string, Texture2D[]>();
+
+        private Texture2D GetQueuedIconTexture(string folder, int ownerId)
+        {
+            if (!_queuedIconTextures.TryGetValue(folder, out var textures))
+            {
+                textures = new Texture2D[LevelDesignerColors.Palette.Length];
+                _queuedIconTextures[folder] = textures;
+            }
+
+            var colorIndex = ResolveClosestPaletteIndex(GetOwnerColor(ownerId));
+            if (textures[colorIndex] == null)
+            {
+                var colorName = LevelDesignerColors.Names[colorIndex].ToLowerInvariant();
+                textures[colorIndex] = Resources.Load<Texture2D>($"Dungeon/Icons/{folder}/icon_{folder.ToLowerInvariant()}_{colorName}");
+            }
+
+            return textures[colorIndex];
+        }
+
+        /// Which LevelDesignerColors.Palette entry color is closest to —
+        /// ownerId's resolved color (GetOwnerColor) doesn't necessarily
+        /// come FROM that exact palette (a Level-Designer-authored roster
+        /// could pick any color), so this maps back to whichever pre-tinted
+        /// icon PNG reads closest instead of assuming ownerId indexes the
+        /// palette directly.
+        private static int ResolveClosestPaletteIndex(Color color)
+        {
+            var palette = LevelDesignerColors.Palette;
+            var closestIndex = 0;
+            var closestDistance = float.MaxValue;
+            for (int i = 0; i < palette.Length; i++)
+            {
+                var distance = (palette[i] - color).sqrMagnitude;
+                if (distance < closestDistance)
                 {
-                    y -= renderer.bounds.size.y;
+                    closestDistance = distance;
+                    closestIndex = i;
                 }
             }
 
-            return y;
+            return closestIndex;
         }
 
-        /// A diagonal handle crossed by a shorter head near one end —
-        /// read from roughly above (this project's fixed-ish isometric
-        /// angle), same "flat, top-down-legible" convention
-        /// BuildHolyGroundStar already uses rather than a billboard that'd
-        /// need per-frame facing logic.
-        private GameObject BuildPickaxeIcon(Transform parent)
+        /// A flat, double-sided textured quad lying on the XZ plane (facing
+        /// up) — the shared shape both wall-face icons use now.
+        private GameObject BuildWallFaceIconQuad(Transform parent, string name, Texture2D texture)
+        {
+            var quad = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            quad.name = name;
+            quad.transform.SetParent(parent, false);
+            quad.transform.localRotation = Quaternion.Euler(90f, 0f, 0f);
+            quad.transform.localScale = Vector3.one * QueuedIconTextureSize;
+            quad.GetComponent<Renderer>().sharedMaterial = Prims.NewUnlitTransparentMaterial(texture);
+            Destroy(quad.GetComponent<Collider>());
+            return quad;
+        }
+
+        /// Original primitive-built look — only reached if the real icon
+        /// texture hasn't been imported (see GetQueuedIconTexture). A
+        /// diagonal handle crossed by a shorter head near one end — read
+        /// from roughly above (this project's fixed-ish isometric angle),
+        /// same "flat, top-down-legible" convention BuildHolyGroundStar
+        /// already uses rather than a billboard that'd need per-frame
+        /// facing logic.
+        private GameObject BuildPickaxeIconFallback(Transform parent)
         {
             var root = new GameObject("QueuedIcon_Mine");
             root.transform.SetParent(parent, false);
-            root.transform.localPosition = new Vector3(0f, QueuedIconFloatHeight, 0f);
 
             var handle = GameObject.CreatePrimitive(PrimitiveType.Cube);
             handle.name = "Handle";
@@ -2081,13 +2178,14 @@ namespace KeepersDomain.Grid
             return root;
         }
 
-        /// A round disc with a small raised boss in the center — same
-        /// flat, top-down-legible convention as the pickaxe icon above.
-        private GameObject BuildShieldIcon(Transform parent)
+        /// Original primitive-built look — only reached if the real icon
+        /// texture hasn't been imported (see GetQueuedIconTexture). A round
+        /// disc with a small raised boss in the center — same flat,
+        /// top-down-legible convention as the pickaxe icon above.
+        private GameObject BuildShieldIconFallback(Transform parent)
         {
             var root = new GameObject("QueuedIcon_Reinforce");
             root.transform.SetParent(parent, false);
-            root.transform.localPosition = new Vector3(0f, QueuedIconFloatHeight, 0f);
 
             var disc = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
             disc.name = "Disc";
@@ -2258,7 +2356,7 @@ namespace KeepersDomain.Grid
                     var iconKind = _queuedActionIconKind[x, y];
                     if (iconRoot != null && (iconKind == QueuedIcon.Pickaxe || iconKind == QueuedIcon.Shield))
                     {
-                        iconRoot.transform.localPosition = new Vector3(0f, QueuedIconLocalY(new Vector2Int(x, y)), 0f);
+                        iconRoot.transform.localPosition = new Vector3(0f, WallFaceIconLocalY(new Vector2Int(x, y)), 0f);
                     }
                 }
             }

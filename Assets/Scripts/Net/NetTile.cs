@@ -28,6 +28,7 @@ namespace KeepersDomain.Net
         public bool IsBlocked;
         public byte WallResourceType;  // WallResourceType
         public int Hp;
+        public int QueuedByOwnerId;
         public float PitDepth;
         public FixedString32Bytes RoomId;
 
@@ -48,6 +49,7 @@ namespace KeepersDomain.Net
                 IsBlocked = t.IsBlocked,
                 WallResourceType = (byte)t.WallResourceType,
                 Hp = t.Hp,
+                QueuedByOwnerId = t.QueuedByOwnerId,
                 PitDepth = t.PitDepth,
                 RoomId = string.IsNullOrEmpty(t.RoomId) ? default : new FixedString32Bytes(t.RoomId),
             };
@@ -69,6 +71,7 @@ namespace KeepersDomain.Net
             s.IsBlocked = IsBlocked;
             s.WallResourceType = (WallResourceType)WallResourceType;
             s.Hp = Hp;
+            s.QueuedByOwnerId = QueuedByOwnerId;
             s.PitDepth = PitDepth;
             // RoomId deliberately NOT applied — a room tile lands on the
             // client as plain Claimed Floor so RoomReconstruction's
@@ -94,6 +97,7 @@ namespace KeepersDomain.Net
             s.SerializeValue(ref IsBlocked);
             s.SerializeValue(ref WallResourceType);
             s.SerializeValue(ref Hp);
+            s.SerializeValue(ref QueuedByOwnerId);
             s.SerializeValue(ref PitDepth);
             s.SerializeValue(ref RoomId);
         }

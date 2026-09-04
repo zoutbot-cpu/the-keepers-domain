@@ -119,6 +119,16 @@ namespace KeepersDomain.Grid
         public bool IsQueuedForReinforce;
         public bool IsReinforced;
 
+        /// Which keeper's job this is, while IsQueuedForDig/IsQueuedForReinforce/
+        /// IsQueuedForBuild is true — meaningless otherwise (never reset back
+        /// to a sentinel on completion/cancel, since nothing reads it once
+        /// the matching queued flag is false). Set alongside those flags in
+        /// RequestDig/RequestReinforce/RequestBuild. Lets the Pickaxe/Shield
+        /// wall icon (DungeonGrid.BuildPickaxeIcon/BuildShieldIcon) show
+        /// whose job it is instead of one undifferentiated icon for anyone's
+        /// queued dig/reinforce.
+        public int QueuedByOwnerId;
+
         /// Permanently unminable — RequestDig/RequestReinforce both refuse
         /// a Bedrock tile outright (see DungeonGrid), so it can never be
         /// queued for either. Mutually exclusive with IsReinforced/

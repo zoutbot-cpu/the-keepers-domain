@@ -53,5 +53,44 @@ namespace KeepersDomain.Grid
                 renderer.material = new Material(Template) { color = color };
             }
         }
+
+        private static Shader _unlitShader;
+
+        /// A URP Unlit material, alpha-blended, showing texture — for a flat
+        /// textured decal (see DungeonGrid's Pickaxe/Shield wall icons)
+        /// rather than a tinted opaque primitive. Built with Shader.Find
+        /// rather than a saved .mat asset like Template: unlike Prims.Tint's
+        /// prefab-baking use (NetPrefabSetup), this is only ever
+        /// instantiated at runtime during an actual session, and URP/Unlit
+        /// is already in Always Included Shaders (see ProjectSettings/
+        /// GraphicsSettings.asset — added for DungeonGrid's own selection
+        /// outline material), so its variants already ship in the build.
+        public static Material NewUnlitTransparentMaterial(Texture2D texture)
+        {
+            if (_unlitShader == null)
+            {
+                _unlitShader = Shader.Find("Universal Render Pipeline/Unlit");
+            }
+
+            var material = new Material(_unlitShader) { mainTexture = texture };
+
+            // URP's Unlit shader defaults to opaque -- flip it to
+            // alpha-blended transparent so the icon PNG's own transparent
+            // background actually shows through instead of a solid square.
+            material.SetFloat("_Surface", 1f);
+            material.SetOverrideTag("RenderType", "Transparent");
+            material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+            material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+            material.SetInt("_ZWrite", 0);
+            // Double-sided — a flat decal like the wall-face icons doesn't
+            // have a "wrong" side to view it from once the camera orbits.
+            material.SetInt("_Cull", (int)UnityEngine.Rendering.CullMode.Off);
+            material.DisableKeyword("_ALPHATEST_ON");
+            material.EnableKeyword("_ALPHABLEND_ON");
+            material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+            material.renderQueue = (int)UnityEngine.Rendering.RenderQueue.Transparent;
+
+            return material;
+        }
     }
 }
