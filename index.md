@@ -51,7 +51,7 @@ Phase 1's core loop is implemented and playable: **dig → claim → build → i
 - **Bean Counter** — recruited via Portal pool, requires a placed Conversion Class; lectures there, tormenting a random held prisoner into joining the domain or breaking down into an Elf, otherwise trains/roams.
 - **Elf** — never recruited; only ever created as Conversion Class's torment-failure outcome — "weak and worthless," gimped stats, Hunger/roam only.
 
-All six now carry a composed **`Combatant`** (below).
+All six now carry a composed **`Combatant`** (below), and all six now scale with level: Strength grows ~10%/level, Attackspeed ~7.5%/level, Movespeed ~5%/level, and Armor reaches +1 by level 10 — each off that creature's own base stats. Previously only the Imp had growth beyond MaxHP/HPRegen.
 
 **Combat (first pass — see the v0.0007 note above)** — Directional per-keeper stances (`StanceRegistry`: Aggressive default / Neutral / Friendly). Aggro scan (5-tile stat + line-of-sight grid trace), nearest single target, melee on `1/Attackspeed`, `Armor` flat reduction, `Lifesteal`, combat exp, assist/alarm on being hit, break-off for HP≤20% (flee to Throne) / hunger / mood / grabbed / leash-from-engagement-spot. **Downed bodies**: 0 HP = faint (agent disabled, not destroyed); 10%-MaxHP finish buffer; 60s come-to; permadeath only on a deliberate finish (off-by-default Setting) or a Lava/Chasm drop. A creature hauled into a Jail (by an Imp or the Grab hand) stays parked in the pit as its own capsule and slowly patches itself up. **The Throne Room is attackable** (`IAttackTarget`): 1000 HP, +10/sec regen, hidden-at-full health ring, rallies nearby defenders when hit; no lose-condition on 0 HP yet. All hits keeper-tagged in `Logs/gameplay-debug.log`.
 
@@ -87,7 +87,6 @@ All six now carry a composed **`Combatant`** (below).
 - **Player attack-commands** — send creatures to a point / "defend here" / guard posts
 - **Real netcode** — online host-authoritative multiplayer
 - Imp → full-size Imp growth (noted in brief, unimplemented)
-- Per-creature/per-level stat scaling curves (stats are flat placeholders past level 1)
 - Real art for creatures, and for **Conversion Class** — the one room still on primitive-cube art (may be reworked first)
 - Additional creature races beyond the current six
 - Skill slots 2–6 (only slot 1, the basic attack, is defined) — where windup / cooldown / projectiles / mana costs / AoE will live
@@ -104,6 +103,7 @@ All six now carry a composed **`Combatant`** (below).
 | Combat leash | 7 tiles from where the fight started | `Combatant.cs` |
 | Combat exp | +1 per damage dealt, +0.5 per damage taken | `Combatant.cs` |
 | Throne HP / regen | 1000 HP, +10/sec, no lose-condition | `ThroneRoom.cs` |
+| Per-level stat growth | Every creature uses the same ratio off its own base stats (+10% Strength, +7.5% Attackspeed, +5% Movespeed per level, +1 Armor by level 10) — not individually tuned | per-agent `_growthPerLevel` |
 | Mana Crystal → Max Mana | 1:1 | `ThroneRoom.MaxManaPerCrystal` |
 | Bacon per meal | 1 (fully restores hunger) | `Hunger.cs` |
 | Wage | 5 gold/level, every 10 min | `Pay.cs` |
@@ -127,7 +127,7 @@ All six now carry a composed **`Combatant`** (below).
 - [ ] PvE: invading hero parties
 - [ ] Extend the Throne's `IAttackTarget` pattern to other structures worth defending
 - [ ] A real "save my current game" flow, distinct from the one-time starting-level snapshot
-- [ ] Replace placeholder per-level stat curves with real per-creature scaling
+- [ ] Give each creature its own tuned stat-growth curve — all six currently reuse the same ratio (see Known Placeholder Values)
 - [ ] Real art for Conversion Class (last room on primitives — possibly after a rework) and for creatures
 - [ ] Real procedural placement for Water/Lava/Chasm/Holy Ground/Bedrock
 
