@@ -28,6 +28,7 @@ namespace KeepersDomain.Net
 
         // Host only.
         private Creature _creature;
+        private EditorCreatureKind _speciesKind;
         private DownedBody _downedProbe;
 
         // Client only.
@@ -43,13 +44,14 @@ namespace KeepersDomain.Net
             return go;
         }
 
-        /// Host — bind to the live Creature (HP/level mirror source), Spawn,
-        /// then set the identity netvars. A NetworkVariable can only be
-        /// written once its NetworkObject is spawned, so Spawn() must come
-        /// first; the client's ClientInit reads _species.Value (and
-        /// subscribes to OnValueChanged) after the spawn arrives, so it
-        /// still sees the right species. A no-op on an offline body (which
-        /// has no CreatureNetView), so spawners can call it unconditionally.
+        /// Host — bind to the live Creature (the mirror source for every
+        /// netvar) and Spawn. The netvars themselves are pushed by
+        /// HostMirror every frame rather than written once here: a
+        /// NetworkVariable written in the same frame as Spawn() doesn't
+        /// reliably propagate its post-spawn value (the spawn payload and
+        /// the change delta race), which left every client-summoned
+        /// creature's owner reading 0 on the client -> all rings one
+        /// colour. A no-op on an offline body (no CreatureNetView).
         public static void HostFinalize(GameObject go, EditorCreatureKind kind, Creature creature)
         {
             var view = go.GetComponent<CreatureNetView>();
@@ -59,13 +61,8 @@ namespace KeepersDomain.Net
             }
 
             view._creature = creature;
+            view._speciesKind = kind;
             go.GetComponent<NetworkObject>().Spawn();
-
-            view._species.Value = kind;
-            view._owner.Value = creature.OwnerId;
-            view._maxHp.Value = creature.Stats.MaxHP;
-            view._hp.Value = creature.Stats.HP;
-            view._level.Value = creature.Level;
         }
 
         private void Update()
@@ -87,6 +84,8 @@ namespace KeepersDomain.Net
                 return;
             }
 
+            if (_species.Value != _speciesKind) _species.Value = _speciesKind;
+            if (_owner.Value != _creature.OwnerId) _owner.Value = _creature.OwnerId;
             if (!Mathf.Approximately(_hp.Value, _creature.Stats.HP)) _hp.Value = _creature.Stats.HP;
             if (!Mathf.Approximately(_maxHp.Value, _creature.Stats.MaxHP)) _maxHp.Value = _creature.Stats.MaxHP;
             if (_level.Value != _creature.Level) _level.Value = _creature.Level;
