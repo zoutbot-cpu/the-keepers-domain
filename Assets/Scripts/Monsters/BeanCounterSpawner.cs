@@ -5,6 +5,7 @@ using KeepersDomain.Creatures;
 using KeepersDomain.LevelDesigner;
 using KeepersDomain.Net;
 using KeepersDomain.DebugUI;
+using KeepersDomain.Input;
 
 namespace KeepersDomain.Monsters
 {
@@ -14,7 +15,7 @@ namespace KeepersDomain.Monsters
     /// MazeRattlerSpawner. On top of pool availability, a Bean Counter's
     /// own join requirements (see MeetsJoinRequirements) all have to hold
     /// too.
-    public class BeanCounterSpawner : MonoBehaviour
+    public class BeanCounterSpawner : MonoBehaviour, IRecruitSource
     {
         /// How many Bean Counters a single placed Conversion Class
         /// supports — same "N per room" shape MazeRattlerSpawner's own

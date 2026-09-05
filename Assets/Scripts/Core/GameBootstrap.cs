@@ -514,10 +514,6 @@ namespace KeepersDomain.Core
             var camera = CreateIsoCamera(grid, panMargin, mapCenter);
 
             CreateComponent<NetHud>("NetHud").Initialize(isHost: false);
-            CreateComponent<ClientHud>("ClientHud");
-            // Milestone 1c's two commands (queue a dig, summon an impling) —
-            // see NetGame.RequestDigRpc/RequestSummonImplingRpc.
-            CreateComponent<ClientInputController>("ClientInputController").Initialize(camera, grid);
 
             // Room decoration from the tile snapshot — same gold-free,
             // simulation-off managers the Level Designer's load path uses,
@@ -533,6 +529,40 @@ namespace KeepersDomain.Core
             // OwnerId from replication, so there's nothing left to enforce.
             var roomManagers = CreateLevelDesignerRoomManagers(grid, ownerId: -1);
             netGame?.ClientBindRooms(grid, roomManagers);
+
+            // The client runs the host's real gameplay UI now (the user's
+            // own GUI design comes later). It's driven by a stand-in
+            // KeeperContext for keeper 1: the gold-free room managers above
+            // handle placement PREVIEWS; every mutation routes through
+            // NetworkedKeeperActions -> a server RPC on NetGame instead of
+            // these managers. The simulation-side fields (JobBoard,
+            // spawners, Throne) stay null -- BottomMenuBar's networked mode
+            // reads HUD numbers off KeeperNetState and hides the panels
+            // that need them. Deliberately NOT registered in
+            // KeeperContext.All (that's the host's authoritative registry).
+            var clientCtx = new KeeperContext
+            {
+                OwnerId = 1,
+                Lair = roomManagers[RoomDesignTool.Lair] as LairManager,
+                Treasury = roomManagers[RoomDesignTool.Treasury] as TreasuryManager,
+                SlimeHatchery = roomManagers[RoomDesignTool.SlimeHatchery] as SlimeHatcheryManager,
+                Tavern = roomManagers[RoomDesignTool.Tavern] as TavernManager,
+                TrainingRoom = roomManagers[RoomDesignTool.TrainingRoom] as TrainingRoomManager,
+                Library = roomManagers[RoomDesignTool.Library] as LibraryManager,
+                Jail = roomManagers[RoomDesignTool.Jail] as JailManager,
+                ConversionClass = roomManagers[RoomDesignTool.ConversionClass] as ConversionClassManager,
+                Bridge = roomManagers[RoomDesignTool.Bridge] as BridgeManager,
+            };
+            var clientContexts = new[] { clientCtx };
+            var netActions = new NetworkedKeeperActions();
+
+            // Grab isn't wired for netcode yet -- pass null (every
+            // _minionGrabController call in the controller is null-safe).
+            var interactionController = CreateComponent<TileInteractionController>("TileInteractionController");
+            interactionController.Initialize(camera, grid, clientContexts, null, 0, netActions);
+
+            var bottomMenuBar = CreateComponent<BottomMenuBar>("BottomMenuBar");
+            bottomMenuBar.Initialize(grid, clientContexts, interactionController, null, 0, netActions, networked: true);
         }
 
         private static void BuildWorld(LevelData data = null)

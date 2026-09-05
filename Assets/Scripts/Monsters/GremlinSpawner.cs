@@ -5,6 +5,7 @@ using KeepersDomain.Creatures;
 using KeepersDomain.LevelDesigner;
 using KeepersDomain.Net;
 using KeepersDomain.DebugUI;
+using KeepersDomain.Input;
 
 namespace KeepersDomain.Monsters
 {
@@ -14,7 +15,7 @@ namespace KeepersDomain.Monsters
     /// taking one out of Portal.TryTakeFromPool, spawned at the Portal's own
     /// coord. On top of pool availability, a Gremlin's own join
     /// requirements (see MeetsJoinRequirements) all have to hold too.
-    public class GremlinSpawner : MonoBehaviour
+    public class GremlinSpawner : MonoBehaviour, IRecruitSource
     {
         /// Training Room tiles (summed across every placed Training Room)
         /// required before a Gremlin can join, per the design brief.

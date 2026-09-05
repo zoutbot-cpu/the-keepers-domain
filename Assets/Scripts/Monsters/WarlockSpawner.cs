@@ -5,6 +5,7 @@ using KeepersDomain.Creatures;
 using KeepersDomain.LevelDesigner;
 using KeepersDomain.Net;
 using KeepersDomain.DebugUI;
+using KeepersDomain.Input;
 
 namespace KeepersDomain.Monsters
 {
@@ -14,7 +15,7 @@ namespace KeepersDomain.Monsters
     /// Portal.TryTakeFromPool, spawned at the Portal's own coord. On top of
     /// pool availability, a Warlock's own join requirements (see
     /// MeetsJoinRequirements) all have to hold too.
-    public class WarlockSpawner : MonoBehaviour
+    public class WarlockSpawner : MonoBehaviour, IRecruitSource
     {
         /// A placed Lair tile required before a Warlock can join — unlike
         /// Gremlin's requirement, this only checks that a Lair exists

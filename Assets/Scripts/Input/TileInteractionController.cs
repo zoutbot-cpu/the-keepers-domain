@@ -116,13 +116,19 @@ namespace KeepersDomain.Input
         private Camera _camera;
         private DungeonGrid _grid;
 
-        // The keeper the local player is currently driving. Every manager
-        // field below is just a cached pointer into _active, refreshed by
-        // SetActiveContext when the debug player switcher flips players —
-        // so the ~1000 lines of gesture logic keep referring to _jobBoard /
-        // _lairManager / ... unchanged.
-        private KeeperContext _active;
-        private BuilderJobBoard _jobBoard;
+        // Every MUTATING action goes through here -- LocalKeeperActions
+        // (offline/host, straight manager calls against the active keeper)
+        // or NetworkedKeeperActions (client, a server RPC). Refreshed by
+        // SetActiveContext when the debug player switcher flips players.
+        private IKeeperActions _actions;
+        // Client passes a NetworkedKeeperActions here; null means build a
+        // LocalKeeperActions per active context (the offline/host case).
+        private IKeeperActions _providedActions;
+
+        // The rest are cached from the active KeeperContext purely for
+        // PREVIEWS (UpdatePlacementPreview / ShowSellPreview / ...), which
+        // are gold-free and visual-only -- a client's own gold-free manager
+        // set renders them fine. Every mutation goes through _actions above.
         private LairManager _lairManager;
         private TreasuryManager _treasuryManager;
         private SlimeHatcheryManager _slimeHatcheryManager;
@@ -132,7 +138,6 @@ namespace KeepersDomain.Input
         private JailManager _jailManager;
         private ConversionClassManager _conversionClassManager;
         private BridgeManager _bridgeManager;
-        private ImplingSpawner _implingSpawner;
         private MinionGrabController _minionGrabController;
 
         // Sits alongside the Shift-key check so a future UI toggle (touch
@@ -244,11 +249,12 @@ namespace KeepersDomain.Input
         // sits still over the same wall.
         private Vector2Int? _lastWallHoverCoord;
 
-        public void Initialize(Camera camera, DungeonGrid grid, KeeperContext[] contexts, MinionGrabController minionGrabController, int activeIndex)
+        public void Initialize(Camera camera, DungeonGrid grid, KeeperContext[] contexts, MinionGrabController minionGrabController, int activeIndex, IKeeperActions actions = null)
         {
             _camera = camera;
             _grid = grid;
             _minionGrabController = minionGrabController;
+            _providedActions = actions;
             SetActiveContext(contexts[activeIndex]);
         }
 
@@ -258,8 +264,7 @@ namespace KeepersDomain.Input
         /// gesture first (see AbortInProgressGesture).
         public void SetActiveContext(KeeperContext ctx)
         {
-            _active = ctx;
-            _jobBoard = ctx.JobBoard;
+            _actions = _providedActions ?? new LocalKeeperActions(ctx, _grid);
             _lairManager = ctx.Lair;
             _treasuryManager = ctx.Treasury;
             _slimeHatcheryManager = ctx.SlimeHatchery;
@@ -269,7 +274,6 @@ namespace KeepersDomain.Input
             _jailManager = ctx.Jail;
             _conversionClassManager = ctx.ConversionClass;
             _bridgeManager = ctx.Bridge;
-            _implingSpawner = ctx.ImplingSpawner;
         }
 
         /// Cancels whatever placement / sell / queue drag is mid-gesture
@@ -720,7 +724,7 @@ namespace KeepersDomain.Input
                 _pendingPlacementAction = PlacementAction.None;
                 if (TryGetCoordUnderScreenPos(screenPos, out var endCoord))
                 {
-                    _lairManager?.TryPlaceLair(_dragStartCoord, endCoord);
+                    _actions.PlaceRoom(RoomDesignTool.Lair, _dragStartCoord, endCoord);
                 }
                 _lairManager?.ClearPlacementPreview();
                 return;
@@ -732,7 +736,7 @@ namespace KeepersDomain.Input
                 _pendingPlacementAction = PlacementAction.None;
                 if (TryGetCoordUnderScreenPos(screenPos, out var endCoord))
                 {
-                    _treasuryManager?.TryPlaceTreasury(_dragStartCoord, endCoord);
+                    _actions.PlaceRoom(RoomDesignTool.Treasury, _dragStartCoord, endCoord);
                 }
                 _treasuryManager?.ClearPlacementPreview();
                 return;
@@ -744,7 +748,7 @@ namespace KeepersDomain.Input
                 _pendingPlacementAction = PlacementAction.None;
                 if (TryGetCoordUnderScreenPos(screenPos, out var endCoord))
                 {
-                    _slimeHatcheryManager?.TryPlaceHatchery(_dragStartCoord, endCoord);
+                    _actions.PlaceRoom(RoomDesignTool.SlimeHatchery, _dragStartCoord, endCoord);
                 }
                 _slimeHatcheryManager?.ClearPlacementPreview();
                 return;
@@ -756,7 +760,7 @@ namespace KeepersDomain.Input
                 _pendingPlacementAction = PlacementAction.None;
                 if (TryGetCoordUnderScreenPos(screenPos, out var endCoord))
                 {
-                    _tavernManager?.TryPlaceTavern(_dragStartCoord, endCoord);
+                    _actions.PlaceRoom(RoomDesignTool.Tavern, _dragStartCoord, endCoord);
                 }
                 _tavernManager?.ClearPlacementPreview();
                 return;
@@ -768,7 +772,7 @@ namespace KeepersDomain.Input
                 _pendingPlacementAction = PlacementAction.None;
                 if (TryGetCoordUnderScreenPos(screenPos, out var endCoord))
                 {
-                    _trainingRoomManager?.TryPlaceTrainingRoom(_dragStartCoord, endCoord);
+                    _actions.PlaceRoom(RoomDesignTool.TrainingRoom, _dragStartCoord, endCoord);
                 }
                 _trainingRoomManager?.ClearPlacementPreview();
                 return;
@@ -780,7 +784,7 @@ namespace KeepersDomain.Input
                 _pendingPlacementAction = PlacementAction.None;
                 if (TryGetCoordUnderScreenPos(screenPos, out var endCoord))
                 {
-                    _libraryManager?.TryPlaceLibrary(_dragStartCoord, endCoord);
+                    _actions.PlaceRoom(RoomDesignTool.Library, _dragStartCoord, endCoord);
                 }
                 _libraryManager?.ClearPlacementPreview();
                 return;
@@ -792,7 +796,7 @@ namespace KeepersDomain.Input
                 _pendingPlacementAction = PlacementAction.None;
                 if (TryGetCoordUnderScreenPos(screenPos, out var endCoord))
                 {
-                    _jailManager?.TryPlaceJail(_dragStartCoord, endCoord);
+                    _actions.PlaceRoom(RoomDesignTool.Jail, _dragStartCoord, endCoord);
                 }
                 _jailManager?.ClearPlacementPreview();
                 return;
@@ -804,7 +808,7 @@ namespace KeepersDomain.Input
                 _pendingPlacementAction = PlacementAction.None;
                 if (TryGetCoordUnderScreenPos(screenPos, out var endCoord))
                 {
-                    _conversionClassManager?.TryPlaceConversionClass(_dragStartCoord, endCoord);
+                    _actions.PlaceRoom(RoomDesignTool.ConversionClass, _dragStartCoord, endCoord);
                 }
                 _conversionClassManager?.ClearPlacementPreview();
                 return;
@@ -848,11 +852,11 @@ namespace KeepersDomain.Input
             switch (_pendingPlacementAction)
             {
                 case PlacementAction.SpawnImpling:
-                    _implingSpawner?.SpawnImplingAt(coord);
+                    _actions.SpawnImpling(coord);
                     _pendingPlacementAction = PlacementAction.None;
                     return true;
                 case PlacementAction.ToggleLairClaim:
-                    _lairManager?.ToggleLairClaim(coord);
+                    _actions.ToggleLairClaim(coord);
                     _pendingPlacementAction = PlacementAction.None;
                     return true;
                 default:
@@ -1037,67 +1041,53 @@ namespace KeepersDomain.Input
                     switch (_buildMode)
                     {
                         case BuildMode.Mine:
-                            _grid.RequestDig(coord, _active.OwnerId);
+                            _actions.RequestDig(coord);
                             break;
                         case BuildMode.Reinforce:
-                            _grid.RequestReinforce(coord, _active.OwnerId);
+                            _actions.RequestReinforce(coord);
                             break;
                         case BuildMode.Construct:
-                            _grid.RequestBuild(coord, _active.OwnerId);
+                            _actions.RequestBuild(coord);
                             break;
                     }
                     break;
                 case GestureMode.Unqueue:
-                    if (_jobBoard == null)
-                    {
-                        break;
-                    }
-
                     switch (_buildMode)
                     {
                         case BuildMode.Mine:
-                            if (_jobBoard.CancelJob(coord))
-                            {
-                                _grid.CancelDig(coord);
-                            }
+                            _actions.CancelDig(coord);
                             break;
                         case BuildMode.Reinforce:
-                            if (_jobBoard.CancelReinforceJob(coord))
-                            {
-                                _grid.CancelReinforce(coord);
-                            }
+                            _actions.CancelReinforce(coord);
                             break;
                         case BuildMode.Construct:
-                            if (_jobBoard.CancelBuildJob(coord))
-                            {
-                                _grid.CancelBuild(coord);
-                            }
+                            _actions.CancelBuild(coord);
                             break;
                     }
                     break;
                 case GestureMode.Sell:
-                    _lairManager?.TrySellRoom(coord);
+                    _actions.SellRoom(coord);
                     break;
                 case GestureMode.BuildBridge:
-                    _bridgeManager?.TryPlaceBridgeTile(coord);
+                    _actions.PlaceBridgeTile(coord);
                     break;
                 case GestureMode.PlaceTerrain:
                     switch (_buildMode)
                     {
                         case BuildMode.PlaceWater:
-                            _grid.SetTerrainFeature(coord, TileType.Water);
+                            _actions.SetTerrain(coord, TileType.Water);
                             break;
                         case BuildMode.PlaceLava:
-                            _grid.SetTerrainFeature(coord, TileType.Lava);
+                            _actions.SetTerrain(coord, TileType.Lava);
                             break;
                         case BuildMode.PlaceChasm:
-                            _grid.SetTerrainFeature(coord, TileType.Chasm);
+                            _actions.SetTerrain(coord, TileType.Chasm);
                             break;
                         case BuildMode.PlaceHolyGround:
-                            _grid.SetTerrainFeature(coord, TileType.HolyGround);
+                            _actions.SetTerrain(coord, TileType.HolyGround);
                             break;
                         case BuildMode.PlaceBedrock:
-                            _grid.SetBedrock(coord);
+                            _actions.SetBedrock(coord);
                             break;
                     }
                     break;

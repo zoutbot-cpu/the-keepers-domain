@@ -7,7 +7,9 @@ using KeepersDomain.Creatures;
 using KeepersDomain.Grid;
 using KeepersDomain.Implings;
 using KeepersDomain.Input;
+using KeepersDomain.LevelDesigner;
 using KeepersDomain.Monsters;
+using KeepersDomain.Net;
 using KeepersDomain.Rooms;
 
 namespace KeepersDomain.UI
@@ -47,6 +49,18 @@ namespace KeepersDomain.UI
         private TileInteractionController _interactionController;
         private LocalPlayerController _localPlayer;
 
+        // Every mutating button press routes through here -- LocalKeeperActions
+        // on the host (identical to the direct manager calls this used to
+        // make), NetworkedKeeperActions on a client (a server RPC).
+        private IKeeperActions _actions;
+        private IKeeperActions _providedActions;
+        // On a networked client there is no real KeeperContext -- gold /
+        // mana / bacon / throne HP for the top bar come off the replicated
+        // KeeperNetState instead, and _jobBoard / spawners / _throneRoom
+        // below stay null (their panels degrade or hide).
+        private bool _networked;
+        private const int NetOwnerId = 1;
+
         // Every context this session — only used to draw the debug player
         // switcher (and only when Length > 1).
         private KeeperContext[] _contexts;
@@ -80,12 +94,14 @@ namespace KeepersDomain.UI
         private Vector2 _tasksScrollPos;
         private Vector2 _creaturesScrollPos;
 
-        public void Initialize(DungeonGrid grid, KeeperContext[] contexts, TileInteractionController interactionController, LocalPlayerController localPlayer, int activeIndex)
+        public void Initialize(DungeonGrid grid, KeeperContext[] contexts, TileInteractionController interactionController, LocalPlayerController localPlayer, int activeIndex, IKeeperActions actions = null, bool networked = false)
         {
             _grid = grid;
             _contexts = contexts;
             _interactionController = interactionController;
             _localPlayer = localPlayer;
+            _providedActions = actions;
+            _networked = networked;
             SetActiveContext(contexts[activeIndex]);
         }
 
@@ -96,6 +112,7 @@ namespace KeepersDomain.UI
         public void SetActiveContext(KeeperContext ctx)
         {
             _active = ctx;
+            _actions = _providedActions ?? new LocalKeeperActions(ctx, _grid);
             _jobBoard = ctx.JobBoard;
             _treasuryManager = ctx.Treasury;
             _throneRoom = ctx.Throne;
@@ -110,7 +127,11 @@ namespace KeepersDomain.UI
             _beanCounterSpawner = ctx.BeanCounterSpawner;
             // Seeded from the board's actual current order, not a second
             // hardcoded default — see BuilderJobBoard.GetJobPriorityOrder.
-            _priorityOrder = new List<JobKind>(_jobBoard.GetJobPriorityOrder());
+            // Empty on a networked client (no job board there — the Tasks
+            // panel and the priority list both sit that case out).
+            _priorityOrder = _jobBoard != null
+                ? new List<JobKind>(_jobBoard.GetJobPriorityOrder())
+                : new List<JobKind>();
             // These toggles are per-board state; resync the UI to the
             // newly-active board so a checkbox doesn't lie.
             _digQueuePaused = false;
@@ -189,13 +210,39 @@ namespace KeepersDomain.UI
         {
             GUILayout.BeginArea(rect, GUI.skin.box);
             GUILayout.BeginHorizontal();
-            GUILayout.Label($"Gold: {_treasuryManager.TotalGold}");
-            GUILayout.Space(12f);
-            GUILayout.Label($"Mana: {_throneRoom.CurrentMana}/{_throneRoom.ReservedMana}/{_throneRoom.MaxMana}");
-            GUILayout.Space(12f);
-            GUILayout.Label($"Bacon: {_tavernManager.TotalBacon}");
-            GUILayout.Space(12f);
-            GUILayout.Label($"Throne HP: {_throneRoom.Hp}/{_throneRoom.MaxHp}");
+
+            if (_networked)
+            {
+                // No real KeeperContext on the client — the numbers come off
+                // the replicated KeeperNetState. Reserved mana isn't
+                // replicated, so mana shows current/max only.
+                var s = KeeperNetState.ForOwner(NetOwnerId);
+                if (s == null)
+                {
+                    GUILayout.Label("Waiting for keeper state...");
+                }
+                else
+                {
+                    GUILayout.Label($"Gold: {s.Gold.Value}");
+                    GUILayout.Space(12f);
+                    GUILayout.Label($"Mana: {s.Mana.Value}/{s.MaxMana.Value}");
+                    GUILayout.Space(12f);
+                    GUILayout.Label($"Bacon: {s.Bacon.Value}");
+                    GUILayout.Space(12f);
+                    GUILayout.Label($"Throne HP: {s.ThroneHp.Value}/{s.ThroneMaxHp.Value}");
+                }
+            }
+            else
+            {
+                GUILayout.Label($"Gold: {_treasuryManager.TotalGold}");
+                GUILayout.Space(12f);
+                GUILayout.Label($"Mana: {_throneRoom.CurrentMana}/{_throneRoom.ReservedMana}/{_throneRoom.MaxMana}");
+                GUILayout.Space(12f);
+                GUILayout.Label($"Bacon: {_tavernManager.TotalBacon}");
+                GUILayout.Space(12f);
+                GUILayout.Label($"Throne HP: {_throneRoom.Hp}/{_throneRoom.MaxHp}");
+            }
+
             GUILayout.EndHorizontal();
             GUILayout.EndArea();
         }
@@ -405,7 +452,7 @@ namespace KeepersDomain.UI
             if (pauseOn != _digQueuePaused)
             {
                 _digQueuePaused = pauseOn;
-                _jobBoard.SetDigJobsPaused(_digQueuePaused);
+                _actions.SetDigJobsPaused(_digQueuePaused);
             }
 
             GUILayout.Space(8f);
@@ -504,10 +551,34 @@ namespace KeepersDomain.UI
             }
         }
 
+        /// One recruit row — button + requirements label. source is null on
+        /// a networked client (no spawner there): the count/gate can't be
+        /// shown, so the button stays enabled and the host's own
+        /// TryRecruitX decides.
+        private void DrawRecruitButton(EditorCreatureKind kind, string name, IRecruitSource source, string requirements)
+        {
+            var label = source != null
+                ? $"Recruit {name} ({source.AvailableToRecruit} available)"
+                : $"Recruit {name}";
+            GUI.enabled = source == null || source.CanRecruit;
+            if (GUILayout.Button(label))
+            {
+                _actions.Recruit(kind);
+            }
+            GUI.enabled = true;
+            GUILayout.Label(requirements);
+        }
+
         private void DrawImplingMenu()
         {
             var spawnLabel = PlacementButtonLabel(PlacementAction.SpawnImpling, $"Spawn impling ({ImplingSpawner.ImplingManaUpkeep} mana)");
-            GUI.enabled = _throneRoom.CurrentMana >= ImplingSpawner.ImplingManaUpkeep;
+            // Client: the mana gate is host-side (KeeperNetState.Mana isn't
+            // authoritative for "can afford" the instant the button is
+            // pressed), so leave the button enabled and let the host reject.
+            var netMana = _networked ? KeeperNetState.ForOwner(NetOwnerId)?.Mana.Value ?? int.MaxValue : 0;
+            GUI.enabled = _networked
+                ? netMana >= ImplingSpawner.ImplingManaUpkeep
+                : _throneRoom.CurrentMana >= ImplingSpawner.ImplingManaUpkeep;
             if (GUILayout.Button(spawnLabel))
             {
                 _interactionController.RequestPlacement(PlacementAction.SpawnImpling);
@@ -519,12 +590,15 @@ namespace KeepersDomain.UI
             if (autoReinforceOn != _autoReinforceOn)
             {
                 _autoReinforceOn = autoReinforceOn;
-                _jobBoard.SetAutoReinforceEnabled(_autoReinforceOn);
+                _actions.SetAutoReinforce(_autoReinforceOn);
             }
 
-            GUILayout.Space(8f);
-            GUILayout.Label("Job priority (top = done first)");
-            DrawPriorityList();
+            if (_jobBoard != null)
+            {
+                GUILayout.Space(8f);
+                GUILayout.Label("Job priority (top = done first)");
+                DrawPriorityList();
+            }
         }
 
         private void DrawPriorityList()
@@ -569,47 +643,23 @@ namespace KeepersDomain.UI
             // Also gated on Gremlin's own join requirements (see
             // GremlinSpawner.MeetsJoinRequirements) — always shown below the
             // button so it's clear why it's greyed out, not just that it is.
-            var available = _gremlinSpawner.AvailableToRecruit;
-            GUI.enabled = _gremlinSpawner.CanRecruit;
-            if (GUILayout.Button($"Recruit Gremlin ({available} available)"))
-            {
-                _gremlinSpawner.TryRecruitGremlin();
-            }
-            GUI.enabled = true;
-            GUILayout.Label("Requires: a free Lair, fewer non-Imp creatures than Hatchery tiles, 9+ Training Room tiles");
+            DrawRecruitButton(EditorCreatureKind.Gremlin, "Gremlin", _gremlinSpawner,
+                "Requires: a free Lair, fewer non-Imp creatures than Hatchery tiles, 9+ Training Room tiles");
 
             GUILayout.Space(4f);
 
-            var warlocksAvailable = _warlockSpawner.AvailableToRecruit;
-            GUI.enabled = _warlockSpawner.CanRecruit;
-            if (GUILayout.Button($"Recruit Warlock ({warlocksAvailable} available)"))
-            {
-                _warlockSpawner.TryRecruitWarlock();
-            }
-            GUI.enabled = true;
-            GUILayout.Label("Requires: a Lair tile, a 3x3+ Library, fewer non-Imp creatures than Hatchery tiles, fewer intelligent creatures than Tavern tiles");
+            DrawRecruitButton(EditorCreatureKind.Warlock, "Warlock", _warlockSpawner,
+                "Requires: a Lair tile, a 3x3+ Library, fewer non-Imp creatures than Hatchery tiles, fewer intelligent creatures than Tavern tiles");
 
             GUILayout.Space(4f);
 
-            var mazeRattlersAvailable = _mazeRattlerSpawner.AvailableToRecruit;
-            GUI.enabled = _mazeRattlerSpawner.CanRecruit;
-            if (GUILayout.Button($"Recruit Maze Rattler ({mazeRattlersAvailable} available)"))
-            {
-                _mazeRattlerSpawner.TryRecruitMazeRattler();
-            }
-            GUI.enabled = true;
-            GUILayout.Label("Requires: a free Lair, fewer Maze Rattlers than 5x placed Jail rooms");
+            DrawRecruitButton(EditorCreatureKind.MazeRattler, "Maze Rattler", _mazeRattlerSpawner,
+                "Requires: a free Lair, fewer Maze Rattlers than 5x placed Jail rooms");
 
             GUILayout.Space(4f);
 
-            var beanCountersAvailable = _beanCounterSpawner.AvailableToRecruit;
-            GUI.enabled = _beanCounterSpawner.CanRecruit;
-            if (GUILayout.Button($"Recruit Bean Counter ({beanCountersAvailable} available)"))
-            {
-                _beanCounterSpawner.TryRecruitBeanCounter();
-            }
-            GUI.enabled = true;
-            GUILayout.Label("Requires: a free Lair, fewer Bean Counters than 3x placed Conversion Class rooms");
+            DrawRecruitButton(EditorCreatureKind.BeanCounter, "Bean Counter", _beanCounterSpawner,
+                "Requires: a free Lair, fewer Bean Counters than 3x placed Conversion Class rooms");
 
             GUILayout.Space(8f);
 
@@ -696,6 +746,15 @@ namespace KeepersDomain.UI
 
         private void DrawTasksMenu()
         {
+            if (_jobBoard == null)
+            {
+                // No job board on a networked client -- the live job lists
+                // aren't replicated. Cancelling is still possible from the
+                // map (the Mine/Reinforce tool over an already-queued tile).
+                GUILayout.Label("Job list isn't available on a networked client yet.");
+                return;
+            }
+
             _tasksScrollPos = GUILayout.BeginScrollView(_tasksScrollPos, GUILayout.Height(210f));
 
             DrawCancelableJobList("Dig", _jobBoard.GetJobs(), _jobBoard.CanCancel, coord =>

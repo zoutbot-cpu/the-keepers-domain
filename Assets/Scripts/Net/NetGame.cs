@@ -568,91 +568,136 @@ namespace KeepersDomain.Net
             }
         }
 
-        // ---- client commands (Milestone 2, first slice) ----
+        // ---- client commands (Milestone 2) ----
+        //
+        // The client runs the host's real gameplay UI
+        // (TileInteractionController + BottomMenuBar) now, routing every
+        // mutating action through
+        // NetworkedKeeperActions -> these RPCs. Each one calls the exact
+        // gameplay method the offline/host UI calls, on keeper 1's own
+        // KeeperContext, so every gate (territory, gold, mana, pool, job-
+        // cancelability) applies unchanged and the result replicates back
+        // through the normal tile-delta / creature-ghost / room-visual
+        // paths -- there is never a direct reply.
 
-        /// Client — ClientInputController's Reinforce command. Routes to
-        /// the exact same DungeonGrid.RequestReinforce every local player's
-        /// Reinforce tool calls.
+        private KeeperContext ClientCtx => KeeperContext.ForOwner(ClientOwnerId);
+
         [Rpc(SendTo.Server)]
         public void RequestReinforceRpc(NetCoord coord)
         {
-            if (_grid != null)
+            if (_grid != null) _grid.RequestReinforce(coord.ToVector2Int(), ClientOwnerId);
+        }
+
+        [Rpc(SendTo.Server)]
+        public void RequestBuildRpc(NetCoord coord)
+        {
+            if (_grid != null) _grid.RequestBuild(coord.ToVector2Int(), ClientOwnerId);
+        }
+
+        [Rpc(SendTo.Server)]
+        public void RequestCancelDigRpc(NetCoord coord)
+        {
+            var ctx = ClientCtx;
+            var c = coord.ToVector2Int();
+            if (ctx != null && ctx.JobBoard != null && _grid != null && ctx.JobBoard.CancelJob(c))
             {
-                _grid.RequestReinforce(coord.ToVector2Int(), ClientOwnerId);
+                _grid.CancelDig(c);
             }
         }
 
-        /// Client — ClientInputController's Cancel command. Tries a queued
-        /// dig first, then a queued reinforce, same as
-        /// TileInteractionController's own Unqueue gesture does per
-        /// BuildMode — except the client has one Cancel toggle covering
-        /// both instead of a separate mode per job kind, since it only
-        /// ever needs to cancel jobs it can see are queued right there on
-        /// the tile. Keeper 1's own BuilderJobBoard gates which jobs it'll
-        /// actually let go (a job already claimed by a creature mid-walk
-        /// isn't cancelable), same as offline.
         [Rpc(SendTo.Server)]
-        public void RequestCancelJobRpc(NetCoord coord)
+        public void RequestCancelReinforceRpc(NetCoord coord)
         {
-            var ctx = KeeperContext.ForOwner(ClientOwnerId);
-            if (ctx == null || ctx.JobBoard == null || _grid == null)
-            {
-                return;
-            }
-
+            var ctx = ClientCtx;
             var c = coord.ToVector2Int();
-            if (ctx.JobBoard.CancelJob(c))
-            {
-                _grid.CancelDig(c);
-                return;
-            }
-
-            if (ctx.JobBoard.CancelReinforceJob(c))
+            if (ctx != null && ctx.JobBoard != null && _grid != null && ctx.JobBoard.CancelReinforceJob(c))
             {
                 _grid.CancelReinforce(c);
             }
         }
 
-        /// Client — ClientInputController's Sell command. Routes to keeper
-        /// 1's own LairManager.TrySellRoom, the same generic Sell tool
-        /// every room type shares offline — it already rejects a tile that
-        /// isn't keeper 1's own (see TrySellRoom's own owner check), so a
-        /// stray/mistaken call can't tear down the host's rooms.
+        [Rpc(SendTo.Server)]
+        public void RequestCancelBuildRpc(NetCoord coord)
+        {
+            var ctx = ClientCtx;
+            var c = coord.ToVector2Int();
+            if (ctx != null && ctx.JobBoard != null && _grid != null && ctx.JobBoard.CancelBuildJob(c))
+            {
+                _grid.CancelBuild(c);
+            }
+        }
+
         [Rpc(SendTo.Server)]
         public void RequestSellRoomRpc(NetCoord coord)
         {
-            var ctx = KeeperContext.ForOwner(ClientOwnerId);
-            if (ctx != null && ctx.Lair != null)
-            {
-                ctx.Lair.TrySellRoom(coord.ToVector2Int());
-            }
+            // TrySellRoom already rejects a tile that isn't keeper 1's own.
+            ClientCtx?.Lair?.TrySellRoom(coord.ToVector2Int());
         }
 
-        /// Client — ClientInputController's Bridge command. Routes to
-        /// keeper 1's own BridgeManager.TryPlaceBridgeTile, the same
-        /// instant gold-charged line-paint action the offline Bridge tool
-        /// uses (one call per tile the gesture passes over).
         [Rpc(SendTo.Server)]
         public void RequestBridgeTileRpc(NetCoord coord)
         {
-            var ctx = KeeperContext.ForOwner(ClientOwnerId);
-            if (ctx != null && ctx.Bridge != null)
+            ClientCtx?.Bridge?.TryPlaceBridgeTile(coord.ToVector2Int());
+        }
+
+        [Rpc(SendTo.Server)]
+        public void RequestToggleLairClaimRpc(NetCoord coord)
+        {
+            ClientCtx?.Lair?.ToggleLairClaim(coord.ToVector2Int());
+        }
+
+        [Rpc(SendTo.Server)]
+        public void RequestPlaceRoomRpc(RoomDesignTool room, NetCoord start, NetCoord end)
+        {
+            var ctx = ClientCtx;
+            if (ctx == null)
             {
-                ctx.Bridge.TryPlaceBridgeTile(coord.ToVector2Int());
+                return;
+            }
+
+            var s = start.ToVector2Int();
+            var e = end.ToVector2Int();
+            switch (room)
+            {
+                case RoomDesignTool.Lair: ctx.Lair?.TryPlaceLair(s, e); break;
+                case RoomDesignTool.Treasury: ctx.Treasury?.TryPlaceTreasury(s, e); break;
+                case RoomDesignTool.SlimeHatchery: ctx.SlimeHatchery?.TryPlaceHatchery(s, e); break;
+                case RoomDesignTool.Tavern: ctx.Tavern?.TryPlaceTavern(s, e); break;
+                case RoomDesignTool.TrainingRoom: ctx.TrainingRoom?.TryPlaceTrainingRoom(s, e); break;
+                case RoomDesignTool.Library: ctx.Library?.TryPlaceLibrary(s, e); break;
+                case RoomDesignTool.Jail: ctx.Jail?.TryPlaceJail(s, e); break;
+                case RoomDesignTool.ConversionClass: ctx.ConversionClass?.TryPlaceConversionClass(s, e); break;
             }
         }
 
-        /// Client — ClientInputController's Recruit buttons. Routes to
-        /// keeper 1's own spawner for that species, the exact mana/pool-
-        /// gated method the offline Creatures menu's Recruit button calls
-        /// (TryRecruitX already no-ops if the pool's empty or the join
-        /// requirements aren't met — nothing to validate here beyond
-        /// picking the right spawner). Elf has no recruit path (see
-        /// ElfSpawner's own header) so isn't included.
+        [Rpc(SendTo.Server)]
+        public void RequestSetTerrainRpc(NetCoord coord, byte tileType)
+        {
+            if (_grid != null) _grid.SetTerrainFeature(coord.ToVector2Int(), (TileType)tileType);
+        }
+
+        [Rpc(SendTo.Server)]
+        public void RequestSetBedrockRpc(NetCoord coord)
+        {
+            if (_grid != null) _grid.SetBedrock(coord.ToVector2Int());
+        }
+
+        [Rpc(SendTo.Server)]
+        public void RequestSetDigJobsPausedRpc(bool paused)
+        {
+            ClientCtx?.JobBoard?.SetDigJobsPaused(paused);
+        }
+
+        [Rpc(SendTo.Server)]
+        public void RequestSetAutoReinforceRpc(bool enabled)
+        {
+            ClientCtx?.JobBoard?.SetAutoReinforceEnabled(enabled);
+        }
+
         [Rpc(SendTo.Server)]
         public void RequestRecruitRpc(EditorCreatureKind kind)
         {
-            var ctx = KeeperContext.ForOwner(ClientOwnerId);
+            var ctx = ClientCtx;
             if (ctx == null)
             {
                 return;
@@ -660,18 +705,10 @@ namespace KeepersDomain.Net
 
             switch (kind)
             {
-                case EditorCreatureKind.Gremlin:
-                    if (ctx.GremlinSpawner != null) ctx.GremlinSpawner.TryRecruitGremlin();
-                    break;
-                case EditorCreatureKind.Warlock:
-                    if (ctx.WarlockSpawner != null) ctx.WarlockSpawner.TryRecruitWarlock();
-                    break;
-                case EditorCreatureKind.MazeRattler:
-                    if (ctx.MazeRattlerSpawner != null) ctx.MazeRattlerSpawner.TryRecruitMazeRattler();
-                    break;
-                case EditorCreatureKind.BeanCounter:
-                    if (ctx.BeanCounterSpawner != null) ctx.BeanCounterSpawner.TryRecruitBeanCounter();
-                    break;
+                case EditorCreatureKind.Gremlin: ctx.GremlinSpawner?.TryRecruitGremlin(); break;
+                case EditorCreatureKind.Warlock: ctx.WarlockSpawner?.TryRecruitWarlock(); break;
+                case EditorCreatureKind.MazeRattler: ctx.MazeRattlerSpawner?.TryRecruitMazeRattler(); break;
+                case EditorCreatureKind.BeanCounter: ctx.BeanCounterSpawner?.TryRecruitBeanCounter(); break;
             }
         }
     }

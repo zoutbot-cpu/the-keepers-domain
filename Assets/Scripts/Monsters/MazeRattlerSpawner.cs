@@ -5,6 +5,7 @@ using KeepersDomain.Creatures;
 using KeepersDomain.LevelDesigner;
 using KeepersDomain.Net;
 using KeepersDomain.DebugUI;
+using KeepersDomain.Input;
 
 namespace KeepersDomain.Monsters
 {
@@ -13,7 +14,7 @@ namespace KeepersDomain.Monsters
     /// the portal stairway, same as GremlinSpawner/WarlockSpawner. On top of
     /// pool availability, a Maze Rattler's own join requirements (see
     /// MeetsJoinRequirements) all have to hold too.
-    public class MazeRattlerSpawner : MonoBehaviour
+    public class MazeRattlerSpawner : MonoBehaviour, IRecruitSource
     {
         /// How many Maze Rattlers a single placed Jail supports — "1 Jail
         /// for 5 Maze Rattlers" per the brief. Counted per Jail *room*
