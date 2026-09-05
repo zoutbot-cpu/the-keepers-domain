@@ -40,8 +40,8 @@ namespace KeepersDomain.UI
         // of the panel blank.
         private const float InspectionPanelWidth = 300f;
         private const float InspectionPanelHeight = 320f;
-        private const float TopBarWidth = 280f;
-        private const float TopBarHeight = 28f;
+        private const float TopBarWidth = 340f;
+        private const float TopBarHeight = 42f;
 
         public static bool PointerOverPanel { get; private set; }
 
@@ -662,6 +662,16 @@ namespace KeepersDomain.UI
                 "Requires: a free Lair, fewer Bean Counters than 3x placed Conversion Class rooms");
 
             GUILayout.Space(8f);
+
+            if (_networked)
+            {
+                // The creature agents live host-side; the client only has
+                // CreatureNetView ghosts, which aren't in these rosters.
+                // (The count/detail roster is a later replication pass.)
+                GUILayout.Label("Creature roster isn't replicated to the client yet.");
+                GUILayout.EndScrollView();
+                return;
+            }
 
             var implings = ImplingAgent.All;
             var gremlins = GremlinAgent.All;

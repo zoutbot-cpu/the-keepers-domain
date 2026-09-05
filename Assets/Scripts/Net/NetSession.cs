@@ -202,21 +202,18 @@ namespace KeepersDomain.Net
             }
         }
 
-        public async void Leave()
+        public void Leave()
         {
-            try
-            {
-                if (_session != null)
-                {
-                    await _session.LeaveAsync();
-                }
-            }
-            catch (Exception e)
-            {
-                Debug.LogException(e);
-            }
+            // This is an INTENTIONAL leave -- drop the disconnect handler so
+            // the shutdown below doesn't fire OnClientDisconnectCallback ->
+            // OnDisconnected -> a second teardown that wipes the fresh main
+            // menu (GameBootstrap re-arms OnDisconnected on the next Host/
+            // Join). Shut the transport down synchronously and up front so
+            // no NetworkObject is still "spawned" while GameBootstrap
+            // destroys the scene roots; the Relay/Lobby session leave can
+            // finish in the background.
+            OnDisconnected = null;
 
-            _session = null;
             if (_nm != null && _nm.IsListening)
             {
                 _nm.Shutdown();
@@ -224,6 +221,25 @@ namespace KeepersDomain.Net
 
             State = Phase.Idle;
             JoinCode = null;
+
+            LeaveSessionAsync();
+        }
+
+        private async void LeaveSessionAsync()
+        {
+            var session = _session;
+            _session = null;
+            try
+            {
+                if (session != null)
+                {
+                    await session.LeaveAsync();
+                }
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e);
+            }
         }
     }
 }

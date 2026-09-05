@@ -161,6 +161,9 @@ namespace KeepersDomain.Core
         /// builds the authoritative world exactly as offline Start Game does.
         private static void HostGame()
         {
+            // Re-armed each session -- NetSession.Leave() clears it so an
+            // intentional "Main Menu" leave doesn't bounce back through here.
+            NetSession.Instance.OnDisconnected = ReturnToMainMenu;
             NetSession.Instance.StartHost();
         }
 
@@ -169,6 +172,7 @@ namespace KeepersDomain.Core
         /// OnNetworkSpawn (-> NetSession.OnClientReady -> BuildClientWorld).
         private static void JoinGame(string joinCode)
         {
+            NetSession.Instance.OnDisconnected = ReturnToMainMenu;
             NetSession.Instance.JoinByCode(joinCode);
         }
 
@@ -509,7 +513,9 @@ namespace KeepersDomain.Core
             var liquidAnimator = CreateComponent<LiquidAnimator>("LiquidAnimator");
             liquidAnimator.Initialize();
 
-            var panMargin = 22.5f;
+            // Scaled to the actual (replicated) map size -- a fixed margin
+            // couldn't reach the corners of a big map (level1 is 96x96).
+            var panMargin = Mathf.Max(grid.Width, grid.Height) * CellSize * 0.5f + 10f;
             var mapCenter = grid.GridToWorld(new Vector2Int(width / 2, height / 2));
             var camera = CreateIsoCamera(grid, panMargin, mapCenter);
 

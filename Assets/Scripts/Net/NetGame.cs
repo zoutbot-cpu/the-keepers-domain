@@ -40,14 +40,24 @@ namespace KeepersDomain.Net
         private readonly List<Vector2Int> _flush = new List<Vector2Int>();
 
         // Client: gold-free room managers (from BuildClientWorld) + the
-        // room footprints gathered from replicated tiles, replayed through
-        // RoomReconstruction — once the whole snapshot has landed, then
-        // again per new room a live delta introduces (a Lair/Treasury/...
-        // built after this client joined).
+        // running footprint of every room, replayed through
+        // RoomReconstruction to build/rebuild decoration. Persistent: a
+        // room's footprint grows when the host adds rows to it, and this is
+        // the accumulated truth the client rebuilds from -- the host's own
+        // roomId strings can't be matched client-side (RestoreRoom mints
+        // its own), so tile membership is the only durable handle.
         private Dictionary<RoomDesignTool, IRestorableRoomManager> _clientRoomManagers;
         private readonly Dictionary<string, List<Vector2Int>> _clientRoomFootprints = new Dictionary<string, List<Vector2Int>>();
         private readonly Dictionary<string, int> _clientRoomOwners = new Dictionary<string, int>();
-        private readonly HashSet<string> _clientReconstructedRooms = new HashSet<string>();
+        // Host roomId -> tile count when its decoration was last (re)built.
+        // Absent: never built. Present but < the current footprint: it grew
+        // (extra rows) and needs a rebuild.
+        private readonly Dictionary<string, int> _clientRoomBuiltCount = new Dictionary<string, int>();
+        // Host roomId -> the local roomId RoomReconstruction minted for it
+        // on the client, read back off the grid after a build. Lets a later
+        // "this room went away" delta (which only carries the local id) be
+        // matched back to the right footprint entry.
+        private readonly Dictionary<string, string> _clientRoomLocalId = new Dictionary<string, string>();
         private readonly Dictionary<string, List<Vector2Int>> _clientRoomScratch = new Dictionary<string, List<Vector2Int>>();
         private readonly Dictionary<string, int> _clientRoomOwnerScratch = new Dictionary<string, int>();
 
@@ -288,14 +298,7 @@ namespace KeepersDomain.Net
                 return;
             }
 
-            RoomReconstruction.RestoreRooms(_grid, _clientRoomFootprints, _clientRoomOwners, _clientRoomManagers);
-            foreach (var roomId in _clientRoomFootprints.Keys)
-            {
-                _clientReconstructedRooms.Add(roomId);
-            }
-
-            _clientRoomFootprints.Clear();
-            _clientRoomOwners.Clear();
+            ReconstructRooms();
         }
 
         // ---- live deltas ----
@@ -380,69 +383,104 @@ namespace KeepersDomain.Net
                     _clientRoomOwners[roomId] = t.OwnerId;
                 }
 
-                list.Add(t.Coord);
+                if (!list.Contains(t.Coord))
+                {
+                    list.Add(t.Coord);
+                }
             }
 
             if (live)
             {
-                ReconstructNewRooms();
+                ReconstructRooms();
             }
         }
 
-        /// A room's tile lost its RoomId (see Apply's own comment) -- tear
-        /// down its decoration via the client's OWN LairManager, using the
-        /// CLIENT's locally-minted roomId (previousRoomId, read off the
-        /// grid a moment ago) rather than whatever string the host used --
-        /// each side mints its own independent roomId counter during
-        /// RestoreRoom/TryPlaceX, so the host's original id was never
-        /// meaningful here in the first place. Every other room manager
-        /// (Treasury, SlimeHatchery, Tavern, ...) already listens for
-        /// LairManager.RoomSold itself (each subscribes in its own
-        /// Initialize, same wiring the host's real per-keeper managers
-        /// use), so this one call tears down whichever room type it
-        /// actually was, not just Lairs. Safe to call more than once for
-        /// the same room (a multi-tile room's other tiles arriving in the
-        /// same batch each land here too, but RemoveRoom is a no-op once
-        /// its bookkeeping is already gone) -- in practice only the first
-        /// tile processed actually does anything, since RemoveRoom clears
-        /// every remaining tile's RoomId as a side effect.
-        private void ApplyRoomRemoved(string roomId)
+        /// A room's tile lost its RoomId in a delta (see Apply's comment) --
+        /// the host removed the room (sold, or torn down some other way).
+        /// Tear down its decoration via the client's OWN LairManager using
+        /// the CLIENT's locally-minted roomId (previousRoomId, read off the
+        /// grid a moment ago) -- each side mints its own roomId counter, so
+        /// the host's string was never meaningful here. Every other room
+        /// manager (Treasury, SlimeHatchery, ...) listens for LairManager.
+        /// RoomSold itself, so this tears down whichever room type it was.
+        /// Then drop the room from the client's running footprint so a
+        /// later delta doesn't try to rebuild a room that's gone.
+        private void ApplyRoomRemoved(string previousClientRoomId)
         {
-            if (_clientRoomManagers != null
+            RemoveClientRoomDecoration(previousClientRoomId);
+
+            // previousClientRoomId is the client's local id -- match it back
+            // to the host-id footprint entry and drop it, so a later delta
+            // doesn't rebuild a room that's gone.
+            string goneHostId = null;
+            foreach (var entry in _clientRoomLocalId)
+            {
+                if (entry.Value == previousClientRoomId)
+                {
+                    goneHostId = entry.Key;
+                    break;
+                }
+            }
+
+            if (goneHostId != null)
+            {
+                _clientRoomFootprints.Remove(goneHostId);
+                _clientRoomOwners.Remove(goneHostId);
+                _clientRoomBuiltCount.Remove(goneHostId);
+                _clientRoomLocalId.Remove(goneHostId);
+            }
+        }
+
+        private void RemoveClientRoomDecoration(string clientRoomId)
+        {
+            if (!string.IsNullOrEmpty(clientRoomId)
+                && _clientRoomManagers != null
                 && _clientRoomManagers.TryGetValue(RoomDesignTool.Lair, out var manager)
                 && manager is LairManager lair)
             {
-                lair.ApplyReplicatedRoomSold(roomId);
+                lair.ApplyReplicatedRoomSold(clientRoomId);
             }
-
-            _clientReconstructedRooms.Remove(roomId);
         }
 
-        /// A room built after this client joined arrives as ordinary tile
-        /// deltas (Claimed Floor + a RoomId). Its whole footprint lands in
-        /// one host frame (LairManager.TryPlaceLair etc. claim atomically),
-        /// so once any of its tiles have been seen we can reconstruct it —
-        /// guarded by _clientReconstructedRooms so a later delta touching
-        /// the same room (a tile re-tag) doesn't rebuild its decoration.
-        private void ReconstructNewRooms()
+        /// (Re)builds client-side room decoration from the running
+        /// footprints. A room that's never been built gets built; a room
+        /// whose footprint has GROWN since it was last built (the host
+        /// added rows to it) is torn down and rebuilt at its new full
+        /// footprint -- the client can't just extend it, because it holds
+        /// its own local roomId, not the host's. Rectangular expansions
+        /// (extra rows/columns) are the common case and reconstruct
+        /// cleanly through RoomReconstruction's bounding-box call.
+        private void ReconstructRooms()
         {
-            if (_clientRoomManagers == null)
+            if (_clientRoomManagers == null || _grid == null)
             {
                 return;
             }
 
             _clientRoomScratch.Clear();
             _clientRoomOwnerScratch.Clear();
+
             foreach (var entry in _clientRoomFootprints)
             {
-                if (_clientReconstructedRooms.Contains(entry.Key))
+                var hostId = entry.Key;
+                var footprint = entry.Value;
+                var builtCount = _clientRoomBuiltCount.TryGetValue(hostId, out var bc) ? bc : 0;
+
+                if (builtCount >= footprint.Count)
                 {
                     continue;
                 }
 
-                _clientRoomScratch[entry.Key] = entry.Value;
-                _clientRoomOwnerScratch[entry.Key] =
-                    _clientRoomOwners.TryGetValue(entry.Key, out var o) ? o : 0;
+                // Grew since last build -> tear the client's version down
+                // first, then let it rebuild fresh below.
+                if (builtCount > 0 && _clientRoomLocalId.TryGetValue(hostId, out var localId))
+                {
+                    RemoveClientRoomDecoration(localId);
+                }
+
+                _clientRoomScratch[hostId] = footprint;
+                _clientRoomOwnerScratch[hostId] =
+                    _clientRoomOwners.TryGetValue(hostId, out var o) ? o : 0;
             }
 
             if (_clientRoomScratch.Count == 0)
@@ -452,11 +490,20 @@ namespace KeepersDomain.Net
 
             RoomReconstruction.RestoreRooms(_grid, _clientRoomScratch, _clientRoomOwnerScratch, _clientRoomManagers);
 
-            foreach (var roomId in _clientRoomScratch.Keys)
+            foreach (var entry in _clientRoomScratch)
             {
-                _clientReconstructedRooms.Add(roomId);
-                _clientRoomFootprints.Remove(roomId);
-                _clientRoomOwners.Remove(roomId);
+                _clientRoomBuiltCount[entry.Key] = entry.Value.Count;
+                // Read back the local roomId RoomReconstruction just minted
+                // (all the footprint's tiles now carry it).
+                foreach (var c in entry.Value)
+                {
+                    var localId = _grid.GetTile(c).RoomId;
+                    if (!string.IsNullOrEmpty(localId))
+                    {
+                        _clientRoomLocalId[entry.Key] = localId;
+                        break;
+                    }
+                }
             }
         }
 
@@ -562,10 +609,13 @@ namespace KeepersDomain.Net
         public void RequestSummonImplingRpc(NetCoord coord)
         {
             var ctx = KeeperContext.ForOwner(ClientOwnerId);
-            if (ctx != null && ctx.ImplingSpawner != null)
+            if (ctx == null || ctx.ImplingSpawner == null)
             {
-                ctx.ImplingSpawner.SpawnImplingAt(coord.ToVector2Int());
+                Debug.LogWarning($"NetGame: client summon-impling had no keeper {ClientOwnerId} context/spawner -- is level1 actually a 2-player map?");
+                return;
             }
+
+            ctx.ImplingSpawner.SpawnImplingAt(coord.ToVector2Int());
         }
 
         // ---- client commands (Milestone 2) ----
