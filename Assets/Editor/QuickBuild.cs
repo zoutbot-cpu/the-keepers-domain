@@ -85,7 +85,8 @@ namespace KeepersDomain.EditorTools
 
             // includeBaseDirectory: the archive unpacks to <buildName>/... ,
             // not a loose pile of files in whatever folder it's opened in.
-            ZipFile.CreateFromDirectory(outDir, zipPath, CompressionLevel.Optimal, includeBaseDirectory: true);
+            ZipFile.CreateFromDirectory(outDir, zipPath,
+                System.IO.Compression.CompressionLevel.Optimal, includeBaseDirectory: true);
 
             var sizeMb = new FileInfo(zipPath).Length / (1024f * 1024f);
             Debug.Log($"Quick Build → {zipPath}  ({sizeMb:0.0} MB)");
