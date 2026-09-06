@@ -45,6 +45,13 @@ namespace KeepersDomain.Net
         private ISession _session;
         private static bool _servicesInit;
 
+        // A leave/cleanup that's still finishing in the background. The next
+        // Host/Join awaits it (EnsureIdle) before starting — the Multiplayer
+        // SDK owns the NetworkManager's start/stop with a Relay session, and
+        // a fresh start that races a still-completing shutdown makes it throw
+        // "Failed to start the network manager".
+        private Task _pendingLeave;
+
         public static void Create()
         {
             if (Instance != null)
@@ -123,15 +130,14 @@ namespace KeepersDomain.Net
             State = Phase.Connecting;
             try
             {
+                await EnsureIdle();
                 await EnsureSignedIn();
+                // WithRelayNetwork() hands the NetworkManager's lifecycle to
+                // the Multiplayer SDK — it calls StartHost itself inside
+                // CreateSessionAsync, so we must not.
                 var options = new SessionOptions { MaxPlayers = 2 }.WithRelayNetwork();
                 _session = await MultiplayerService.Instance.CreateSessionAsync(options);
                 JoinCode = _session.Code;
-
-                if (!_nm.IsListening)
-                {
-                    _nm.StartHost();
-                }
 
                 State = Phase.Hosting;
                 OnHostReady?.Invoke();
@@ -154,13 +160,11 @@ namespace KeepersDomain.Net
             State = Phase.Connecting;
             try
             {
+                await EnsureIdle();
                 await EnsureSignedIn();
+                // The SDK starts the client itself inside this call (see the
+                // StartHost note) — we must not call _nm.StartClient.
                 _session = await MultiplayerService.Instance.JoinSessionByCodeAsync(code.Trim());
-
-                if (!_nm.IsListening)
-                {
-                    _nm.StartClient();
-                }
 
                 State = Phase.Client;
                 // OnClientReady is invoked from NetGame.OnNetworkSpawn.
@@ -168,6 +172,32 @@ namespace KeepersDomain.Net
             catch (Exception e)
             {
                 Fail(e);
+            }
+        }
+
+        /// Await any in-flight leave and make sure the NetworkManager is
+        /// fully stopped before the SDK is asked to start it again.
+        private async Task EnsureIdle()
+        {
+            if (_pendingLeave != null)
+            {
+                try
+                {
+                    await _pendingLeave;
+                }
+                catch (Exception e)
+                {
+                    Debug.LogException(e);
+                }
+
+                _pendingLeave = null;
+            }
+
+            var deadline = Time.realtimeSinceStartup + 5f;
+            while (_nm != null && (_nm.IsListening || _nm.ShutdownInProgress)
+                   && Time.realtimeSinceStartup < deadline)
+            {
+                await Task.Delay(50);
             }
         }
 
@@ -190,6 +220,11 @@ namespace KeepersDomain.Net
             LastError = e.Message;
             State = Phase.Failed;
             Debug.LogException(e);
+
+            // Tear the half-started session/transport down so the next
+            // attempt (EnsureIdle) begins from a clean slate rather than
+            // inheriting a stuck NetworkManager.
+            _pendingLeave = TeardownAsync();
         }
 
         private void HandleClientDisconnect(ulong clientId)
@@ -215,11 +250,12 @@ namespace KeepersDomain.Net
             // menu (GameBootstrap re-arms OnDisconnected on the next Host/
             // Join). Shut the transport down synchronously and up front so
             // no NetworkObject is still "spawned" while GameBootstrap
-            // destroys the scene roots; the Relay/Lobby session leave can
-            // finish in the background.
+            // destroys the scene roots; the Relay/Lobby session leave + the
+            // shutdown settling finish in the background, and the next Host/
+            // Join awaits that (_pendingLeave, EnsureIdle).
             OnDisconnected = null;
 
-            if (_nm != null && _nm.IsListening)
+            if (_nm != null && _nm.IsListening && !_nm.ShutdownInProgress)
             {
                 _nm.Shutdown();
             }
@@ -227,11 +263,24 @@ namespace KeepersDomain.Net
             State = Phase.Idle;
             JoinCode = null;
 
-            LeaveSessionAsync();
+            _pendingLeave = TeardownAsync();
         }
 
-        private async void LeaveSessionAsync()
+        private async Task TeardownAsync()
         {
+            if (_nm != null && _nm.IsListening && !_nm.ShutdownInProgress)
+            {
+                _nm.Shutdown();
+            }
+
+            // Let NGO finish tearing down before anyone starts it again.
+            var deadline = Time.realtimeSinceStartup + 5f;
+            while (_nm != null && (_nm.IsListening || _nm.ShutdownInProgress)
+                   && Time.realtimeSinceStartup < deadline)
+            {
+                await Task.Delay(50);
+            }
+
             var session = _session;
             _session = null;
             try
