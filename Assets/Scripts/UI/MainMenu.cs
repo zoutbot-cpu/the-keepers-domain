@@ -39,9 +39,9 @@ namespace KeepersDomain.UI
         {
             var net = NetSession.Instance;
 
-            // Connection succeeded — the game/client world is being built;
-            // this menu's job is done.
-            if (net != null && (net.State == NetSession.Phase.Hosting || net.State == NetSession.Phase.Client))
+            // Connection succeeded and the lobby object is up — LobbyScreen
+            // takes over from here (GameBootstrap.OnHostReady / ShowClientLobby).
+            if (NetLobby.Instance != null)
             {
                 Destroy(gameObject);
                 return;
@@ -61,7 +61,10 @@ namespace KeepersDomain.UI
                     "The Keeper's Domain", style);
             }
 
-            var connecting = net != null && net.State == NetSession.Phase.Connecting;
+            // Connecting, or connected but the lobby object hasn't replicated
+            // in yet (we'd have early-returned above once it had).
+            var connecting = net != null && net.State != NetSession.Phase.Idle
+                && net.State != NetSession.Phase.Failed;
             GUI.enabled = !connecting;
 
             var y = Screen.height * 0.5f;

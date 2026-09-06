@@ -13,6 +13,12 @@ namespace KeepersDomain.LevelDesigner
         private const string LevelsFolderName = "Levels";
         private const string FileExtension = ".json";
 
+        // Levels shipped inside the build live under Resources/Levels — the
+        // starting map (level1) is packaged this way so a fresh install,
+        // and every client who's never opened the Level Designer, has it
+        // without falling back to a procedural regen.
+        private const string ResourcesLevelsPath = "Levels/";
+
         public static string LevelsDirectory => Path.Combine(Application.persistentDataPath, LevelsFolderName);
 
         public static void Save(string levelName, LevelData data)
@@ -22,20 +28,36 @@ namespace KeepersDomain.LevelDesigner
             File.WriteAllText(GetPath(levelName), json);
         }
 
-        /// Null if levelName has no save file (deleted/renamed outside the
-        /// app since the Load list was last drawn, for instance) — the
-        /// caller is expected to handle that rather than crash on a
-        /// missing file.
+        /// The player's own save under persistentDataPath if it exists,
+        /// otherwise a copy bundled in the build under Resources/Levels
+        /// (cached out to persistentDataPath on first use so the Level
+        /// Designer can load and re-save it). Null only if neither exists —
+        /// the caller is expected to handle that rather than crash.
         public static LevelData Load(string levelName)
         {
             var path = GetPath(levelName);
-            if (!File.Exists(path))
+            if (File.Exists(path))
+            {
+                return JsonUtility.FromJson<LevelData>(File.ReadAllText(path));
+            }
+
+            var bundled = Resources.Load<TextAsset>(ResourcesLevelsPath + levelName);
+            if (bundled == null)
             {
                 return null;
             }
 
-            var json = File.ReadAllText(path);
-            return JsonUtility.FromJson<LevelData>(json);
+            try
+            {
+                Directory.CreateDirectory(LevelsDirectory);
+                File.WriteAllText(path, bundled.text);
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning($"LevelFileIO: couldn't cache bundled level '{levelName}' to disk: {e.Message}");
+            }
+
+            return JsonUtility.FromJson<LevelData>(bundled.text);
         }
 
         /// Every saved level's name (file name minus extension), sorted

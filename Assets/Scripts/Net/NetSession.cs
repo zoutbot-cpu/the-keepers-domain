@@ -30,10 +30,14 @@ namespace KeepersDomain.Net
 
         /// GameBootstrap wires these: what to run once the host's
         /// authoritative world / the client's render-only world should be
-        /// built. OnHostReady fires here; OnClientReady is invoked from
-        /// NetGame.OnNetworkSpawn (client) once the session controller has
-        /// replicated in.
+        /// built. OnHostReady fires here the moment the transport is up (the
+        /// host then shows the lobby, not the game); OnClientLobby is
+        /// invoked from NetLobby.OnNetworkSpawn (client) once the lobby
+        /// object has replicated in; OnClientReady is invoked from
+        /// NetGame.OnNetworkSpawn (client) once the host has actually
+        /// started the game.
         public Action OnHostReady;
+        public Action OnClientLobby;
         public Action OnClientReady;
         public Action OnDisconnected;
 
@@ -72,6 +76,7 @@ namespace KeepersDomain.Net
 
             // The networked prefabs GameBootstrap spawns at runtime. Built
             // by Tools > Net > Setup Netcode Prefabs.
+            RegisterPrefab("Net/NetLobby");
             RegisterPrefab("Net/NetGame");
             RegisterPrefab("Net/CreatureNetView");
             RegisterPrefab("Net/KeeperNetState");

@@ -23,9 +23,19 @@ namespace KeepersDomain.Net
     {
         public static NetGame Instance { get; private set; }
 
-        // Tiles per snapshot / delta RPC — kept well under the transport
-        // fragmentation cap. A NetTile is ~40 bytes, so 128 ~= 5 KB.
-        private const int TilesPerRpc = 128;
+        // Tiles per snapshot / delta RPC. A NetTile is ~40-66 bytes, so 48
+        // stays under UnityTransport's 6 KB default payload cap — one
+        // unfragmented reliable message per batch.
+        private const int TilesPerRpc = 48;
+
+        // How many snapshot batches the host streams to a joining client per
+        // tick. The whole grid used to go out in a single frame; on a real
+        // (Relay) connection that dumps far more than the reliable send
+        // window can hold at once, the overflow is dropped, and the client
+        // comes up with an almost-empty world. A handful per tick keeps the
+        // window from overflowing while still finishing a 96x96 map in well
+        // under a second.
+        private const int SnapshotBatchesPerTick = 4;
 
         /// Map dimensions — the client needs these to size its DungeonGrid
         /// before the tile snapshot lands. Initial netvar values are
@@ -38,6 +48,17 @@ namespace KeepersDomain.Net
         // Host: coords whose TileChanged fired since the last flush.
         private readonly HashSet<Vector2Int> _dirty = new HashSet<Vector2Int>();
         private readonly List<Vector2Int> _flush = new List<Vector2Int>();
+
+        // Host: joining clients still being caught up with the initial tile
+        // snapshot, streamed a few batches per tick (see PumpSnapshots).
+        private readonly Queue<PendingSnapshot> _pendingSnapshots = new Queue<PendingSnapshot>();
+
+        private sealed class PendingSnapshot
+        {
+            public ulong ClientId;
+            public List<Vector2Int> Coords;
+            public int Cursor;
+        }
 
         // Client: gold-free room managers (from BuildClientWorld) + the
         // running footprint of every room, replayed through
@@ -184,37 +205,76 @@ namespace KeepersDomain.Net
                 return;
             }
 
-            var sender = p.Receive.SenderClientId;
-            var target = RpcTarget.Single(sender, RpcTargetUse.Temp);
-
-            var batch = new List<NetTile>(TilesPerRpc);
+            // Collect every non-default coord up front, then let
+            // PumpSnapshots stream them out over the next several ticks
+            // rather than blasting the whole grid into the reliable send
+            // queue in one frame.
+            var coords = new List<Vector2Int>();
             for (int x = 0; x < _grid.Width; x++)
             {
                 for (int y = 0; y < _grid.Height; y++)
                 {
                     var coord = new Vector2Int(x, y);
-                    var tile = _grid.GetTile(coord);
-                    if (IsDefault(tile))
+                    if (!IsDefault(_grid.GetTile(coord)))
                     {
-                        continue;
-                    }
-
-                    batch.Add(NetTile.From(coord, tile));
-                    if (batch.Count == TilesPerRpc)
-                    {
-                        SnapshotTilesRpc(batch.ToArray(), target);
-                        batch.Clear();
+                        coords.Add(coord);
                     }
                 }
             }
 
-            if (batch.Count > 0)
+            _pendingSnapshots.Enqueue(new PendingSnapshot
             {
-                SnapshotTilesRpc(batch.ToArray(), target);
+                ClientId = p.Receive.SenderClientId,
+                Coords = coords,
+                Cursor = 0,
+            });
+        }
+
+        /// Host — streams the head pending snapshot a few batches at a time,
+        /// finishing with SnapshotDoneRpc + the room-visual snapshot. Called
+        /// once per tick from LateUpdate. RPCs from one NetworkObject arrive
+        /// in send order, so the client still applies every tile batch
+        /// before SnapshotDoneRpc triggers its room reconstruction.
+        private void PumpSnapshots()
+        {
+            if (_pendingSnapshots.Count == 0)
+            {
+                return;
             }
 
-            SnapshotDoneRpc(target);
-            SendRoomVisualStateSnapshot(target);
+            var job = _pendingSnapshots.Peek();
+
+            // Client left mid-stream — drop the rest of its snapshot.
+            if (!NetworkManager.ConnectedClients.ContainsKey(job.ClientId))
+            {
+                _pendingSnapshots.Dequeue();
+                return;
+            }
+
+            // Temp target, created and used within this call only — never
+            // stored across frames (NGO forbids that).
+            var target = RpcTarget.Single(job.ClientId, RpcTargetUse.Temp);
+
+            for (int b = 0; b < SnapshotBatchesPerTick && job.Cursor < job.Coords.Count; b++)
+            {
+                var n = Mathf.Min(TilesPerRpc, job.Coords.Count - job.Cursor);
+                var tiles = new NetTile[n];
+                for (int i = 0; i < n; i++)
+                {
+                    var coord = job.Coords[job.Cursor + i];
+                    tiles[i] = NetTile.From(coord, _grid.GetTile(coord));
+                }
+
+                SnapshotTilesRpc(tiles, target);
+                job.Cursor += n;
+            }
+
+            if (job.Cursor >= job.Coords.Count)
+            {
+                SnapshotDoneRpc(target);
+                SendRoomVisualStateSnapshot(target);
+                _pendingSnapshots.Dequeue();
+            }
         }
 
         /// Host — catches a newly-joined client up on room-manager visual
@@ -310,7 +370,14 @@ namespace KeepersDomain.Net
 
         private void LateUpdate()
         {
-            if (!IsServer || _grid == null || _dirty.Count == 0)
+            if (!IsServer || _grid == null)
+            {
+                return;
+            }
+
+            PumpSnapshots();
+
+            if (_dirty.Count == 0)
             {
                 return;
             }

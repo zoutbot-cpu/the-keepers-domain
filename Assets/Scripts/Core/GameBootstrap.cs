@@ -96,6 +96,7 @@ namespace KeepersDomain.Core
             // Main Menu <-> game bounce.
             NetSession.Create();
             NetSession.Instance.OnHostReady = OnHostReady;
+            NetSession.Instance.OnClientLobby = ShowClientLobby;
             NetSession.Instance.OnClientReady = BuildClientWorld;
             NetSession.Instance.OnDisconnected = ReturnToMainMenu;
 
@@ -176,13 +177,38 @@ namespace KeepersDomain.Core
             NetSession.Instance.JoinByCode(joinCode);
         }
 
-        /// NetSession.OnHostReady — the transport is up and we're the host.
-        /// Build the world (same level1-or-fresh path Start Game uses), then
-        /// spawn the one session-lifetime networked object and bind it to
-        /// the grid so tile changes replicate.
+        /// NetSession.OnHostReady — the Relay transport is up and we're the
+        /// host. Spawn the lobby object and show the lobby screen; the world
+        /// itself isn't built until every player has readied up and the host
+        /// hits Start (NetLobby.OnHostBuildGame -> BuildHostGame below).
         private static void OnHostReady()
         {
-            BuildWorld(LevelFileIO.Load("level1"));
+            var lobbyGo = Object.Instantiate(Resources.Load<GameObject>("Net/NetLobby"));
+            lobbyGo.GetComponent<NetLobby>().OnHostBuildGame = BuildHostGame;
+            lobbyGo.GetComponent<NetworkObject>().Spawn(destroyWithScene: true);
+
+            CreateComponent<LobbyScreen>("LobbyScreen").Initialize(isHost: true, ReturnToMainMenu);
+        }
+
+        /// NetSession.OnClientLobby — the lobby object has replicated in, so
+        /// we're connected and waiting for the host to start. The render-only
+        /// world is still built later, off NetGame's client-side spawn (see
+        /// BuildClientWorld).
+        private static void ShowClientLobby()
+        {
+            CreateComponent<LobbyScreen>("LobbyScreen").Initialize(isHost: false, ReturnToMainMenu);
+        }
+
+        /// NetLobby.OnHostBuildGame — every player readied up and the host
+        /// hit Start. Build the authoritative world from the map picked in
+        /// the lobby (empty id = fresh procedural), then spawn the
+        /// session-lifetime networked objects and bind them so tile changes
+        /// replicate. The client needs no copy of the map file — it arrives
+        /// as NetGame's tile snapshot.
+        private static void BuildHostGame()
+        {
+            var mapId = NetLobby.Instance != null ? NetLobby.Instance.MapId : "level1";
+            BuildWorld(mapId == NetLobby.ProceduralMapId ? null : LevelFileIO.Load(mapId));
 
             var grid = Object.FindAnyObjectByType<DungeonGrid>();
 

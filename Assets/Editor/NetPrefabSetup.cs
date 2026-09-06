@@ -57,6 +57,11 @@ namespace KeepersDomain.EditorTools
                 AssetDatabase.CreateAsset(slimeMat, slimeMatPath);
             }
 
+            // Pre-game lobby controller — spawned by the host before any
+            // world exists, despawned via NetworkManager.Shutdown. Empty,
+            // same as NetGame.
+            Build("NetLobby", empty: true, go => go.AddComponent<NetLobby>());
+
             // Session-lifetime controller — no transform, just a
             // NetworkObject so the host can spawn it and the client gets
             // the OnNetworkSpawn signal.
