@@ -1,29 +1,24 @@
 using System;
-using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
 
 namespace KeepersDomain.Net
 {
     /// One row in the lobby roster — who's connected and whether they've
-    /// readied up. Unmanaged (ulong + two bools) so it rides a NetworkList.
-    public struct LobbyPlayer : INetworkSerializable, IEquatable<LobbyPlayer>
+    /// readied up. Deliberately a plain blittable struct (ulong + two
+    /// bools), NOT INetworkSerializable: NGO memcpy's NetworkList elements,
+    /// and a hand-rolled serializer here only reintroduces the byte
+    /// size-mismatch that crashed the behaviour sync.
+    public struct LobbyPlayer : IEquatable<LobbyPlayer>
     {
         public ulong ClientId;
         public bool IsHost;
         public bool Ready;
 
-        public void NetworkSerialize<T>(BufferSerializer<T> s) where T : IReaderWriter
-        {
-            s.SerializeValue(ref ClientId);
-            s.SerializeValue(ref IsHost);
-            s.SerializeValue(ref Ready);
-        }
-
         public bool Equals(LobbyPlayer other) =>
             ClientId == other.ClientId && IsHost == other.IsHost && Ready == other.Ready;
 
-        public override bool Equals(object obj) => obj is LobbyPlayer other && Equals(other);
+        public override bool Equals(object obj) => obj is LobbyPlayer o && Equals(o);
 
         public override int GetHashCode() => ClientId.GetHashCode();
     }
@@ -51,18 +46,20 @@ namespace KeepersDomain.Net
         public const int MaxPlayers = 2;
 
         // The empty string is the "generate a fresh procedural map" choice;
-        // anything else is a level name for LevelFileIO.Load. The client
-        // only shows this — the actual world is built host-side (the client
-        // gets it as the tile snapshot regardless of which map it is).
+        // anything else is a level name for LevelFileIO.Load.
         public const string ProceduralMapId = "";
 
         public readonly NetworkList<LobbyPlayer> Players = new NetworkList<LobbyPlayer>();
         public readonly NetworkVariable<bool> GameStarted = new NetworkVariable<bool>();
-        public readonly NetworkVariable<FixedString64Bytes> SelectedMap =
-            new NetworkVariable<FixedString64Bytes>(new FixedString64Bytes("level1"));
 
         /// Host only — GameBootstrap wires this to the real world build.
         public Action OnHostBuildGame;
+
+        // Server-authoritative, replicated to clients by RPC rather than a
+        // NetworkVariable<FixedString> (that serializer tripped the initial
+        // behaviour sync). The client only shows this — the map is built
+        // host-side and reaches the client as the tile snapshot regardless.
+        private string _selectedMap = "level1";
 
         public override void OnNetworkSpawn()
         {
@@ -79,6 +76,7 @@ namespace KeepersDomain.Net
                 // Symmetric with NetGame.OnNetworkSpawn -> OnClientReady:
                 // this is the client's "you're in the lobby now" signal.
                 NetSession.Instance?.OnClientLobby?.Invoke();
+                RequestMapRpc();
             }
         }
 
@@ -187,9 +185,22 @@ namespace KeepersDomain.Net
             }
         }
 
+        private void ClearAllReady()
+        {
+            for (int i = 0; i < Players.Count; i++)
+            {
+                if (Players[i].Ready)
+                {
+                    var slot = Players[i];
+                    slot.Ready = false;
+                    Players[i] = slot;
+                }
+            }
+        }
+
         // ---- map selection (host only) ----
 
-        public string MapId => SelectedMap.Value.ToString();
+        public string MapId => _selectedMap ?? "level1";
 
         /// Host only — from the Lobby screen's map picker. Changing the map
         /// clears everyone's ready flag: you readied up for a different one.
@@ -200,23 +211,35 @@ namespace KeepersDomain.Net
                 return;
             }
 
-            var next = new FixedString64Bytes(mapId ?? ProceduralMapId);
-            if (SelectedMap.Value.Equals(next))
+            var next = mapId ?? ProceduralMapId;
+            if (_selectedMap == next)
             {
                 return;
             }
 
-            SelectedMap.Value = next;
+            _selectedMap = next;
+            ClearAllReady();
+            SyncMapToClientsRpc(next);
+        }
 
-            for (int i = 0; i < Players.Count; i++)
-            {
-                if (Players[i].Ready)
-                {
-                    var slot = Players[i];
-                    slot.Ready = false;
-                    Players[i] = slot;
-                }
-            }
+        /// Client just spawned in — ask the host which map is picked.
+        [Rpc(SendTo.Server)]
+        private void RequestMapRpc(RpcParams p = default)
+        {
+            SendMapRpc(_selectedMap ?? "level1",
+                RpcTarget.Single(p.Receive.SenderClientId, RpcTargetUse.Temp));
+        }
+
+        [Rpc(SendTo.SpecifiedInParams)]
+        private void SendMapRpc(string mapId, RpcParams p)
+        {
+            _selectedMap = mapId ?? "level1";
+        }
+
+        [Rpc(SendTo.NotServer)]
+        private void SyncMapToClientsRpc(string mapId)
+        {
+            _selectedMap = mapId ?? "level1";
         }
 
         // ---- start ----
