@@ -5,11 +5,12 @@ using UnityEngine;
 namespace KeepersDomain.Net
 {
     /// One row in the lobby roster — who's connected and whether they've
-    /// readied up. Deliberately a plain blittable struct (ulong + two
-    /// bools), NOT INetworkSerializable: NGO memcpy's NetworkList elements,
-    /// and a hand-rolled serializer here only reintroduces the byte
-    /// size-mismatch that crashed the behaviour sync.
-    public struct LobbyPlayer : IEquatable<LobbyPlayer>
+    /// readied up. Blittable (ulong + two bools); INetworkSerializeByMemcpy
+    /// is the marker that makes NGO's codegen actually generate a memcpy
+    /// serializer for it — without it NetworkList<LobbyPlayer> hits the
+    /// FallbackSerializer and throws "Serialization has not been generated"
+    /// mid connection-approval, dropping every joining client.
+    public struct LobbyPlayer : INetworkSerializeByMemcpy, IEquatable<LobbyPlayer>
     {
         public ulong ClientId;
         public bool IsHost;
