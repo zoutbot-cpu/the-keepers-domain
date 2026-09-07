@@ -213,9 +213,13 @@ namespace KeepersDomain.Core
             var grid = Object.FindAnyObjectByType<DungeonGrid>();
 
             var netGameGo = Object.Instantiate(Resources.Load<GameObject>("Net/NetGame"));
-            netGameGo.GetComponent<NetworkObject>().Spawn(destroyWithScene: true);
             var netGame = netGameGo.GetComponent<NetGame>();
+            // Bind BEFORE Spawn — NetGame.OnNetworkSpawn writes the map-size
+            // netvars, which then ride the spawn message to the (already
+            // connected, since we're coming from the lobby) client. Bind
+            // after Spawn and the client sizes its grid from 0.
             netGame.HostBind(grid);
+            netGameGo.GetComponent<NetworkObject>().Spawn(destroyWithScene: true);
             // Every KeeperContext (and its room managers) exists by now —
             // relay their lair-claim / treasury-gold visual state to
             // whichever client joins (see NetGame.HostBindKeeperRooms).

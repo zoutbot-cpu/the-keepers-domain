@@ -38,8 +38,12 @@ namespace KeepersDomain.Net
         private const int SnapshotBatchesPerTick = 4;
 
         /// Map dimensions — the client needs these to size its DungeonGrid
-        /// before the tile snapshot lands. Initial netvar values are
-        /// available in OnNetworkSpawn.
+        /// before the tile snapshot lands. The host writes them in its own
+        /// OnNetworkSpawn (BEFORE the spawn message is serialized to
+        /// observers), never after Spawn() — with the lobby, the client is
+        /// already connected when the host spawns this object, so a value
+        /// set a line after Spawn() misses the spawn snapshot and the
+        /// client builds a 1x1 grid.
         public readonly NetworkVariable<int> MapWidth = new NetworkVariable<int>();
         public readonly NetworkVariable<int> MapHeight = new NetworkVariable<int>();
 
@@ -58,6 +62,9 @@ namespace KeepersDomain.Net
             public ulong ClientId;
             public List<Vector2Int> Coords;
             public int Cursor;
+            // Persistent (not Temp) — it's reused across several ticks and
+            // NGO forbids holding a Temp target past the call that made it.
+            public BaseRpcTarget Target;
         }
 
         // Client: gold-free room managers (from BuildClientWorld) + the
@@ -82,14 +89,23 @@ namespace KeepersDomain.Net
         private readonly Dictionary<string, List<Vector2Int>> _clientRoomScratch = new Dictionary<string, List<Vector2Int>>();
         private readonly Dictionary<string, int> _clientRoomOwnerScratch = new Dictionary<string, int>();
 
-        /// Host only — called from GameBootstrap.BuildWorld right after the
-        /// NetGame is spawned, once the grid exists.
+        /// Host only — called from GameBootstrap.BuildHostGame BEFORE the
+        /// NetGame is spawned, once the grid exists. The map-dimension
+        /// netvars are written in OnNetworkSpawn (below) so they ride the
+        /// spawn message; setting them here, pre-spawn, would be a no-op /
+        /// throw.
         public void HostBind(DungeonGrid grid)
         {
             _grid = grid;
-            MapWidth.Value = grid.Width;
-            MapHeight.Value = grid.Height;
             _grid.TileChanged += OnTileChanged;
+
+            // Already spawned (defensive — normal flow binds pre-spawn):
+            // push the dimensions now.
+            if (IsSpawned)
+            {
+                MapWidth.Value = grid.Width;
+                MapHeight.Value = grid.Height;
+            }
         }
 
         /// Host only — called from GameBootstrap.OnHostReady once every
@@ -144,17 +160,56 @@ namespace KeepersDomain.Net
 
             if (IsServer)
             {
+                // Write the dimensions here, while OnNetworkSpawn still runs
+                // BEFORE NGO serializes the spawn message to observers — so
+                // an already-connected client (the lobby case) reads the
+                // real size, not 0.
+                if (_grid != null)
+                {
+                    MapWidth.Value = _grid.Width;
+                    MapHeight.Value = _grid.Height;
+                }
+
                 return;
             }
 
-            // Client: build the render-only world (creates the DungeonGrid
-            // and calls ClientBindRooms below), then pull the grid state.
+            // Client: build the render-only world once the host's map size
+            // has arrived. It's normally already in the spawn payload; if
+            // the spawn somehow beat the value, wait for the netvar.
+            if (MapWidth.Value > 0 && MapHeight.Value > 0)
+            {
+                BuildClientWorldAndRequestSnapshot();
+            }
+            else
+            {
+                MapWidth.OnValueChanged += OnClientMapSizeReplicated;
+                MapHeight.OnValueChanged += OnClientMapSizeReplicated;
+            }
+        }
+
+        private void OnClientMapSizeReplicated(int _, int __)
+        {
+            if (MapWidth.Value <= 0 || MapHeight.Value <= 0)
+            {
+                return;
+            }
+
+            MapWidth.OnValueChanged -= OnClientMapSizeReplicated;
+            MapHeight.OnValueChanged -= OnClientMapSizeReplicated;
+            BuildClientWorldAndRequestSnapshot();
+        }
+
+        private void BuildClientWorldAndRequestSnapshot()
+        {
+            // Builds the render-only world (creates the DungeonGrid and
+            // calls ClientBindRooms), then pulls the grid state.
             NetSession.Instance?.OnClientReady?.Invoke();
             if (_grid == null)
             {
                 _grid = FindAnyObjectByType<DungeonGrid>();
             }
 
+            Debug.Log($"NetGame client: world built {MapWidth.Value}x{MapHeight.Value}, requesting tile snapshot.");
             RequestSnapshotRpc();
         }
 
@@ -168,6 +223,14 @@ namespace KeepersDomain.Net
 
         public override void OnNetworkDespawn()
         {
+            MapWidth.OnValueChanged -= OnClientMapSizeReplicated;
+            MapHeight.OnValueChanged -= OnClientMapSizeReplicated;
+
+            while (_pendingSnapshots.Count > 0)
+            {
+                _pendingSnapshots.Dequeue().Target?.Dispose();
+            }
+
             if (_grid != null)
             {
                 _grid.TileChanged -= OnTileChanged;
@@ -222,12 +285,15 @@ namespace KeepersDomain.Net
                 }
             }
 
+            var clientId = p.Receive.SenderClientId;
             _pendingSnapshots.Enqueue(new PendingSnapshot
             {
-                ClientId = p.Receive.SenderClientId,
+                ClientId = clientId,
                 Coords = coords,
                 Cursor = 0,
+                Target = RpcTarget.Single(clientId, RpcTargetUse.Persistent),
             });
+            Debug.Log($"NetGame host: client {clientId} requested snapshot — {coords.Count} non-default tiles of {_grid.Width}x{_grid.Height}.");
         }
 
         /// Host — streams the head pending snapshot a few batches at a time,
@@ -247,13 +313,10 @@ namespace KeepersDomain.Net
             // Client left mid-stream — drop the rest of its snapshot.
             if (!NetworkManager.ConnectedClients.ContainsKey(job.ClientId))
             {
+                job.Target?.Dispose();
                 _pendingSnapshots.Dequeue();
                 return;
             }
-
-            // Temp target, created and used within this call only — never
-            // stored across frames (NGO forbids that).
-            var target = RpcTarget.Single(job.ClientId, RpcTargetUse.Temp);
 
             for (int b = 0; b < SnapshotBatchesPerTick && job.Cursor < job.Coords.Count; b++)
             {
@@ -265,15 +328,17 @@ namespace KeepersDomain.Net
                     tiles[i] = NetTile.From(coord, _grid.GetTile(coord));
                 }
 
-                SnapshotTilesRpc(tiles, target);
+                SnapshotTilesRpc(tiles, job.Target);
                 job.Cursor += n;
             }
 
             if (job.Cursor >= job.Coords.Count)
             {
-                SnapshotDoneRpc(target);
-                SendRoomVisualStateSnapshot(target);
+                SnapshotDoneRpc(job.Target);
+                SendRoomVisualStateSnapshot(job.Target);
+                job.Target?.Dispose();
                 _pendingSnapshots.Dequeue();
+                Debug.Log($"NetGame host: finished streaming {job.Coords.Count} tiles to client {job.ClientId}.");
             }
         }
 
@@ -339,9 +404,13 @@ namespace KeepersDomain.Net
                 && !t.IsQueuedForReinforce;
         }
 
+        // Client — running count of snapshot tiles received, for the log.
+        private int _clientSnapshotTiles;
+
         [Rpc(SendTo.SpecifiedInParams)]
         private void SnapshotTilesRpc(NetTile[] tiles, RpcParams p)
         {
+            _clientSnapshotTiles += tiles.Length;
             Apply(tiles, live: false);
         }
 
@@ -353,6 +422,8 @@ namespace KeepersDomain.Net
         [Rpc(SendTo.SpecifiedInParams)]
         private void SnapshotDoneRpc(RpcParams p)
         {
+            Debug.Log($"NetGame client: snapshot done — {_clientSnapshotTiles} tiles applied, grid {(_grid != null ? $"{_grid.Width}x{_grid.Height}" : "null")}, {_clientRoomFootprints.Count} room footprints.");
+
             if (_grid == null || _clientRoomManagers == null || _clientRoomFootprints.Count == 0)
             {
                 return;
@@ -370,7 +441,7 @@ namespace KeepersDomain.Net
 
         private void LateUpdate()
         {
-            if (!IsServer || _grid == null)
+            if (!IsSpawned || !IsServer || _grid == null)
             {
                 return;
             }
