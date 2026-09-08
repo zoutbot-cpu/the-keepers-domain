@@ -383,6 +383,7 @@ namespace KeepersDomain.UI
             EndButtonRow();
             BeginButtonRow();
             DrawMapToolButton(MapDesignTool.HolyGround, "Holy Ground");
+            DrawMapToolButton(MapDesignTool.UnholyGround, "Unholy Ground");
             // Bridge sits with terrain — it paints onto Water/Lava.
             DrawMapToolButton(MapDesignTool.Bridge, "Bridge");
             EndButtonRow();

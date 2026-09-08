@@ -64,13 +64,14 @@ namespace KeepersDomain.Input
         /// Mine/Reinforce/Construct's queue-a-job shape.
         Bridge,
         /// Dev-only terrain placement (see DungeonGrid.DevPaintTerrain) —
-        /// repaints any non-room tile into Water/Lava/Chasm/HolyGround or
-        /// back to plain Floor/Rock, standing in for the map generator that
-        /// doesn't exist yet.
+        /// repaints any non-room tile into Water/Lava/Chasm/HolyGround/
+        /// UnholyGround or back to plain Floor/Rock, standing in for the map
+        /// generator that doesn't exist yet.
         PlaceWater,
         PlaceLava,
         PlaceChasm,
         PlaceHolyGround,
+        PlaceUnholyGround,
         PlaceFloor,
         PlaceRock,
         /// Dev-only wall placement (see DungeonGrid.SetBedrock) — marks a
@@ -576,7 +577,7 @@ namespace KeepersDomain.Input
             }
 
             if (_buildMode is BuildMode.PlaceWater or BuildMode.PlaceLava or BuildMode.PlaceChasm or BuildMode.PlaceHolyGround
-                or BuildMode.PlaceFloor or BuildMode.PlaceRock or BuildMode.PlaceBedrock)
+                or BuildMode.PlaceUnholyGround or BuildMode.PlaceFloor or BuildMode.PlaceRock or BuildMode.PlaceBedrock)
             {
                 _gestureMode = GestureMode.PlaceTerrain;
                 ApplyGestureAction(coord);
@@ -998,6 +999,10 @@ namespace KeepersDomain.Input
             {
                 _inspectedDescription = $"Holy Ground ({coord.x},{coord.y})\nUnclaimable";
             }
+            else if (tile.Type == TileType.UnholyGround)
+            {
+                _inspectedDescription = $"Unholy Ground ({coord.x},{coord.y})\nUnclaimable (placeholder — mechanics TBD)";
+            }
             else
             {
                 var room = tile.HasRoom ? $"\nRoom: {tile.RoomId}" : "";
@@ -1107,6 +1112,9 @@ namespace KeepersDomain.Input
                             break;
                         case BuildMode.PlaceHolyGround:
                             _actions.SetTerrain(coord, TileType.HolyGround);
+                            break;
+                        case BuildMode.PlaceUnholyGround:
+                            _actions.SetTerrain(coord, TileType.UnholyGround);
                             break;
                         case BuildMode.PlaceFloor:
                             _actions.SetTerrain(coord, TileType.Floor);

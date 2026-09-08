@@ -66,6 +66,8 @@ namespace KeepersDomain.Grid
         [SerializeField] private Color _chasmSpikeColor = new Color(0.25f, 0.23f, 0.22f);
         [SerializeField] private Color _holyGroundColor = new Color(0.92f, 0.92f, 0.88f);
         [SerializeField] private Color _holyGroundStarColor = new Color(0.85f, 0.7f, 0.15f);
+        [SerializeField] private Color _unholyGroundColor = new Color(0.06f, 0.04f, 0.06f);
+        [SerializeField] private Color _unholyGroundStarColor = new Color(0.6f, 0.08f, 0.12f);
 
         // "Make it as deep as the Jail" — same one-full-grid-level sink
         // JailManager's own PitDepth constant uses (DungeonGrid.SetPitDepth
@@ -80,13 +82,15 @@ namespace KeepersDomain.Grid
         // 0/45/90/135 degrees give all 8 points. Same cheap primitives-only
         // placeholder convention every other decoration in this class uses
         // (see RebuildWallDecoration's gold nuggets, BuildChasmSpikes).
-        private static readonly float[] HolyGroundStarAngles = { 0f, 45f, 90f, 135f };
-        private const float HolyGroundStarLength = 0.75f;
-        private const float HolyGroundStarThickness = 0.06f;
+        // Shared by Holy Ground (gold) and Unholy Ground (red) — see
+        // BuildGroundStar.
+        private static readonly float[] GroundStarAngles = { 0f, 45f, 90f, 135f };
+        private const float GroundStarLength = 0.75f;
+        private const float GroundStarThickness = 0.06f;
 
         // Sits proud of the floor tile beneath it (like Jail's grate
         // cross), so it never coplanar-z-fights with it.
-        private const float HolyGroundStarReliefOffset = 0.02f;
+        private const float GroundStarReliefOffset = 0.02f;
 
         // "add some gold in a random pattern" — RegeneratingGoldWall gets
         // more nuggets than plain GoldWall so it visually reads as the
@@ -606,13 +610,14 @@ namespace KeepersDomain.Grid
             RefreshVisual(coord);
         }
 
-        /// Dev-only terrain placement (see TileInteractionController's
-        /// PlaceWater/PlaceLava/PlaceChasm BuildModes) — converts a bare
-        /// Rock tile directly into Water/Lava/Chasm, standing in for the
-        /// real map generator that doesn't exist yet. No-ops on anything
-        /// that isn't currently Rock, same guard SetWallResourceType uses.
-        /// Chasm additionally sinks its floor exactly like a Jail's pit
-        /// (see ChasmPitDepth) and grows a few spike decorations.
+        /// Converts a bare Rock tile directly into a terrain type
+        /// (Water/Lava/Chasm/Holy Ground/Unholy Ground). No-ops on anything
+        /// that isn't currently Rock, same guard SetWallResourceType uses —
+        /// the runtime dev tool goes through DevPaintTerrain and the Level
+        /// Designer through EditorPaintTerrain, both of which reset to Rock
+        /// first so any tile can be repainted. Chasm additionally sinks its
+        /// floor like a Jail's pit (see ChasmPitDepth) with a few spikes;
+        /// Holy/Unholy Ground grow a star decoration.
         public void SetTerrainFeature(Vector2Int coord, TileType terrainType)
         {
             if (!InBounds(coord))
@@ -642,7 +647,11 @@ namespace KeepersDomain.Grid
             }
             else if (terrainType == TileType.HolyGround)
             {
-                BuildHolyGroundStar(coord);
+                BuildGroundStar(coord, "HolyGroundStar", _holyGroundStarColor);
+            }
+            else if (terrainType == TileType.UnholyGround)
+            {
+                BuildGroundStar(coord, "UnholyGroundStar", _unholyGroundStarColor);
             }
         }
 
@@ -673,8 +682,9 @@ namespace KeepersDomain.Grid
         /// state and rebuild its visual. The host never calls this — it
         /// mutates tiles through the ordinary gameplay/editor methods, and a
         /// networking layer (see GridNetSync) forwards each TileChanged to
-        /// clients, which land here. RebuildWallDecoration is deterministic
-        /// (coord-seeded), so client and host nuggets match.
+        /// clients, which land here. RebuildWallDecoration / the terrain
+        /// decorations below are all deterministic (coord-seeded), so client
+        /// and host match.
         public void ApplyReplicatedTile(Vector2Int coord, TileState state)
         {
             if (_tiles == null || !InBounds(coord))
@@ -685,6 +695,24 @@ namespace KeepersDomain.Grid
             _tiles[coord.x, coord.y] = state;
             RefreshVisual(coord);
             RebuildWallDecoration(coord, state.WallResourceType);
+
+            // RefreshVisual only recolours the tile — the terrain-feature
+            // decorations (Chasm spikes, Holy / Unholy Ground stars) are
+            // otherwise only built on the host inside SetTerrainFeature, so
+            // rebuild them here too or a replicated terrain tile renders bare
+            // on the client.
+            if (state.Type == TileType.Chasm)
+            {
+                BuildChasmSpikes(coord);
+            }
+            else if (state.Type == TileType.HolyGround)
+            {
+                BuildGroundStar(coord, "HolyGroundStar", _holyGroundStarColor);
+            }
+            else if (state.Type == TileType.UnholyGround)
+            {
+                BuildGroundStar(coord, "UnholyGroundStar", _unholyGroundStarColor);
+            }
         }
 
         public Vector3 GridToWorld(Vector2Int coord)
@@ -723,6 +751,7 @@ namespace KeepersDomain.Grid
             {
                 case TileType.Floor:
                 case TileType.HolyGround:
+                case TileType.UnholyGround:
                     return true;
                 case TileType.Water:
                     return !isImp || tile.HasRoom;
@@ -1567,7 +1596,7 @@ namespace KeepersDomain.Grid
         }
 
         /// The in-game "[Dev] Terrain" Build-menu tools (see
-        /// BuildMode.PlaceWater/PlaceLava/PlaceChasm/PlaceHolyGround/
+        /// BuildMode.PlaceWater/PlaceLava/PlaceChasm/PlaceHolyGround/PlaceUnholyGround/
         /// PlaceFloor/PlaceRock and IKeeperActions.SetTerrain) — repaints
         /// coord into any floor/terrain/rock type, the same free any-to-any
         /// conversion the Level Designer's Map Design menu does, so a dev can
@@ -1687,7 +1716,7 @@ namespace KeepersDomain.Grid
 
             var tile = GetTile(coord);
             return tile.Type != TileType.Water && tile.Type != TileType.Lava && tile.Type != TileType.Chasm
-                && tile.Type != TileType.HolyGround && !tile.HasRoom;
+                && tile.Type != TileType.HolyGround && tile.Type != TileType.UnholyGround && !tile.HasRoom;
         }
 
         /// "If the area hasn't been dug out, just instantly dig it out,
@@ -1836,6 +1865,10 @@ namespace KeepersDomain.Grid
             else if (tile.Type == TileType.HolyGround)
             {
                 color = _holyGroundColor;
+            }
+            else if (tile.Type == TileType.UnholyGround)
+            {
+                color = _unholyGroundColor;
             }
             else if (tile.Ownership == TileOwnership.Claimed)
             {
@@ -2212,7 +2245,7 @@ namespace KeepersDomain.Grid
         /// texture hasn't been imported (see GetQueuedIconTexture). A
         /// diagonal handle crossed by a shorter head near one end — read
         /// from roughly above (this project's fixed-ish isometric angle),
-        /// same "flat, top-down-legible" convention BuildHolyGroundStar
+        /// same "flat, top-down-legible" convention BuildGroundStar
         /// already uses rather than a billboard that'd need per-frame
         /// facing logic.
         private GameObject BuildPickaxeIconFallback(Transform parent)
@@ -2270,7 +2303,7 @@ namespace KeepersDomain.Grid
         /// "A hammer on an empty yellow frame" — a hollow rectangle
         /// standing roughly where the future wall will rise (base at the
         /// floor surface, not floating high like the Mine/Reinforce
-        /// icons), built from 4 thin bars the same way BuildHolyGroundStar/
+        /// icons), built from 4 thin bars the same way BuildGroundStar/
         /// JailManager's fence rails already do, plus a small hammer
         /// shape sitting in the middle of it.
         private GameObject BuildConstructIcon(Transform parent)
@@ -2617,34 +2650,34 @@ namespace KeepersDomain.Grid
             }
         }
 
-        /// A golden 8-pointed star centered on coord's white HolyGround
-        /// tile — 4 double-ended bars (see HolyGroundStarAngles), world-
-        /// positioned and parented to this component's own transform, same
-        /// "don't nest under the tile's own thin floor cube" convention
-        /// BuildChasmSpikes uses (nesting there would squash local offsets
-        /// down by that cube's thin 0.15 Y-scale). Reuses the
-        /// _wallDecorations slot, built once when the tile becomes
-        /// HolyGround.
-        private void BuildHolyGroundStar(Vector2Int coord)
+        /// An 8-pointed star centered on coord — 4 double-ended bars (see
+        /// GroundStarAngles), world-positioned and parented to this
+        /// component's own transform, same "don't nest under the tile's own
+        /// thin floor cube" convention BuildChasmSpikes uses (nesting there
+        /// would squash local offsets down by that cube's thin 0.15 Y-scale).
+        /// Reuses the _wallDecorations slot, built once when the tile becomes
+        /// Holy Ground (gold star on white) or Unholy Ground (red star on
+        /// near-black).
+        private void BuildGroundStar(Vector2Int coord, string containerName, Color color)
         {
             ClearWallDecoration(coord);
 
-            var container = new GameObject("HolyGroundStar");
+            var container = new GameObject(containerName);
             container.transform.SetParent(transform, false);
             _wallDecorations[coord.x, coord.y] = container;
 
             var worldPos = GridToWorld(coord);
-            var starY = FloorSurfaceY + HolyGroundStarReliefOffset;
+            var starY = FloorSurfaceY + GroundStarReliefOffset;
 
-            foreach (var angleDegrees in HolyGroundStarAngles)
+            foreach (var angleDegrees in GroundStarAngles)
             {
                 var bar = GameObject.CreatePrimitive(PrimitiveType.Cube);
                 bar.name = $"StarBar_{angleDegrees}";
                 bar.transform.SetParent(container.transform, false);
                 bar.transform.position = new Vector3(worldPos.x, starY, worldPos.z);
                 bar.transform.rotation = Quaternion.Euler(0f, angleDegrees, 0f);
-                bar.transform.localScale = new Vector3(_cellSize * HolyGroundStarLength, HolyGroundStarThickness, HolyGroundStarThickness);
-                Prims.Tint(bar, _holyGroundStarColor);
+                bar.transform.localScale = new Vector3(_cellSize * GroundStarLength, GroundStarThickness, GroundStarThickness);
+                Prims.Tint(bar, color);
                 Destroy(bar.GetComponent<Collider>());
             }
         }

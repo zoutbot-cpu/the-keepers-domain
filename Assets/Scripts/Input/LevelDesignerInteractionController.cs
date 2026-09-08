@@ -27,6 +27,7 @@ namespace KeepersDomain.Input
         Lava,
         Chasm,
         HolyGround,
+        UnholyGround,
         UnclaimedFloor,
         ClaimedFloor,
         Bridge
@@ -801,6 +802,9 @@ namespace KeepersDomain.Input
                     break;
                 case MapDesignTool.HolyGround:
                     _grid.EditorPaintTerrain(coord, TileType.HolyGround);
+                    break;
+                case MapDesignTool.UnholyGround:
+                    _grid.EditorPaintTerrain(coord, TileType.UnholyGround);
                     break;
                 case MapDesignTool.UnclaimedFloor:
                     _grid.EditorPaintFloor(coord, claimed: false, ownerId: -1);

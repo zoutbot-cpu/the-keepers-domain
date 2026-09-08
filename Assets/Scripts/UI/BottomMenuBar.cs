@@ -461,6 +461,7 @@ namespace KeepersDomain.UI
             DrawBuildModeOption(BuildMode.PlaceLava, "[Dev] Place Lava");
             DrawBuildModeOption(BuildMode.PlaceChasm, "[Dev] Place Chasm");
             DrawBuildModeOption(BuildMode.PlaceHolyGround, "[Dev] Place Holy Ground");
+            DrawBuildModeOption(BuildMode.PlaceUnholyGround, "[Dev] Place Unholy Ground");
             DrawBuildModeOption(BuildMode.PlaceFloor, "[Dev] Place Floor");
             DrawBuildModeOption(BuildMode.PlaceRock, "[Dev] Place Rock");
             DrawBuildModeOption(BuildMode.PlaceBedrock, "[Dev] Place Bedrock");

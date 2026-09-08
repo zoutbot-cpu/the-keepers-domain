@@ -1158,6 +1158,7 @@ namespace KeepersDomain.Core
                     case TileType.Lava:
                     case TileType.Chasm:
                     case TileType.HolyGround:
+                    case TileType.UnholyGround:
                         grid.EditorPaintTerrain(coord, tileData.Type);
                         // A bridged Water/Lava tile carries a "Bridge_"
                         // RoomId — defer it into the footprint map so the

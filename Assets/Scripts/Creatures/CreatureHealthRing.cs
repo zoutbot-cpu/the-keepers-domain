@@ -8,7 +8,7 @@ namespace KeepersDomain.Creatures
     /// a dark-gray track always visible underneath, and an owner-colored
     /// fill on every segment the creature's current HP still covers
     /// (ceil(HP / MaxHP * 8) segments lit). Built from primitive cubes the
-    /// same way DungeonGrid.BuildHolyGroundStar / LevelDesignerSession.
+    /// same way DungeonGrid.BuildGroundStar / LevelDesignerSession.
     /// BuildCreatureVisual build their decorations, rather than a custom
     /// mesh.
     ///

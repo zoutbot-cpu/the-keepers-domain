@@ -33,7 +33,15 @@ namespace KeepersDomain.Grid
         /// already gated to Type == Floor, so this falls out of that same
         /// check for free rather than needing its own guard). Territory
         /// can't grow through it either, for the same reason.
-        HolyGround
+        HolyGround,
+
+        /// Holy Ground's dark counterpart — same rules for now (walkable by
+        /// all, never Claimable, territory can't grow through it), distinct
+        /// only in look (near-black tile, dull-red star). A placeholder:
+        /// its real mechanical identity (evil-creature favour, ritual
+        /// ground, ...) is still TBD. Falls out of the same Type == Floor
+        /// gates Holy Ground does.
+        UnholyGround
     }
 
     public enum TileOwnership
