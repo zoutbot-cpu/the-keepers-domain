@@ -63,7 +63,8 @@ namespace KeepersDomain.Core
 
         private void Update()
         {
-            if (_contexts == null || _contexts.Length <= 1 || Keyboard.current == null)
+            if (_contexts == null || _contexts.Length <= 1 || Keyboard.current == null
+                || NetChat.IsTyping)
             {
                 return;
             }

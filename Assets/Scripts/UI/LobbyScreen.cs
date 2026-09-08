@@ -132,7 +132,12 @@ namespace KeepersDomain.UI
             for (int i = 0; i < lobby.Players.Count; i++)
             {
                 var p = lobby.Players[i];
-                var name = p.IsHost ? $"Player {i + 1}  (host)" : $"Player {i + 1}";
+                var name = p.Name.Length > 0 ? p.Name.ToString() : $"Player {i + 1}";
+                if (p.IsHost)
+                {
+                    name += "  (host)";
+                }
+
                 if (p.ClientId == lobby.NetworkManager.LocalClientId)
                 {
                     name += "  — you";

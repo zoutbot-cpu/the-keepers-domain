@@ -346,7 +346,8 @@ namespace KeepersDomain.Input
 
         private void Update()
         {
-            if (_camera == null || _grid == null || BottomMenuBar.PointerOverPanel)
+            if (_camera == null || _grid == null || BottomMenuBar.PointerOverPanel
+                || NetChat.PointerOverPanel)
             {
                 _lairManager?.ClearSellPreview();
                 _minionGrabController?.SetVisible(false);

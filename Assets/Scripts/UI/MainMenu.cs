@@ -12,8 +12,8 @@ namespace KeepersDomain.UI
         private const float LogoWidth = 480f;
         private const float LogoHeight = 240f;
         private const float ButtonWidth = 220f;
-        private const float ButtonHeight = 48f;
-        private const float ButtonSpacing = 12f;
+        private const float ButtonHeight = 46f;
+        private const float ButtonSpacing = 9f;
 
         private Action _onStart;
         private Action _onContinue;
@@ -23,6 +23,7 @@ namespace KeepersDomain.UI
         private Texture2D _logo;
 
         private string _joinCodeInput = "";
+        private SettingsMenu _settingsMenu;
 
         public void Initialize(Action onStart, Action onContinue, Action onLevelDesigner, Action onHost, Action<string> onJoin)
         {
@@ -35,6 +36,16 @@ namespace KeepersDomain.UI
             // this prototype is created procedurally by GameBootstrap rather
             // than wired up in the Inspector. Assets/Resources/UI/logo.png.
             _logo = Resources.Load<Texture2D>("UI/logo");
+        }
+
+        private void OnDestroy()
+        {
+            // Leaving the menu (into a game / lobby / the designer) closes
+            // an open Settings panel with it.
+            if (_settingsMenu != null)
+            {
+                Destroy(_settingsMenu.gameObject);
+            }
         }
 
         private void OnGUI()
@@ -63,13 +74,20 @@ namespace KeepersDomain.UI
                     "The Keeper's Domain", style);
             }
 
+            // The Settings panel is its own object drawing on top — don't
+            // draw (or let clicks reach) the menu buttons behind it.
+            if (SettingsMenu.IsOpen)
+            {
+                return;
+            }
+
             // Connecting, or connected but the lobby object hasn't replicated
             // in yet (we'd have early-returned above once it had).
             var connecting = net != null && net.State != NetSession.Phase.Idle
                 && net.State != NetSession.Phase.Failed;
             GUI.enabled = !connecting;
 
-            var y = Screen.height * 0.5f;
+            var y = Screen.height * 0.46f;
             float Row() { var r = y; y += ButtonHeight + ButtonSpacing; return r; }
             Rect Btn(float rowY) => new Rect(centerX - ButtonWidth * 0.5f, rowY, ButtonWidth, ButtonHeight);
 
@@ -105,6 +123,11 @@ namespace KeepersDomain.UI
             if (GUI.Button(new Rect(centerX - ButtonWidth * 0.5f + ButtonWidth - 84f, joinRowY, 84f, ButtonHeight), "Join"))
             {
                 _onJoin?.Invoke(_joinCodeInput);
+            }
+
+            if (GUI.Button(Btn(Row()), "Settings"))
+            {
+                _settingsMenu = new GameObject("SettingsMenu").AddComponent<SettingsMenu>();
             }
 
             if (GUI.Button(Btn(Row()), "Quit"))

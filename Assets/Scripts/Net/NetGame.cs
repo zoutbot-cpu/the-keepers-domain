@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
@@ -1081,6 +1082,109 @@ namespace KeepersDomain.Net
         {
             Time.timeScale = 1f;
             GameBootstrap.ReturnToMainMenu();
+        }
+
+        // ---- chat ----
+        //
+        // In-match text chat, host + client (see NetChat for the overlay).
+        // A player's line goes up through SubmitChatRpc; the host stamps who
+        // sent it and fans it back to everyone with BroadcastChatRpc. Each
+        // side keeps its own capped local log -- no NetworkList (its managed-
+        // string serializer is the one that has repeatedly bitten the lobby,
+        // see LobbyPlayer's header), and a running NetGame has no late
+        // joiners to replay history to. RPCs ignore Time.timeScale, so chat
+        // keeps working while the game is paused -- which is exactly when
+        // players tend to talk.
+
+        public readonly struct ChatLine
+        {
+            public readonly ulong SenderClientId;
+            public readonly bool FromHost;
+            public readonly string AuthorName;
+            public readonly string Text;
+            // Time.unscaledTime it landed on THIS peer -- drives the
+            // overlay's idle fade, nothing gameplay.
+            public readonly float LocalArrivalTime;
+
+            public ChatLine(ulong senderClientId, bool fromHost, string authorName, string text, float localArrivalTime)
+            {
+                SenderClientId = senderClientId;
+                FromHost = fromHost;
+                AuthorName = authorName;
+                Text = text;
+                LocalArrivalTime = localArrivalTime;
+            }
+        }
+
+        private const int MaxChatLines = 100;
+        private const int MaxChatMessageLength = 240;
+
+        private readonly List<ChatLine> _chatLog = new List<ChatLine>();
+
+        /// The local chat history, oldest first (capped at MaxChatLines).
+        public IReadOnlyList<ChatLine> ChatLog => _chatLog;
+
+        /// Fires on every peer each time a line lands -- the overlay hooks
+        /// this to autoscroll and un-fade.
+        public event Action<ChatLine> ChatLineReceived;
+
+        /// Local player pressed send. Trims, length-caps, drops empties,
+        /// then routes to the host with the player's Settings display name.
+        public void SendChatMessage(string text)
+        {
+            if (!IsSpawned || string.IsNullOrWhiteSpace(text))
+            {
+                return;
+            }
+
+            SubmitChatRpc(ClampChat(text), GameSettings.PlayerName);
+        }
+
+        private static string ClampChat(string text)
+        {
+            text = text.Trim();
+            return text.Length > MaxChatMessageLength
+                ? text.Substring(0, MaxChatMessageLength)
+                : text;
+        }
+
+        [Rpc(SendTo.Server)]
+        private void SubmitChatRpc(string text, string authorName, RpcParams p = default)
+        {
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return;
+            }
+
+            var sender = p.Receive.SenderClientId;
+            BroadcastChatRpc(sender, sender == NetworkManager.ServerClientId,
+                GameSettings.SanitizeName(authorName), ClampChat(text));
+        }
+
+        [Rpc(SendTo.Everyone)]
+        private void BroadcastChatRpc(ulong senderClientId, bool fromHost, string authorName, string text)
+        {
+            var line = new ChatLine(senderClientId, fromHost, authorName, text, Time.unscaledTime);
+            _chatLog.Add(line);
+            if (_chatLog.Count > MaxChatLines)
+            {
+                _chatLog.RemoveRange(0, _chatLog.Count - MaxChatLines);
+            }
+
+            ChatLineReceived?.Invoke(line);
+        }
+
+        /// How the local player should see a line's author labelled — their
+        /// chosen display name, with a fallback for anything that slips
+        /// through empty (host vs. the one guest).
+        public string ChatAuthorLabel(ChatLine line)
+        {
+            if (!string.IsNullOrWhiteSpace(line.AuthorName))
+            {
+                return line.AuthorName;
+            }
+
+            return line.FromHost ? "Host" : "Guest";
         }
     }
 }

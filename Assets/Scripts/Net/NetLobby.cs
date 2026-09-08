@@ -1,23 +1,32 @@
 using System;
+using System.Collections.Generic;
+using Unity.Collections;
 using Unity.Netcode;
 using UnityEngine;
+using KeepersDomain.Core;
 
 namespace KeepersDomain.Net
 {
-    /// One row in the lobby roster — who's connected and whether they've
-    /// readied up. Blittable (ulong + two bools); INetworkSerializeByMemcpy
-    /// is the marker that makes NGO's codegen actually generate a memcpy
-    /// serializer for it — without it NetworkList<LobbyPlayer> hits the
-    /// FallbackSerializer and throws "Serialization has not been generated"
-    /// mid connection-approval, dropping every joining client.
+    /// One row in the lobby roster — who's connected, their display name,
+    /// and whether they've readied up. Still fully blittable (a
+    /// FixedString32Bytes is an unmanaged fixed buffer, not a managed
+    /// string); INetworkSerializeByMemcpy is the marker that makes NGO's
+    /// codegen actually generate a memcpy serializer for it — without it
+    /// NetworkList<LobbyPlayer> hits the FallbackSerializer and throws
+    /// "Serialization has not been generated" mid connection-approval,
+    /// dropping every joining client.
     public struct LobbyPlayer : INetworkSerializeByMemcpy, IEquatable<LobbyPlayer>
     {
         public ulong ClientId;
         public bool IsHost;
         public bool Ready;
+        // Set from the sender's GameSettings.PlayerName — the host writes
+        // its own in AddPlayer, a client's arrives by SubmitNameRpc.
+        public FixedString32Bytes Name;
 
         public bool Equals(LobbyPlayer other) =>
-            ClientId == other.ClientId && IsHost == other.IsHost && Ready == other.Ready;
+            ClientId == other.ClientId && IsHost == other.IsHost
+            && Ready == other.Ready && Name.Equals(other.Name);
 
         public override bool Equals(object obj) => obj is LobbyPlayer o && Equals(o);
 
@@ -78,6 +87,7 @@ namespace KeepersDomain.Net
                 // this is the client's "you're in the lobby now" signal.
                 NetSession.Instance?.OnClientLobby?.Invoke();
                 RequestMapRpc();
+                SubmitNameRpc(GameSettings.SanitizeName(GameSettings.PlayerName));
             }
         }
 
@@ -97,6 +107,11 @@ namespace KeepersDomain.Net
 
         // ---- host roster upkeep ----
 
+        // Host: a client's name that landed (SubmitNameRpc) before its
+        // roster row existed — applied when AddPlayer catches up.
+        private readonly Dictionary<ulong, FixedString32Bytes> _pendingNames
+            = new Dictionary<ulong, FixedString32Bytes>();
+
         private void AddPlayer(ulong clientId)
         {
             if (!IsServer || IndexOf(clientId) >= 0)
@@ -104,12 +119,65 @@ namespace KeepersDomain.Net
                 return;
             }
 
+            var isHost = clientId == NetworkManager.ServerClientId;
+            FixedString32Bytes name;
+            if (isHost)
+            {
+                name = ToFixedName(GameSettings.SanitizeName(GameSettings.PlayerName));
+            }
+            else if (!_pendingNames.TryGetValue(clientId, out name))
+            {
+                name = default;
+            }
+
+            _pendingNames.Remove(clientId);
+
             Players.Add(new LobbyPlayer
             {
                 ClientId = clientId,
-                IsHost = clientId == NetworkManager.ServerClientId,
+                IsHost = isHost,
                 Ready = false,
+                Name = name,
             });
+        }
+
+        /// A string long enough to overflow FixedString32Bytes (29 bytes)
+        /// throws on the implicit conversion — trim by UTF-8 byte length
+        /// first. GameSettings.SanitizeName already caps at 20 chars, so
+        /// this only ever bites on multi-byte names.
+        private static FixedString32Bytes ToFixedName(string s)
+        {
+            s ??= string.Empty;
+            while (s.Length > 0 && System.Text.Encoding.UTF8.GetByteCount(s) > 29)
+            {
+                s = s.Substring(0, s.Length - 1);
+            }
+
+            FixedString32Bytes fs = default;
+            fs.Append(s);
+            return fs;
+        }
+
+        [Rpc(SendTo.Server)]
+        private void SubmitNameRpc(string name, RpcParams p = default)
+        {
+            var clientId = p.Receive.SenderClientId;
+            var clean = ToFixedName(GameSettings.SanitizeName(name));
+
+            var i = IndexOf(clientId);
+            if (i < 0)
+            {
+                // Row not built yet — AddPlayer will pick this up.
+                _pendingNames[clientId] = clean;
+                return;
+            }
+
+            var slot = Players[i];
+            if (!slot.Name.Equals(clean))
+            {
+                slot.Name = clean;
+                Players[i] = slot;
+            }
         }
 
         private void RemovePlayer(ulong clientId)
@@ -118,6 +186,8 @@ namespace KeepersDomain.Net
             {
                 return;
             }
+
+            _pendingNames.Remove(clientId);
 
             var i = IndexOf(clientId);
             if (i >= 0)

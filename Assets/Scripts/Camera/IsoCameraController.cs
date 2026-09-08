@@ -1,6 +1,8 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using KeepersDomain.Core;
 using KeepersDomain.Input;
+using KeepersDomain.UI;
 
 namespace KeepersDomain.CameraControl
 {
@@ -57,34 +59,38 @@ namespace KeepersDomain.CameraControl
             ClampPosition();
         }
 
-        // Left/Right arrows and Q/D (AZERTY-friendly, same physical keys as
-        // A/D) orbit the view around the ground point currently centered on
-        // screen; Up/Down and Z/S tilt the pitch. Mirrors the orbit formula
-        // GameBootstrap uses to place the camera initially (target - rotation
-        // * forward * distance) so the look-at point stays fixed while orbiting.
+        // The four orbit keys (default Up/Down/Left/Right arrows, rebindable
+        // in the main-menu Settings -> Controls; see GameSettings) orbit the
+        // view around the ground point currently centered on screen: left/
+        // right yaw, up/down pitch. Q/D/Z/S stay wired as fixed alternates
+        // (AZERTY-friendly, same physical keys as A/D). Mirrors the orbit
+        // formula GameBootstrap uses to place the camera initially (target -
+        // rotation * forward * distance) so the look-at point stays fixed
+        // while orbiting.
         private void HandleRotationInput()
         {
-            if (Keyboard.current == null)
+            // Don't orbit the view while the player is typing in chat.
+            if (Keyboard.current == null || NetChat.IsTyping)
             {
                 return;
             }
 
             var yawInput = 0f;
-            if (Keyboard.current.leftArrowKey.isPressed || Keyboard.current.qKey.isPressed)
+            if (Held(GameSettings.OrbitLeftKey) || Keyboard.current.qKey.isPressed)
             {
                 yawInput -= 1f;
             }
-            if (Keyboard.current.rightArrowKey.isPressed || Keyboard.current.dKey.isPressed)
+            if (Held(GameSettings.OrbitRightKey) || Keyboard.current.dKey.isPressed)
             {
                 yawInput += 1f;
             }
 
             var pitchInput = 0f;
-            if (Keyboard.current.upArrowKey.isPressed || Keyboard.current.zKey.isPressed)
+            if (Held(GameSettings.OrbitUpKey) || Keyboard.current.zKey.isPressed)
             {
                 pitchInput -= 1f;
             }
-            if (Keyboard.current.downArrowKey.isPressed || Keyboard.current.sKey.isPressed)
+            if (Held(GameSettings.OrbitDownKey) || Keyboard.current.sKey.isPressed)
             {
                 pitchInput += 1f;
             }
@@ -105,6 +111,11 @@ namespace KeepersDomain.CameraControl
             var rotation = Quaternion.Euler(_pitch, _yaw, 0f);
             transform.rotation = rotation;
             transform.position = pivot - rotation * Vector3.forward * distance;
+        }
+
+        private static bool Held(Key key)
+        {
+            return key != Key.None && Keyboard.current != null && Keyboard.current[key].isPressed;
         }
 
         private bool TryGetGroundPivot(out Vector3 pivot, out float distance)

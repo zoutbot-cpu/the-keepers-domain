@@ -322,10 +322,19 @@ namespace KeepersDomain.UI
             // Save & Quit. NetGame.Instance is non-null exactly for a
             // networked session (host or client).
             var net = KeepersDomain.Net.NetGame.Instance;
-            if (net != null && GUILayout.Button(net.Paused.Value ? "Resume" : "Pause",
-                    GUILayout.Width(TabButtonWidth), GUILayout.Height(BarHeight - 8f)))
+            if (net != null)
             {
-                net.ToggleLocalPause();
+                // Opens the chat input box (NetChat) — also bound to Enter.
+                if (GUILayout.Button("Chat", GUILayout.Width(TabButtonWidth * 0.7f), GUILayout.Height(BarHeight - 8f)))
+                {
+                    FindAnyObjectByType<NetChat>()?.OpenInput();
+                }
+
+                if (GUILayout.Button(net.Paused.Value ? "Resume" : "Pause",
+                        GUILayout.Width(TabButtonWidth), GUILayout.Height(BarHeight - 8f)))
+                {
+                    net.ToggleLocalPause();
+                }
             }
 
             // Tears the whole running game down and shows the main menu

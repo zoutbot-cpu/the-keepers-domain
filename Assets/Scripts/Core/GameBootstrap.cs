@@ -90,6 +90,10 @@ namespace KeepersDomain.Core
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
         private static void Init()
         {
+            // Player options (display mode / resolution / name / orbit keys),
+            // read from PlayerPrefs and applied to the screen right away.
+            GameSettings.Load();
+
             // The long-lived NetworkManager + Unity Gaming Services wrapper.
             // Idle unless Host/Join is pressed — offline "Start Game" never
             // touches it. Wired here so the callbacks survive a
@@ -244,6 +248,7 @@ namespace KeepersDomain.Core
 
             CreateComponent<NetHud>("NetHud").Initialize(isHost: true);
             CreateComponent<NetPauseScreen>("NetPauseScreen");
+            CreateComponent<NetChat>("NetChat");
         }
 
         /// The name a mid-game save is written under (see SaveGame) — its
@@ -625,6 +630,7 @@ namespace KeepersDomain.Core
 
             CreateComponent<NetHud>("NetHud").Initialize(isHost: false);
             CreateComponent<NetPauseScreen>("NetPauseScreen");
+            CreateComponent<NetChat>("NetChat");
 
             // Room decoration from the tile snapshot — same gold-free,
             // simulation-off managers the Level Designer's load path uses,
