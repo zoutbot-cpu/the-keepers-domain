@@ -65,6 +65,25 @@ namespace KeepersDomain.Creatures
             Stats.Mana = Mathf.Min(Stats.MaxMana, Stats.Mana + Stats.ManaRegen * deltaTime);
         }
 
+        /// Restores a creature's level + carried exp directly (a mid-game
+        /// save reload — see GameBootstrap.RestoreWorldCreatures). Stats are
+        /// recalculated for the level and HP/Mana set to full, same as a
+        /// fresh spawn at that level. No-ops on a level ≤ 1 with no exp
+        /// (the hand-authored-level case, where a creature just spawns
+        /// fresh).
+        public void SetProgress(int level, int exp)
+        {
+            var clamped = Mathf.Clamp(level, 1, MaxLevel);
+            if (clamped <= 1 && exp <= 0)
+            {
+                return;
+            }
+
+            Level = clamped;
+            Exp = Mathf.Max(0, exp);
+            RecalculateStats(initial: true);
+        }
+
         /// Levels up as many times as the added exp covers, capped at
         /// MaxLevel — exp beyond that is simply discarded, there's no
         /// prestige/overflow system.

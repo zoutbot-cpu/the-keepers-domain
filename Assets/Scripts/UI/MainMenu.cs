@@ -16,6 +16,7 @@ namespace KeepersDomain.UI
         private const float ButtonSpacing = 12f;
 
         private Action _onStart;
+        private Action _onContinue;
         private Action _onLevelDesigner;
         private Action _onHost;
         private Action<string> _onJoin;
@@ -23,9 +24,10 @@ namespace KeepersDomain.UI
 
         private string _joinCodeInput = "";
 
-        public void Initialize(Action onStart, Action onLevelDesigner, Action onHost, Action<string> onJoin)
+        public void Initialize(Action onStart, Action onContinue, Action onLevelDesigner, Action onHost, Action<string> onJoin)
         {
             _onStart = onStart;
+            _onContinue = onContinue;
             _onLevelDesigner = onLevelDesigner;
             _onHost = onHost;
             _onJoin = onJoin;
@@ -70,6 +72,13 @@ namespace KeepersDomain.UI
             var y = Screen.height * 0.5f;
             float Row() { var r = y; y += ButtonHeight + ButtonSpacing; return r; }
             Rect Btn(float rowY) => new Rect(centerX - ButtonWidth * 0.5f, rowY, ButtonWidth, ButtonHeight);
+
+            if (_onContinue != null && GUI.Button(Btn(Row()), "Continue"))
+            {
+                _onContinue.Invoke();
+                Destroy(gameObject);
+                return;
+            }
 
             if (GUI.Button(Btn(Row()), "Start Game (offline)"))
             {

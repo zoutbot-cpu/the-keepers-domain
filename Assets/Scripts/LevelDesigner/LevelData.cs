@@ -29,6 +29,10 @@ namespace KeepersDomain.LevelDesigner
         public int ColorIndex;
         public int StartingGold;
         public int StartingMana;
+
+        /// Bacon in the keeper's Taverns — 0 for a hand-authored level,
+        /// the live total for a mid-game save (see GameBootstrap.SaveGame).
+        public int StartingBacon;
     }
 
     /// One non-default tile — plain, untouched Rock (what every tile
@@ -56,6 +60,12 @@ namespace KeepersDomain.LevelDesigner
         public int X;
         public int Y;
         public int OwnerId;
+
+        /// Level / carried-over exp — 0 for a hand-authored level (spawn
+        /// fresh at level 1), the creature's live progress for a mid-game
+        /// save. See GameBootstrap.RestoreWorldCreatures / Creature.SetProgress.
+        public int Level;
+        public int Exp;
     }
 
     /// A Throne Room or Portal Room — see StructureKind's own header for why

@@ -154,7 +154,11 @@ namespace KeepersDomain.Core
             menuCamera.backgroundColor = new Color(0.05f, 0.05f, 0.07f);
 
             var menu = CreateComponent<MainMenu>("MainMenu");
-            menu.Initialize(StartGame, ShowLevelDesignerProperties, HostGame, JoinGame);
+            // Continue is offered only when a mid-game save is on disk (see
+            // SaveGame / SaveGameSlot); null hides the button entirely.
+            menu.Initialize(StartGame,
+                LevelFileIO.SaveExists(SaveGameSlot) ? (System.Action)ContinueGame : null,
+                ShowLevelDesignerProperties, HostGame, JoinGame);
         }
 
         /// Main Menu "Host Game" — spins up a Relay session (join code) and,
@@ -240,17 +244,91 @@ namespace KeepersDomain.Core
             CreateComponent<NetHud>("NetHud").Initialize(isHost: true);
         }
 
-        /// The Start Game button's actual callback — loads "level1" if
-        /// it exists (see BuildWorld's own header for what changes when
-        /// it does) rather than always generating a fresh procedural map,
-        /// so a level saved/edited via the Level Designer is what
-        /// gameplay actually starts on. Falls back to BuildWorld's
-        /// from-scratch generation (which auto-saves its own output as
-        /// "level1" — see SaveStartingLevelAsLevel1) only on a truly
-        /// fresh install with no save yet.
+        /// The name a mid-game save is written under (see SaveGame) — its
+        /// own slot, separate from the "level1" starting template, so
+        /// "Start Game" is always a fresh run and "Continue" resumes.
+        public const string SaveGameSlot = "savegame";
+
+        /// The Start Game button's actual callback — a fresh run off the
+        /// "level1" template (a level saved/edited via the Level Designer,
+        /// or the bundled procedural default). Deletes any mid-game save
+        /// first, since starting fresh abandons it.
         private static void StartGame()
         {
+            LevelFileIO.Delete(SaveGameSlot);
             BuildWorld(LevelFileIO.Load("level1"));
+        }
+
+        /// Main Menu "Continue" — resumes the mid-game save (see SaveGame).
+        /// Only wired up / shown when LevelFileIO.SaveExists(SaveGameSlot).
+        private static void ContinueGame()
+        {
+            var data = LevelFileIO.Load(SaveGameSlot);
+            if (data == null)
+            {
+                StartGame();
+                return;
+            }
+
+            BuildWorld(data);
+        }
+
+        /// In-game "Save game" (BottomMenuBar's Settings menu). Snapshots
+        /// the live world — full map + rooms, each keeper's gold / mana /
+        /// bacon, and every creature's kind / position / owner / level /
+        /// exp — into the SaveGameSlot save. Does NOT capture creature
+        /// hunger / pay / happiness / current HP / task, queued jobs, or
+        /// jail prisoners; those come back at their defaults on Continue.
+        public static bool SaveGame()
+        {
+            var grid = Object.FindAnyObjectByType<DungeonGrid>();
+            var contexts = KeeperContext.All;
+            if (grid == null || contexts == null || contexts.Length == 0)
+            {
+                return false;
+            }
+
+            var data = CaptureWorldToLevelData(grid, contexts);
+            LevelFileIO.Save(SaveGameSlot, data);
+            Debug.Log($"GameBootstrap: saved game to '{SaveGameSlot}' ({data.Tiles.Count} tiles, {data.Creatures.Count} creatures).");
+            return true;
+        }
+
+        /// Snapshots a running world into a LevelData — shared by SaveGame
+        /// and SaveStartingLevelAsLevel1. A throwaway LevelDesignerSession
+        /// does the tile/creature scan (reusing BuildLevelData rather than
+        /// duplicating it); economy + the Throne/Portal structure markers
+        /// are filled in per keeper from the live KeeperContext afterward.
+        private static LevelData CaptureWorldToLevelData(DungeonGrid grid, KeeperContext[] contexts)
+        {
+            var session = CreateComponent<LevelDesignerSession>("WorldSnapshot");
+            session.Initialize(grid, new LevelDesignerProperties
+            {
+                Multiplayer = contexts.Length > 1,
+                PlayerCount = contexts.Length,
+                MapWidth = grid.Width,
+                MapHeight = grid.Height
+            }, roomManagers: null);
+            session.CaptureLiveCreatures();
+
+            var data = session.BuildLevelData();
+
+            for (int i = 0; i < contexts.Length && i < data.Players.Count; i++)
+            {
+                var ctx = contexts[i];
+                var p = data.Players[i];
+                p.IsAI = ctx.IsAI;
+                p.ColorIndex = LevelDesignerColors.NearestIndex(ctx.Color);
+                p.StartingGold = ctx.Treasury != null ? ctx.Treasury.TotalGold : 0;
+                p.StartingMana = ctx.Throne != null ? ctx.Throne.MaxMana : 100;
+                p.StartingBacon = ctx.Tavern != null ? ctx.Tavern.TotalBacon : 0;
+
+                data.Structures.Add(new LevelStructureData { Kind = StructureKind.ThroneRoom, X = ctx.ThroneCoord.x, Y = ctx.ThroneCoord.y, OwnerId = i });
+                data.Structures.Add(new LevelStructureData { Kind = StructureKind.PortalRoom, X = ctx.PortalCoord.x, Y = ctx.PortalCoord.y, OwnerId = i });
+            }
+
+            Object.Destroy(session.gameObject);
+            return data;
         }
 
         /// Reached via the main menu's "Level Designer" button — collects
@@ -806,6 +884,7 @@ namespace KeepersDomain.Core
                 for (int i = 0; i < contexts.Length; i++)
                 {
                     contexts[i].Treasury.AddGold(specs[i].StartingGold);
+                    contexts[i].Tavern.AddBacon(specs[i].StartingBacon);
                 }
             }
             else
@@ -926,77 +1005,21 @@ namespace KeepersDomain.Core
         }
 
         /// Snapshots the freshly-built starting world into a "level1" save
-        /// file via the same LevelData/LevelFileIO the Level Designer's own
-        /// Save menu uses, so it shows up in that menu's Load list ready to
-        /// tweak. Only writes it once — BuildWorld (and so this) reruns
-        /// every time Start Game is pressed, and overwriting "level1" on
-        /// every launch would clobber any edits saved back onto it from
-        /// the Level Designer since; skip entirely once the file exists.
-        /// A throwaway LevelDesignerSession does the actual snapshotting
-        /// (reusing BuildLevelData rather than duplicating its tile-
-        /// scanning logic) — but only ever reads from grid, it never calls
-        /// PlaceStructure/PlaceCreature against it, since those mutate
-        /// live tile state (EditorPaintFloor et al.) and would corrupt the
-        /// layout BuildWorld just finished carving. The Throne Room/Portal
-        /// structures are appended to the result by hand afterward
-        /// instead, from the same coords BuildWorld itself used.
+        /// file (via CaptureWorldToLevelData, the same path SaveGame uses),
+        /// so it shows up in the Level Designer's Load list ready to tweak.
+        /// Only writes it once — overwriting "level1" on every launch would
+        /// clobber any edits saved back onto it since; skip entirely once
+        /// the file exists (it's also bundled in the build, so in practice
+        /// this is now a no-op — kept for a truly first-ever install with
+        /// no bundled level and no save).
         private static void SaveStartingLevelAsLevel1(DungeonGrid grid, Vector2Int throneRoomCenter, Vector2Int portalCoord)
         {
-            if (LevelFileIO.Load("level1") != null)
+            if (LevelFileIO.Load("level1") != null || KeeperContext.All == null || KeeperContext.All.Length == 0)
             {
                 return;
             }
 
-            var session = CreateComponent<LevelDesignerSession>("StartingLevelSnapshot");
-            // roomManagers: null — this snapshot-only session never calls
-            // ApplyLevelData (see this method's own header), so nothing
-            // here ever dispatches through _roomManagers.
-            session.Initialize(grid, new LevelDesignerProperties
-            {
-                Multiplayer = false,
-                PlayerCount = 1,
-                MapWidth = grid.Width,
-                MapHeight = grid.Height
-            }, roomManagers: null);
-
-            // Scans every live creature agent (Implings at this point in
-            // BuildWorld — see this method's own header for why no other
-            // species has a live instance yet) into the session's own
-            // _creatures list, the same list PlaceCreature appends to, so
-            // BuildLevelData's tile-scanning-only capture below doesn't
-            // silently save an empty Creatures list despite a populated
-            // starting world.
-            session.CaptureLiveCreatures();
-
-            var data = session.BuildLevelData();
-
-            // Pin the snapshot's economy to what the fresh build actually
-            // used (StartingGold constant, 100 starting mana) rather than
-            // LevelDesignerSession's own StartingGoldDefault/
-            // StartingManaDefault — so "fresh -> auto-save -> reload level1"
-            // comes up with the identical gold/mana it had on the fresh
-            // run. A hand-edited level1 keeps whatever the designer set.
-            if (data.Players.Count > 0)
-            {
-                data.Players[0].StartingGold = StartingGold;
-                data.Players[0].StartingMana = 100;
-            }
-
-            // OwnerId 0 — CarveRoom now explicitly stamps its footprint
-            // OwnerId 0 (the local keeper) alongside Ownership.Claimed, so
-            // that's what the tile-scanning loop above captured into
-            // data.Tiles for every one of these tiles.
-            // LevelDesignerSession.PlaceStructure re-paints its whole
-            // footprint as Claimed floor using THIS OwnerId on every load
-            // (see its own comment) — recording -1 here made it re-paint the
-            // footprint Unclaimed on every load, silently undoing the
-            // correct Claimed/OwnerId=0 state the tile loop had just
-            // restored a moment earlier.
-            data.Structures.Add(new LevelStructureData { Kind = StructureKind.ThroneRoom, X = throneRoomCenter.x, Y = throneRoomCenter.y, OwnerId = 0 });
-            data.Structures.Add(new LevelStructureData { Kind = StructureKind.PortalRoom, X = portalCoord.x, Y = portalCoord.y, OwnerId = 0 });
-
-            LevelFileIO.Save("level1", data);
-            Object.Destroy(session.gameObject);
+            LevelFileIO.Save("level1", CaptureWorldToLevelData(grid, KeeperContext.All));
         }
 
         /// GameBootstrap owns the one true camera/listener for this prototype.
@@ -1303,27 +1326,50 @@ namespace KeepersDomain.Core
                 var coord = new Vector2Int(creatureData.X, creatureData.Y);
                 var ownerId = Mathf.Clamp(creatureData.OwnerId, 0, contexts.Length - 1);
                 var ctx = contexts[ownerId];
+
+                // A mid-game save records each creature's level/exp (0 for a
+                // hand-authored level). The spawners are void, so grab the
+                // just-spawned agent off its species roster (spawn order ==
+                // roster order) and restore its progress.
                 switch (creatureData.Kind)
                 {
                     case EditorCreatureKind.Imp:
+                        var impsBefore = ImplingAgent.All.Count;
                         ctx.ImplingSpawner.SpawnImplingAt(coord);
+                        if (ImplingAgent.All.Count > impsBefore)
+                        {
+                            RestoreProgress(ImplingAgent.All[ImplingAgent.All.Count - 1].Creature, creatureData);
+                        }
                         break;
                     case EditorCreatureKind.Gremlin:
                         ctx.GremlinSpawner.SpawnGremlin(coord, ownerId);
+                        RestoreProgress(GremlinAgent.All[GremlinAgent.All.Count - 1].Creature, creatureData);
                         break;
                     case EditorCreatureKind.Warlock:
                         ctx.WarlockSpawner.SpawnWarlock(coord, ownerId);
+                        RestoreProgress(WarlockAgent.All[WarlockAgent.All.Count - 1].Creature, creatureData);
                         break;
                     case EditorCreatureKind.MazeRattler:
                         ctx.MazeRattlerSpawner.SpawnMazeRattler(coord, ownerId);
+                        RestoreProgress(MazeRattlerAgent.All[MazeRattlerAgent.All.Count - 1].Creature, creatureData);
                         break;
                     case EditorCreatureKind.BeanCounter:
                         ctx.BeanCounterSpawner.SpawnBeanCounter(coord, ownerId);
+                        RestoreProgress(BeanCounterAgent.All[BeanCounterAgent.All.Count - 1].Creature, creatureData);
                         break;
                     case EditorCreatureKind.Elf:
                         ctx.ElfSpawner.SpawnElf(coord, ownerId);
+                        RestoreProgress(ElfAgent.All[ElfAgent.All.Count - 1].Creature, creatureData);
                         break;
                 }
+            }
+        }
+
+        private static void RestoreProgress(KeepersDomain.Creatures.Creature creature, LevelCreatureData data)
+        {
+            if (creature != null && data.Level > 0)
+            {
+                creature.SetProgress(data.Level, data.Exp);
             }
         }
 
@@ -1337,6 +1383,7 @@ namespace KeepersDomain.Core
             public Color Color;
             public int StartingGold;
             public int StartingMana;
+            public int StartingBacon;
         }
 
         /// One PlayerSpec per player in the loaded roster — or a single
@@ -1365,6 +1412,7 @@ namespace KeepersDomain.Core
                     Color = LevelDesignerColors.Palette[p.ColorIndex % LevelDesignerColors.Palette.Length],
                     StartingGold = p.StartingGold,
                     StartingMana = p.StartingMana > 0 ? p.StartingMana : 100,
+                    StartingBacon = p.StartingBacon,
                 };
             }
             return specs;

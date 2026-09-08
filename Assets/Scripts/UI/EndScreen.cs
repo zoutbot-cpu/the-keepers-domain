@@ -1,5 +1,6 @@
 using UnityEngine;
 using KeepersDomain.Core;
+using KeepersDomain.LevelDesigner;
 
 namespace KeepersDomain.UI
 {
@@ -21,6 +22,10 @@ namespace KeepersDomain.UI
         /// to call from anywhere — creates its own GameObject.
         public static void Show(bool victory, string subtitle)
         {
+            // The run is over — a mid-game save of it would just reload
+            // straight back into a lost/won match.
+            LevelFileIO.Delete(GameBootstrap.SaveGameSlot);
+
             if (_current != null)
             {
                 Destroy(_current.gameObject);

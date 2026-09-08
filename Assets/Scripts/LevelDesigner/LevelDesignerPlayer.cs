@@ -12,6 +12,7 @@ namespace KeepersDomain.LevelDesigner
         public int ColorIndex;
         public int StartingGold;
         public int StartingMana;
+        public int StartingBacon;
 
         public Color Color => LevelDesignerColors.Palette[ColorIndex];
     }
@@ -46,5 +47,28 @@ namespace KeepersDomain.LevelDesigner
         /// plain mid-gray, deliberately outside Palette so it never
         /// collides with a real player color.
         public static readonly Color Unowned = new Color(0.5f, 0.5f, 0.5f);
+
+        /// Palette index whose color is closest (RGB distance) to `color` —
+        /// used to record a running keeper's color as a `ColorIndex` in a
+        /// mid-game save (KeeperContext holds a Color, not an index).
+        public static int NearestIndex(Color color)
+        {
+            var best = 0;
+            var bestDist = float.MaxValue;
+            for (int i = 0; i < Palette.Length; i++)
+            {
+                var p = Palette[i];
+                var d = (p.r - color.r) * (p.r - color.r)
+                    + (p.g - color.g) * (p.g - color.g)
+                    + (p.b - color.b) * (p.b - color.b);
+                if (d < bestDist)
+                {
+                    bestDist = d;
+                    best = i;
+                }
+            }
+
+            return best;
+        }
     }
 }

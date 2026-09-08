@@ -158,6 +158,26 @@ namespace KeepersDomain.Rooms
             }
         }
 
+        /// Drops a lump of bacon into the first placed Tavern's tank — used
+        /// only to restore a keeper's saved bacon total on a mid-game load
+        /// (see GameBootstrap.RestoreWorldCreatures). Exact per-room
+        /// distribution doesn't matter for a restore; the total does.
+        /// Silently no-ops if this keeper has no Tavern.
+        public void AddBacon(int amount)
+        {
+            if (amount <= 0)
+            {
+                return;
+            }
+
+            foreach (var roomId in _roomBacon.Keys)
+            {
+                _roomBacon[roomId] += amount;
+                UpdateTankLabel(roomId);
+                return;
+            }
+        }
+
         public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager, int ownerId = 0)
         {
             _grid = grid;

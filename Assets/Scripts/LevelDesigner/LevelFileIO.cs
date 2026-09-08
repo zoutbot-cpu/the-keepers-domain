@@ -60,6 +60,25 @@ namespace KeepersDomain.LevelDesigner
             return JsonUtility.FromJson<LevelData>(bundled.text);
         }
 
+        /// Whether a player-written save exists on disk under persistentDataPath
+        /// (a build-bundled Resources level doesn't count — see Load). Used
+        /// by the Main Menu's Continue button and the in-game Save panel.
+        public static bool SaveExists(string levelName)
+        {
+            return File.Exists(GetPath(levelName));
+        }
+
+        /// Deletes a player-written save (no-op if it doesn't exist). A
+        /// build-bundled level can't be deleted — it lives in Resources.
+        public static void Delete(string levelName)
+        {
+            var path = GetPath(levelName);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+
         /// Every saved level's name (file name minus extension), sorted
         /// alphabetically — read fresh from disk each call rather than
         /// cached, so a level saved or removed since the Load list was

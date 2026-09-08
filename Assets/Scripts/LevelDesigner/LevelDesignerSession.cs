@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using KeepersDomain.Creatures;
 using KeepersDomain.Grid;
 using KeepersDomain.Implings;
 using KeepersDomain.Input;
@@ -64,6 +65,11 @@ namespace KeepersDomain.LevelDesigner
         public Vector2Int Coord;
         public int OwnerId;
         public GameObject Visual;
+
+        // 0 for a hand-authored creature (spawns fresh at level 1); the
+        // live level/exp when captured from a running game (mid-game save).
+        public int Level;
+        public int Exp;
     }
 
     /// Owns the level currently being authored: map size, the player
@@ -163,7 +169,8 @@ namespace KeepersDomain.LevelDesigner
                     IsAI = playerData.IsAI,
                     ColorIndex = playerData.ColorIndex,
                     StartingGold = playerData.StartingGold,
-                    StartingMana = playerData.StartingMana
+                    StartingMana = playerData.StartingMana,
+                    StartingBacon = playerData.StartingBacon
                 });
             }
 
@@ -240,8 +247,25 @@ namespace KeepersDomain.LevelDesigner
         /// selected) just skips the disc.
         public void PlaceCreature(EditorCreatureKind kind, Vector2Int coord, int ownerId)
         {
-            var visual = BuildCreatureVisual(kind, coord, ownerId);
-            _creatures.Add(new PlacedCreature { Kind = kind, Coord = coord, OwnerId = ownerId, Visual = visual });
+            PlaceCreature(kind, coord, ownerId, level: 0, exp: 0, buildVisual: true);
+        }
+
+        /// level/exp carry a running creature's progress through a mid-game
+        /// save (see CaptureLiveCreatures); 0 for the interactive tool.
+        /// buildVisual: false when snapshotting a running game — the real
+        /// agents already have their own visuals in the scene, a throwaway
+        /// marker capsule would just flash for a frame.
+        public void PlaceCreature(EditorCreatureKind kind, Vector2Int coord, int ownerId, int level, int exp, bool buildVisual = true)
+        {
+            _creatures.Add(new PlacedCreature
+            {
+                Kind = kind,
+                Coord = coord,
+                OwnerId = ownerId,
+                Visual = buildVisual ? BuildCreatureVisual(kind, coord, ownerId) : null,
+                Level = level,
+                Exp = exp
+            });
         }
 
         /// The actual capsule+ring GameObject build PlaceCreature uses —
@@ -345,35 +369,15 @@ namespace KeepersDomain.LevelDesigner
         /// directly) via _grid.WorldToGrid.
         public void CaptureLiveCreatures()
         {
-            foreach (var agent in ImplingAgent.All)
-            {
-                PlaceCreature(EditorCreatureKind.Imp, _grid.WorldToGrid(agent.Position), agent.Creature.OwnerId);
-            }
+            void Capture(EditorCreatureKind kind, Vector3 pos, Creature c) =>
+                PlaceCreature(kind, _grid.WorldToGrid(pos), c.OwnerId, c.Level, c.Exp, buildVisual: false);
 
-            foreach (var agent in GremlinAgent.All)
-            {
-                PlaceCreature(EditorCreatureKind.Gremlin, _grid.WorldToGrid(agent.Position), agent.Creature.OwnerId);
-            }
-
-            foreach (var agent in WarlockAgent.All)
-            {
-                PlaceCreature(EditorCreatureKind.Warlock, _grid.WorldToGrid(agent.Position), agent.Creature.OwnerId);
-            }
-
-            foreach (var agent in MazeRattlerAgent.All)
-            {
-                PlaceCreature(EditorCreatureKind.MazeRattler, _grid.WorldToGrid(agent.Position), agent.Creature.OwnerId);
-            }
-
-            foreach (var agent in BeanCounterAgent.All)
-            {
-                PlaceCreature(EditorCreatureKind.BeanCounter, _grid.WorldToGrid(agent.Position), agent.Creature.OwnerId);
-            }
-
-            foreach (var agent in ElfAgent.All)
-            {
-                PlaceCreature(EditorCreatureKind.Elf, _grid.WorldToGrid(agent.Position), agent.Creature.OwnerId);
-            }
+            foreach (var agent in ImplingAgent.All) Capture(EditorCreatureKind.Imp, agent.Position, agent.Creature);
+            foreach (var agent in GremlinAgent.All) Capture(EditorCreatureKind.Gremlin, agent.Position, agent.Creature);
+            foreach (var agent in WarlockAgent.All) Capture(EditorCreatureKind.Warlock, agent.Position, agent.Creature);
+            foreach (var agent in MazeRattlerAgent.All) Capture(EditorCreatureKind.MazeRattler, agent.Position, agent.Creature);
+            foreach (var agent in BeanCounterAgent.All) Capture(EditorCreatureKind.BeanCounter, agent.Position, agent.Creature);
+            foreach (var agent in ElfAgent.All) Capture(EditorCreatureKind.Elf, agent.Position, agent.Creature);
         }
 
         /// Places a Throne Room or Portal Room — unlike an ordinary room tool
@@ -526,7 +530,8 @@ namespace KeepersDomain.LevelDesigner
                     IsAI = player.IsAI,
                     ColorIndex = player.ColorIndex,
                     StartingGold = player.StartingGold,
-                    StartingMana = player.StartingMana
+                    StartingMana = player.StartingMana,
+                    StartingBacon = player.StartingBacon
                 });
             }
 
@@ -563,7 +568,9 @@ namespace KeepersDomain.LevelDesigner
                     Kind = creature.Kind,
                     X = creature.Coord.x,
                     Y = creature.Coord.y,
-                    OwnerId = creature.OwnerId
+                    OwnerId = creature.OwnerId,
+                    Level = creature.Level,
+                    Exp = creature.Exp
                 });
             }
 

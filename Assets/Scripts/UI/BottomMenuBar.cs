@@ -93,6 +93,7 @@ namespace KeepersDomain.UI
         private Vector2 _buildScrollPos;
         private Vector2 _tasksScrollPos;
         private Vector2 _creaturesScrollPos;
+        private string _saveStatus = "";
 
         // Networked-client Tasks panel: there's no BuilderJobBoard here, so
         // the dig/reinforce/build lists are rebuilt by scanning the
@@ -920,6 +921,33 @@ namespace KeepersDomain.UI
             GUILayout.Label("When on, an Aggressive creature standing over a knocked-out enemy beats it to death (permadeath) instead of leaving it to come to on its own or be dragged off to a Jail. Off by default.");
 
             DrawStanceControls();
+            DrawSaveGame();
+        }
+
+        /// In-game "Save game" — writes a mid-game save (GameBootstrap.
+        /// SaveGame → the SaveGameSlot), resumable from the Main Menu's
+        /// Continue button next launch. Host / offline only; a networked
+        /// client doesn't own the world. Captures the map, rooms, each
+        /// keeper's gold / mana / bacon, and every creature's level — not
+        /// hunger / pay / happiness / current HP / task / queued jobs /
+        /// jailed prisoners.
+        private void DrawSaveGame()
+        {
+            if (_networked)
+            {
+                return;
+            }
+
+            GUILayout.Space(8f);
+            if (GUILayout.Button("Save game"))
+            {
+                _saveStatus = GameBootstrap.SaveGame()
+                    ? $"Saved. \"Continue\" from the Main Menu to resume."
+                    : "Save failed — no live world to snapshot.";
+            }
+            GUILayout.Label(_saveStatus.Length > 0
+                ? _saveStatus
+                : "Snapshots the map, rooms, economy and creature levels. Creature needs / current HP / queued jobs / jail prisoners reset on load.");
         }
 
         /// Per-keeper stance editor (see StanceRegistry) — one row per other
