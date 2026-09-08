@@ -163,7 +163,38 @@ namespace KeepersDomain.Core
             // SaveGame / SaveGameSlot); null hides the button entirely.
             menu.Initialize(StartGame,
                 LevelFileIO.SaveExists(SaveGameSlot) ? (System.Action)ContinueGame : null,
-                ShowLevelDesignerProperties, HostGame, JoinGame);
+                ShowLevelDesignerProperties, HostGame, JoinGame, StartSkirmish);
+        }
+
+        /// Default square size for a freshly generated map, scaled to how
+        /// many keepers have to fit fairly around it (see MapGenerator).
+        private static int GeneratedMapSize(int playerCount)
+        {
+            return playerCount <= 2 ? 64 : playerCount == 3 ? 80 : 96;
+        }
+
+        /// Main Menu "Skirmish (generated)" — a fresh seed-based map (see
+        /// MapGenerator) built straight into offline gameplay through the
+        /// ordinary loaded-level path. Two keepers by default; keeper AI
+        /// doesn't exist yet, so the rival's creatures just run autonomously
+        /// off their own roster. Abandons any mid-game save, same as
+        /// Start Game.
+        private static void StartSkirmish()
+        {
+            LevelFileIO.Delete(SaveGameSlot);
+
+            const int playerCount = 2;
+            var seed = new System.Random().Next();
+            Debug.Log($"GameBootstrap: skirmish — seed {seed}, {playerCount} players.");
+
+            BuildWorld(MapGenerator.Generate(new MapGenSettings
+            {
+                Seed = seed,
+                PlayerCount = playerCount,
+                MapWidth = GeneratedMapSize(playerCount),
+                MapHeight = GeneratedMapSize(playerCount),
+                Multiplayer = false
+            }));
         }
 
         /// Main Menu "Host Game" — spins up a Relay session (join code) and,
@@ -217,7 +248,25 @@ namespace KeepersDomain.Core
         private static void BuildHostGame()
         {
             var mapId = NetLobby.Instance != null ? NetLobby.Instance.MapId : "level1";
-            BuildWorld(mapId == NetLobby.ProceduralMapId ? null : LevelFileIO.Load(mapId));
+            if (mapId == NetLobby.ProceduralMapId)
+            {
+                var playerCount = Mathf.Clamp(
+                    NetLobby.Instance != null ? NetLobby.Instance.Players.Count : 2, 2, 4);
+                var seed = new System.Random().Next();
+                Debug.Log($"GameBootstrap: procedural multiplayer map — seed {seed}, {playerCount} players.");
+                BuildWorld(MapGenerator.Generate(new MapGenSettings
+                {
+                    Seed = seed,
+                    PlayerCount = playerCount,
+                    MapWidth = GeneratedMapSize(playerCount),
+                    MapHeight = GeneratedMapSize(playerCount),
+                    Multiplayer = true
+                }));
+            }
+            else
+            {
+                BuildWorld(LevelFileIO.Load(mapId));
+            }
 
             var grid = Object.FindAnyObjectByType<DungeonGrid>();
 
@@ -348,7 +397,26 @@ namespace KeepersDomain.Core
         private static void ShowLevelDesignerProperties()
         {
             var propertiesMenu = CreateComponent<LevelDesignerPropertiesMenu>("LevelDesignerPropertiesMenu");
-            propertiesMenu.Initialize(ShowMainMenu, BuildLevelDesignerWorld, LoadLevelDesignerWorld);
+            propertiesMenu.Initialize(ShowMainMenu, BuildLevelDesignerWorld, LoadLevelDesignerWorld, GenerateLevelDesignerWorld);
+        }
+
+        /// Level Properties menu "Generate Map" — runs the seed-based
+        /// generator (see MapGenerator) at the chosen size / player count and
+        /// drops the result straight into the Level Designer, so it can be
+        /// inspected, tweaked, and saved under its own name (then played via
+        /// the lobby's map picker, or exported as level1).
+        private static void GenerateLevelDesignerWorld(LevelDesignerProperties properties, int seed)
+        {
+            var data = MapGenerator.Generate(new MapGenSettings
+            {
+                Seed = seed,
+                PlayerCount = properties.PlayerCount,
+                MapWidth = properties.MapWidth,
+                MapHeight = properties.MapHeight,
+                Multiplayer = properties.Multiplayer
+            });
+
+            LoadLevelDesignerWorld($"generated-{seed}", data);
         }
 
         /// Builds the Level Designer's own world — a blank map at the

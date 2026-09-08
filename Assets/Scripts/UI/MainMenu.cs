@@ -20,18 +20,20 @@ namespace KeepersDomain.UI
         private Action _onLevelDesigner;
         private Action _onHost;
         private Action<string> _onJoin;
+        private Action _onSkirmish;
         private Texture2D _logo;
 
         private string _joinCodeInput = "";
         private SettingsMenu _settingsMenu;
 
-        public void Initialize(Action onStart, Action onContinue, Action onLevelDesigner, Action onHost, Action<string> onJoin)
+        public void Initialize(Action onStart, Action onContinue, Action onLevelDesigner, Action onHost, Action<string> onJoin, Action onSkirmish)
         {
             _onStart = onStart;
             _onContinue = onContinue;
             _onLevelDesigner = onLevelDesigner;
             _onHost = onHost;
             _onJoin = onJoin;
+            _onSkirmish = onSkirmish;
             // Resources.Load, not a serialized field — every other object in
             // this prototype is created procedurally by GameBootstrap rather
             // than wired up in the Inspector. Assets/Resources/UI/logo.png.
@@ -101,6 +103,13 @@ namespace KeepersDomain.UI
             if (GUI.Button(Btn(Row()), "Start Game (offline)"))
             {
                 _onStart?.Invoke();
+                Destroy(gameObject);
+                return;
+            }
+
+            if (_onSkirmish != null && GUI.Button(Btn(Row()), "Skirmish (generated)"))
+            {
+                _onSkirmish.Invoke();
                 Destroy(gameObject);
                 return;
             }

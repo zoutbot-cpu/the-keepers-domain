@@ -47,14 +47,19 @@ namespace KeepersDomain.UI
         private const float LoadPanelSpacing = 20f;
         private const float LoadPanelHeight = 300f;
 
+        private const int SeedMin = 0;
+        private const int SeedMax = 999999;
+
         private Action _onBack;
         private Action<LevelDesignerProperties> _onCreate;
         private Action<string, LevelData> _onLoad;
+        private Action<LevelDesignerProperties, int> _onGenerate;
 
         private bool _multiplayer;
         private int _playerCount;
         private int _mapWidth;
         private int _mapHeight;
+        private int _seed;
         private Vector2 _loadScrollPos;
 
         /// onLoad lets this screen skip "configure a new map" entirely and
@@ -63,16 +68,19 @@ namespace KeepersDomain.UI
         /// form. Same (name, LevelData) shape LevelDesignerMenuBar's own
         /// Save/Load tab already uses (GameBootstrap.
         /// LoadLevelDesignerWorld), so both entry points share one loader.
-        public void Initialize(Action onBack, Action<LevelDesignerProperties> onCreate, Action<string, LevelData> onLoad)
+        public void Initialize(Action onBack, Action<LevelDesignerProperties> onCreate, Action<string, LevelData> onLoad,
+            Action<LevelDesignerProperties, int> onGenerate)
         {
             _onBack = onBack;
             _onCreate = onCreate;
             _onLoad = onLoad;
+            _onGenerate = onGenerate;
 
             _multiplayer = false;
             _playerCount = SingleplayerStandardPlayers;
             _mapWidth = MapDimensionStandard;
             _mapHeight = MapDimensionStandard;
+            _seed = UnityEngine.Random.Range(SeedMin, SeedMax + 1);
         }
 
         private void OnGUI()
@@ -114,7 +122,33 @@ namespace KeepersDomain.UI
             y += RowHeight + RowSpacing;
 
             DrawStepper(new Rect(panelX, y, PanelWidth, RowHeight), "Map Height", ref _mapHeight, MapDimensionMin, MapDimensionMax, MapDimensionStep);
-            y += RowHeight + RowSpacing * 2f;
+            y += RowHeight + RowSpacing;
+
+            // Seed row — a stepper (fine nudges) plus a Randomize button, so
+            // the generator (see MapGenerator) can be re-rolled or dialed to a
+            // known-good number.
+            const float RandomizeWidth = 90f;
+            DrawStepper(new Rect(panelX, y, PanelWidth - RandomizeWidth - 8f, RowHeight), "Seed", ref _seed, SeedMin, SeedMax, 1);
+            if (GUI.Button(new Rect(panelX + PanelWidth - RandomizeWidth, y, RandomizeWidth, RowHeight), "Randomize"))
+            {
+                _seed = UnityEngine.Random.Range(SeedMin, SeedMax + 1);
+            }
+            y += RowHeight + RowSpacing;
+
+            var properties = new LevelDesignerProperties
+            {
+                Multiplayer = _multiplayer,
+                PlayerCount = _playerCount,
+                MapWidth = _mapWidth,
+                MapHeight = _mapHeight
+            };
+
+            if (_onGenerate != null && GUI.Button(new Rect(panelX, y, PanelWidth, ButtonHeight), "Generate Map (seed-based)"))
+            {
+                _onGenerate.Invoke(properties, _seed);
+                Destroy(gameObject);
+            }
+            y += ButtonHeight + RowSpacing * 2f;
 
             var backRect = new Rect(panelX, y, ButtonWidth, ButtonHeight);
             var createRect = new Rect(panelX + PanelWidth - ButtonWidth, y, ButtonWidth, ButtonHeight);
@@ -127,13 +161,7 @@ namespace KeepersDomain.UI
 
             if (GUI.Button(createRect, "Create Level"))
             {
-                _onCreate?.Invoke(new LevelDesignerProperties
-                {
-                    Multiplayer = _multiplayer,
-                    PlayerCount = _playerCount,
-                    MapWidth = _mapWidth,
-                    MapHeight = _mapHeight
-                });
+                _onCreate?.Invoke(properties);
                 Destroy(gameObject);
             }
 
