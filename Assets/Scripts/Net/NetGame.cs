@@ -477,6 +477,18 @@ namespace KeepersDomain.Net
             Apply(tiles, live: true);
         }
 
+        /// Host -> client: a keeper's Throne Room has fallen, the match is
+        /// over. Called by GameBootstrap.HandleThroneDefeated on the host;
+        /// the client turns it into its own EndScreen. The client "is"
+        /// ClientOwnerId, so it lost iff that's the defeated keeper.
+        [Rpc(SendTo.NotServer)]
+        public void NotifyMatchOverRpc(int defeatedOwnerId)
+        {
+            var lost = defeatedOwnerId == ClientOwnerId;
+            KeepersDomain.UI.EndScreen.Show(victory: !lost,
+                lost ? "Your Throne Room has fallen." : "Every rival Throne Room has fallen.");
+        }
+
         private void Apply(NetTile[] tiles, bool live)
         {
             if (_grid == null)

@@ -20,7 +20,7 @@ Every creature has:
 - Armor
 - Lifesteal
 
-All of these scale up with level. Exact per-level scaling curve is still an unbalanced placeholder, but every creature now has a basic one covering HP, HP regen, Strength, Movespeed, Attackspeed, and Armor — Strength grows roughly +10%/level, Attackspeed +7.5%/level, Movespeed +5%/level (all off that creature's own base stat, so a weaker creature stays proportionally weaker), and Armor reaches +1 by level 10 for every creature. Mana/Intelligence/Craftmanship/Lifesteal still don't grow — nothing consumes them yet (see each creature's own implementation note).
+All of these scale up with level. Every creature has its own per-level growth block covering HP, HP regen, Strength, Movespeed, Attackspeed, and Armor (`_growthPerLevel` on each agent) — no longer a single shared ratio: the Warlock grows slower in melee, the Bean Counter and Elf slower still, and the Maze Rattler trades HP growth for the fastest Movespeed/Attackspeed scaling of any creature. Armor still reaches +1 by level 10 for everyone. All the numbers are unbalanced placeholders. Mana/Intelligence/Craftmanship/Lifesteal don't grow — nothing consumes them yet (see each creature's own implementation note).
 
 ### Leveling
 - Levels run 1–10.
@@ -144,8 +144,8 @@ The second non-Imp creature, and the first "intelligent" creature (Tavern's "foo
   - **30** — no Library exists: train in a Training Room instead (+20 exp every 2 seconds), if one exists — same walk-pause-move-on pattern between dummies Gremlin's training uses, not standing still. If neither a Library nor a Training Room exists, the Warlock just idles — unlike Gremlin, it has no roam fallback.
 
 ### Maze Rattler (current implementation note)
-The third non-Imp creature — a ratman-ish humanoid, per the Jail room's own brief ("attracts the Maze Rattler"). A placeholder capsule copied straight from Gremlin's shape and stat block, colored brown, until a real model exists — see `MazeRattlerAgent.cs`/`MazeRattlerSpawner.cs` (`Assets/Scripts/Monsters`). No prisoner/capture mechanic exists yet for it to actually interact with — this is the creature and its idle wandering only.
-- Same stats as Gremlin (80 HP, Movespeed 3.5, Strength 15, Attackspeed 0.8) — no design-brief values of its own exist yet, so this reuses Gremlin's placeholders rather than inventing new numbers.
+The third non-Imp creature — a ratman-ish humanoid, per the Jail room's own brief ("attracts the Maze Rattler"). A placeholder capsule (Gremlin's shape, colored brown) until a real model exists — see `MazeRattlerAgent.cs`/`MazeRattlerSpawner.cs` (`Assets/Scripts/Monsters`). No prisoner/capture mechanic exists yet for it to actually interact with — this is the creature and its idle wandering only.
+- Its own placeholder stat block now (was a straight Gremlin copy): a **fast, fragile skirmisher** — 60 HP (vs Gremlin's 80), Movespeed 4.2, Strength 14, Attackspeed 1.1, and per-level growth that trades HP for the quickest Movespeed/Attackspeed scaling of any creature. Still untuned, just no longer borrowed.
 - Joins via the Portal's pool, seeded with 5 to start — recruiting spawns it at the Portal's own coord.
 - Join requirements (all must hold, on top of pool availability): at least 1 free (unclaimed) Lair spot (same universal "needs somewhere to rest" requirement every recruitable creature has); fewer Maze Rattlers already in the domain than 5 times the number of placed Jail *rooms* (not tiles — see `JailManager.RoomCount`'s own comment for why a Jail's much bigger minimum footprint makes a per-tile ratio meaningless here, unlike the Hatchery/Tavern tile-based caps Gremlin/Warlock use). See `MazeRattlerSpawner.MeetsJoinRequirements`. Note this is a separate cap from — not instead of — the shared Hatchery-tile population cap below: a Maze Rattler still counts toward Gremlin/Warlock's own Hatchery requirement even though its own recruitment isn't gated on Hatchery capacity at all.
 - Counted alongside Gremlin and Warlock in the Hatchery-tile "non-Imp creatures" population cap those two check as part of their own join requirements (see Gremlin's and Warlock's entries, above) — a Maze Rattler still eats Bacon like any other non-Imp creature, so it still consumes that shared capacity even though nothing gates its own recruitment on it.
@@ -192,7 +192,7 @@ Every Keeper holds a **stance** toward every other Keeper: **Aggressive** (the d
 
 **Wild/neutral creatures** (anything not owned by a Keeper — future map fauna, etc.) belong to a pseudo-owner whose stance toward everyone defaults to **Neutral**.
 
-Stance can be changed at any time, including mid-fight; a change never auto-disengages fights already in progress.
+Stance can be changed at any time, including mid-fight; a change never auto-disengages fights already in progress. The **Settings menu** (bottom bar) has a stance editor — one row per rival keeper setting the acting keeper's posture toward them; flip keepers with the debug player switcher to set the other direction. Shown only on a multi-keeper level with a live `StanceRegistry` (not on the networked client, which has neither).
 
 ### Detection and targeting
 
@@ -215,7 +215,9 @@ Stance can be changed at any time, including mid-fight; a change never auto-dise
 
 ### The Throne as a target
 
-The Throne Room is attackable (`IAttackTarget`) — a hostile creature with no creature to fight walks up to the enemy Throne and hits it on the same Strength/cadence rule. **1000 HP, regenerating 10/sec**, so a lone wanderer can't scratch it — it takes a sustained warband to out-damage the regen. It carries a health "foot-circle" like a creature's (`CreatureHealthRing`, scaled up to circle the platform) that's **hidden while at full HP**. Attacking it rallies the owning Keeper's nearby idle defenders onto the attacker. There's **no lose-condition** on it hitting 0 yet — it just clamps and regens back; the Throne HP shows in the top status bar.
+The Throne Room is attackable (`IAttackTarget`) — a hostile creature with no creature to fight walks up to the enemy Throne and hits it on the same Strength/cadence rule. **1000 HP, regenerating 10/sec**, so a lone wanderer can't scratch it — it takes a sustained warband to out-damage the regen. It carries a health "foot-circle" like a creature's (`CreatureHealthRing`, scaled up to circle the platform) that's **hidden while at full HP**. Attacking it rallies the owning Keeper's nearby idle defenders onto the attacker.
+
+**Reaching 0 HP is that Keeper's defeat.** `ThroneRoom.Defeated` fires once, regen stops, and `IsAlive` goes false so attackers lose interest. `GameBootstrap.HandleThroneDefeated` turns it into an `EndScreen` overlay — DEFEAT if it's the local player's (index 0), VICTORY once every rival's Throne is also down — with a single "Main Menu" button. On a networked host, `NetGame.NotifyMatchOverRpc` carries the result to the client's own `EndScreen` (combat isn't host-authoritative-replicated yet, so a Throne only ever takes damage in the host's simulation, but the outcome still reaches both screens). The simulation keeps running behind the overlay — it's a result screen, not a pause.
 
 ### Breaking off (priority)
 
@@ -304,7 +306,9 @@ Shipped (compiles clean; **first playtested 2026-09-03** — the core fight loop
 
 **2026-09-08 playtest-bug pass** (offline-compile-clean; not yet Editor/MP-verified): jailed prisoners stood upright (`MarkJailed`); Imps despawn + refund mana on faint instead of dropping a `DownedBody`; Rescue/Capture became reorderable `JobKind`s; Jail placement needs pre-dug floor (was destroying walls); Imps now contest a rival's border floor (`ScanForEnemyClaimCandidates`); networked-client View mode can inspect creature ghosts; `[Dev] Terrain` repaints any non-room tile (+ Place Floor / Place Rock). **Open:** if jailed prisoners still never *convert*, the Bean Counter → Conversion Class pipeline is the next thing to check — that path wasn't touched.
 
-Deferred: the `GridMover` extraction (netcode prerequisite #1 — `Combatant` carries its own copy of the path/move helpers for now; the five Monster agents still duplicate theirs), the health-ring damage flash, ScriptableObject stat blocks, and any stance UI.
+**2026-09-08, "Next Steps" batch** (same caveat): the **lose-condition** (Throne 0 HP → `EndScreen`, see "The Throne as a target"); a **stance editor** in the Settings menu (see "Keeper stances"); the **Maze Rattler** got its own stat block (fast/fragile skirmisher) instead of a Gremlin copy — and the design doc's old "one shared growth ratio" claim is corrected: every creature's `_growthPerLevel` is already hand-differentiated.
+
+Deferred: the `GridMover` extraction (netcode prerequisite #1 — `Combatant` carries its own copy of the path/move helpers for now; the five Monster agents still duplicate theirs), the health-ring damage flash, and ScriptableObject stat blocks.
 
 ## Terrain (current implementation note)
 New tile types beyond Rock/Floor, each with its own walkability rule (`DungeonGrid.IsWalkable`/`TileType`):

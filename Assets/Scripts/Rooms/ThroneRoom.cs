@@ -19,8 +19,10 @@ namespace KeepersDomain.Rooms
         /// The Throne is attackable (see design-doc.md's Combat section /
         /// IAttackTarget) — a hostile creature with nothing else to fight
         /// walks up and hits it. 1000 HP, regenerating 10/sec, so it takes a
-        /// sustained warband to actually crack. There's no lose-condition
-        /// wired to it hitting 0 yet — it just clamps there and regens back.
+        /// sustained warband to actually crack. Hitting 0 HP defeats its
+        /// keeper: Defeated fires once, regen stops, and IsAlive goes false
+        /// so attackers lose interest. GameBootstrap turns that into the
+        /// match-over screen.
         private const int ThroneMaxHp = 1000;
         private const float ThroneHpRegenPerSecond = 10f;
 
@@ -76,8 +78,17 @@ namespace KeepersDomain.Rooms
 
         public int OwnerId { get; private set; }
         public Vector3 Position => transform.position;
-        public bool IsAlive => true;
+        public bool IsAlive => !IsDefeated;
         public string DisplayName => "Throne Room";
+
+        /// True once the Throne has been beaten to 0 HP — permanent, no
+        /// regen back from here (see Update / ReceiveAttack).
+        public bool IsDefeated { get; private set; }
+
+        /// Fires exactly once, the frame the Throne first hits 0 HP, with
+        /// this Throne's OwnerId. GameBootstrap subscribes to every keeper's
+        /// Throne and shows the match-over screen.
+        public event System.Action<int> Defeated;
 
         /// Live HP / max, for the HUD.
         public int Hp => Mathf.RoundToInt(_creature != null ? _creature.Stats.HP : ThroneMaxHp);
@@ -121,8 +132,12 @@ namespace KeepersDomain.Rooms
         private void Update()
         {
             // Creature.Tick regenerates HP toward MaxHP at HPRegen/sec — the
-            // Throne's only use of the Creature it holds.
-            _creature?.Tick(Time.deltaTime);
+            // Throne's only use of the Creature it holds. A defeated Throne
+            // stays down.
+            if (!IsDefeated)
+            {
+                _creature?.Tick(Time.deltaTime);
+            }
         }
 
         private void OnDestroy()
@@ -131,10 +146,11 @@ namespace KeepersDomain.Rooms
         }
 
         /// A hostile creature landed a hit (see Combatant). No armor, no
-        /// faint — just soak it. Regen (Update) claws it back.
+        /// faint — just soak it. Regen (Update) claws it back, until 0 HP,
+        /// which is the keeper's defeat.
         public void ReceiveAttack(int rawDamage, ICombatant attacker)
         {
-            if (rawDamage <= 0 || _creature == null)
+            if (rawDamage <= 0 || _creature == null || IsDefeated)
             {
                 return;
             }
@@ -143,6 +159,13 @@ namespace KeepersDomain.Rooms
             GameplayLog.Write(OwnerId,
                 $"Throne Room takes {rawDamage}{(attacker != null ? $" from {attacker.Name}" : "")}"
                 + $" ({_creature.Stats.HP:0}/{_creature.Stats.MaxHP:0} HP)");
+
+            if (_creature.Stats.HP <= 0f)
+            {
+                IsDefeated = true;
+                GameplayLog.Write(OwnerId, "Throne Room has fallen — this keeper is defeated");
+                Defeated?.Invoke(OwnerId);
+            }
         }
 
         /// Reserves amount out of CurrentMana if there's enough free,

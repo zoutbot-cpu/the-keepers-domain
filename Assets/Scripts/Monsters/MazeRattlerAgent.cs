@@ -106,31 +106,31 @@ namespace KeepersDomain.Monsters
         public string Species => CreatureKind;
         private readonly Combatant _combat = new Combatant();
 
-        // Same placeholder stat block as GremlinAgent — no design-brief
-        // values exist yet for Maze Rattler specifically, and "copy the
-        // Gremlin" per the brief means reusing these rather than inventing
-        // new numbers.
+        // A fast, fragile skirmisher — the ratman starts squishier than a
+        // Gremlin (60 vs 80 HP) but noticeably quicker on its feet and much
+        // faster to attack, so it trades staying power for tempo. Still all
+        // placeholder numbers, but its own now rather than a Gremlin copy.
         [SerializeField]
         private CreatureStatBlock _baseStats = new CreatureStatBlock
         {
-            MaxHP = 80f,
+            MaxHP = 60f,
             HPRegen = 1f,
-            Movespeed = 3.5f,
-            Strength = 15f,
-            Attackspeed = 0.8f
+            Movespeed = 4.2f,
+            Strength = 14f,
+            Attackspeed = 1.1f
         };
 
-        // Same growth ratios as Gremlin's own block ("copy the Gremlin"
-        // applies to growth too, same base stats) — +10% Strength, +7.5%
-        // Attackspeed, +5% Movespeed per level, +1 Armor by level 10.
+        // Scales toward that skirmisher fantasy: less HP per level than the
+        // others, but the fastest Movespeed/Attackspeed growth of any
+        // creature. Shared +1-Armor-by-10 curve.
         [SerializeField]
         private CreatureStatBlock _growthPerLevel = new CreatureStatBlock
         {
-            MaxHP = 8f,
-            HPRegen = 0.2f,
-            Strength = 1.5f,
-            Movespeed = 0.175f,
-            Attackspeed = 0.06f,
+            MaxHP = 5f,
+            HPRegen = 0.15f,
+            Strength = 1.4f,
+            Movespeed = 0.22f,
+            Attackspeed = 0.08f,
             Armor = 1f / 9f
         };
 

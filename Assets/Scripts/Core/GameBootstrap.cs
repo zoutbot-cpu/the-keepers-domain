@@ -876,7 +876,53 @@ namespace KeepersDomain.Core
             bottomMenuBar.Initialize(grid, contexts, interactionController, localPlayerController, localPlayerIndex);
             localPlayerController.Initialize(camera, grid, contexts, interactionController, minionGrabController, bottomMenuBar, localPlayerIndex);
 
+            // Lose-condition: a Throne beaten to 0 HP ends the match (see
+            // ThroneRoom.Defeated / HandleThroneDefeated).
+            foreach (var ctx in contexts)
+            {
+                if (ctx?.Throne != null)
+                {
+                    ctx.Throne.Defeated += HandleThroneDefeated;
+                }
+            }
+
             SaveStartingLevelAsLevel1(grid, contexts[0].ThroneCoord, contexts[0].PortalCoord);
+        }
+
+        /// A keeper's Throne Room just hit 0 HP. Shows the match-over screen
+        /// — DEFEAT if it's the local player's (index 0), VICTORY once every
+        /// rival's Throne is also down. On a networked host it also tells the
+        /// client (combat isn't host-authoritative-replicated yet, so this
+        /// only ever fires from the host's own simulation, but the result
+        /// still has to reach the client's screen).
+        private static void HandleThroneDefeated(int defeatedOwnerId)
+        {
+            if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer)
+            {
+                NetGame.Instance?.NotifyMatchOverRpc(defeatedOwnerId);
+            }
+
+            const int localOwner = 0;
+            if (defeatedOwnerId == localOwner)
+            {
+                EndScreen.Show(victory: false, "Your Throne Room has fallen.");
+                return;
+            }
+
+            var all = KeeperContext.All;
+            if (all != null)
+            {
+                foreach (var ctx in all)
+                {
+                    if (ctx?.Throne != null && ctx.Throne.OwnerId != localOwner && !ctx.Throne.IsDefeated)
+                    {
+                        Debug.Log($"GameBootstrap: rival keeper P{defeatedOwnerId + 1} defeated; others still stand.");
+                        return;
+                    }
+                }
+            }
+
+            EndScreen.Show(victory: true, "Every rival Throne Room has fallen.");
         }
 
         /// Snapshots the freshly-built starting world into a "level1" save

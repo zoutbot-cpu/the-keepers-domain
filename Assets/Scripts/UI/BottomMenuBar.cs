@@ -782,6 +782,46 @@ namespace KeepersDomain.UI
                 Combatant.AllowFinishOffEnemies = _finishOffEnemiesOn;
             }
             GUILayout.Label("When on, an Aggressive creature standing over a knocked-out enemy beats it to death (permadeath) instead of leaving it to come to on its own or be dragged off to a Jail. Off by default.");
+
+            DrawStanceControls();
+        }
+
+        /// Per-keeper stance editor (see StanceRegistry) — one row per other
+        /// keeper setting THIS keeper's posture toward them (directional, so
+        /// flip players with the debug switcher to set the other side).
+        /// Only meaningful on a multi-keeper level with a live registry — the
+        /// networked client has neither.
+        private void DrawStanceControls()
+        {
+            if (_networked || _contexts == null || _contexts.Length <= 1 || KeepersDomain.Core.StanceRegistry.Current == null)
+            {
+                return;
+            }
+
+            GUILayout.Space(8f);
+            GUILayout.Label($"Stance — how Player {_active.OwnerId + 1} treats each rival (default Aggressive):");
+
+            var registry = KeepersDomain.Core.StanceRegistry.Current;
+            foreach (var other in _contexts)
+            {
+                if (other == null || other.OwnerId == _active.OwnerId)
+                {
+                    continue;
+                }
+
+                GUILayout.BeginHorizontal();
+                GUILayout.Label($"vs Player {other.OwnerId + 1}", GUILayout.Width(90f));
+                var current = registry.Get(_active.OwnerId, other.OwnerId);
+                foreach (KeepersDomain.Core.Stance stance in System.Enum.GetValues(typeof(KeepersDomain.Core.Stance)))
+                {
+                    var picked = GUILayout.Toggle(current == stance, stance.ToString(), GUI.skin.button);
+                    if (picked && current != stance)
+                    {
+                        registry.Set(_active.OwnerId, other.OwnerId, stance);
+                    }
+                }
+                GUILayout.EndHorizontal();
+            }
         }
 
         private void DrawTasksMenu()
