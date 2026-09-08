@@ -115,6 +115,7 @@ namespace KeepersDomain.Core
         /// state that outlives its GameObject.
         public static void ReturnToMainMenu()
         {
+            Time.timeScale = 1f;
             KeeperContext.All = null;
             StanceRegistry.Current = null;
 
@@ -242,6 +243,7 @@ namespace KeepersDomain.Core
             }
 
             CreateComponent<NetHud>("NetHud").Initialize(isHost: true);
+            CreateComponent<NetPauseScreen>("NetPauseScreen");
         }
 
         /// The name a mid-game save is written under (see SaveGame) — its
@@ -622,6 +624,7 @@ namespace KeepersDomain.Core
             var camera = CreateIsoCamera(grid, panMargin, mapCenter);
 
             CreateComponent<NetHud>("NetHud").Initialize(isHost: false);
+            CreateComponent<NetPauseScreen>("NetPauseScreen");
 
             // Room decoration from the tile snapshot — same gold-free,
             // simulation-off managers the Level Designer's load path uses,

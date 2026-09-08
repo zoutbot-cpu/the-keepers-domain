@@ -421,4 +421,10 @@ Two save paths share `LevelData` / `LevelFileIO`:
 
 The Main Menu shows a **Continue** button only while `savegame` exists (`LevelFileIO.SaveExists`); it loads that save through the ordinary offline `BuildWorld` path. The `EndScreen` (match over) deletes `savegame` — a save of a finished run would just reload into a lost/won match.
 
-**Not captured** (resets to defaults on Continue): creature hunger / pay / happiness / current HP / task, queued dig/reinforce/build jobs, jailed prisoners, downed bodies, reserved mana (re-derived as Imps re-spawn). Multiplayer: the host can save, but Continue rebuilds it as an offline (debug-switcher) game — resuming an online session isn't wired.
+**Not captured** (resets to defaults on Continue): creature hunger / pay / happiness / current HP / task, queued dig/reinforce/build jobs, jailed prisoners, downed bodies, reserved mana (re-derived as Imps re-spawn).
+
+### Multiplayer pause + "vote to Save & Quit"
+
+`NetGame` carries a `Paused` netvar (either player toggles it — the host directly, the client by RPC) that drives `Time.timeScale` on both sides, so the host simulation and the client render both freeze. The bottom bar's **Pause** button (shown only while `NetGame.Instance != null`) opens `NetPauseScreen`, a modal overlay — the rest of the HUD hides while paused. From it a player can **Resume**, **Leave (no save)** (`ReturnToMainMenu`), or cast a **Save & Quit** vote (a `NetworkList<ulong>` of voter client-ids, mirrored to a count/`PlayerCount` the client reads). Once every connected player has voted, the host writes the `savegame` (`GameBootstrap.SaveGame`), sends `MatchSavedAndQuitRpc`, and everyone returns to the menu. Unpausing clears any pending votes.
+
+**Resuming a multiplayer save**: the lobby's map picker (`LobbyScreen`) already lists every file in the Levels dir, so `savegame` shows up there after a Save & Quit — labelled "Resume saved game" — and picking it rebuilds the 2-keeper world on the host with the client rejoining as keeper 1. So an online session *can* be resumed, just from the lobby rather than a dedicated flow.

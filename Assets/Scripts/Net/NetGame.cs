@@ -47,6 +47,35 @@ namespace KeepersDomain.Net
         public readonly NetworkVariable<int> MapWidth = new NetworkVariable<int>();
         public readonly NetworkVariable<int> MapHeight = new NetworkVariable<int>();
 
+        // ---- shared pause + "vote to Save & Quit" (see NetPauseScreen) ----
+        // Either player can toggle Paused (host directly, client by RPC);
+        // it drives Time.timeScale on both sides so the host simulation and
+        // the client render both freeze. While paused, each player can cast
+        // (and retract) a Save & Quit vote; once every connected player has
+        // voted, the host writes a mid-game save (GameBootstrap.SaveGame)
+        // and everyone drops back to the main menu.
+        public readonly NetworkVariable<bool> Paused = new NetworkVariable<bool>();
+        public readonly NetworkVariable<int> PlayerCount = new NetworkVariable<int>(1);
+        private readonly NetworkList<ulong> _saveQuitVotes = new NetworkList<ulong>();
+
+        public int SaveQuitVoteCount => _saveQuitVotes.Count;
+
+        public bool LocalVotedSaveQuit
+        {
+            get
+            {
+                foreach (var id in _saveQuitVotes)
+                {
+                    if (id == NetworkManager.LocalClientId)
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+        }
+
         private DungeonGrid _grid;
 
         // Host: coords whose TileChanged fired since the last flush.
@@ -158,6 +187,10 @@ namespace KeepersDomain.Net
         {
             Instance = this;
 
+            // Both sides mirror the pause into Time.timeScale.
+            Paused.OnValueChanged += OnPausedChanged;
+            ApplyPause(Paused.Value);
+
             if (IsServer)
             {
                 // Write the dimensions here, while OnNetworkSpawn still runs
@@ -170,6 +203,9 @@ namespace KeepersDomain.Net
                     MapHeight.Value = _grid.Height;
                 }
 
+                RefreshPlayerCount();
+                NetworkManager.OnClientConnectedCallback += OnClientCountChanged;
+                NetworkManager.OnClientDisconnectCallback += OnClientCountChanged;
                 return;
             }
 
@@ -225,6 +261,14 @@ namespace KeepersDomain.Net
         {
             MapWidth.OnValueChanged -= OnClientMapSizeReplicated;
             MapHeight.OnValueChanged -= OnClientMapSizeReplicated;
+            Paused.OnValueChanged -= OnPausedChanged;
+            Time.timeScale = 1f;
+
+            if (IsServer && NetworkManager != null)
+            {
+                NetworkManager.OnClientConnectedCallback -= OnClientCountChanged;
+                NetworkManager.OnClientDisconnectCallback -= OnClientCountChanged;
+            }
 
             while (_pendingSnapshots.Count > 0)
             {
@@ -910,6 +954,133 @@ namespace KeepersDomain.Net
                 case EditorCreatureKind.MazeRattler: ctx.MazeRattlerSpawner?.TryRecruitMazeRattler(); break;
                 case EditorCreatureKind.BeanCounter: ctx.BeanCounterSpawner?.TryRecruitBeanCounter(); break;
             }
+        }
+
+        // ---- pause + Save & Quit vote ----
+
+        private void OnPausedChanged(bool _, bool paused) => ApplyPause(paused);
+
+        private static void ApplyPause(bool paused)
+        {
+            Time.timeScale = paused ? 0f : 1f;
+        }
+
+        private void OnClientCountChanged(ulong _) => RefreshPlayerCount();
+
+        private void RefreshPlayerCount()
+        {
+            if (!IsServer)
+            {
+                return;
+            }
+
+            PlayerCount.Value = Mathf.Max(1, NetworkManager.ConnectedClientsIds.Count);
+
+            // A player who leaves can't hold a vote hostage.
+            for (int i = _saveQuitVotes.Count - 1; i >= 0; i--)
+            {
+                if (!NetworkManager.ConnectedClients.ContainsKey(_saveQuitVotes[i]))
+                {
+                    _saveQuitVotes.RemoveAt(i);
+                }
+            }
+
+            TryResolveSaveQuit();
+        }
+
+        /// Local pause toggle — from NetPauseScreen / the HUD's Pause button.
+        public void ToggleLocalPause()
+        {
+            if (IsServer)
+            {
+                SetPaused(!Paused.Value);
+            }
+            else
+            {
+                RequestSetPausedRpc(!Paused.Value);
+            }
+        }
+
+        /// Local Save & Quit vote toggle — only meaningful while paused.
+        public void ToggleLocalSaveQuitVote()
+        {
+            if (!Paused.Value)
+            {
+                return;
+            }
+
+            if (IsServer)
+            {
+                ApplySaveQuitVote(NetworkManager.LocalClientId);
+            }
+            else
+            {
+                RequestSaveQuitVoteRpc();
+            }
+        }
+
+        [Rpc(SendTo.Server)]
+        private void RequestSetPausedRpc(bool paused) => SetPaused(paused);
+
+        [Rpc(SendTo.Server)]
+        private void RequestSaveQuitVoteRpc(RpcParams p = default) => ApplySaveQuitVote(p.Receive.SenderClientId);
+
+        private void SetPaused(bool paused)
+        {
+            if (Paused.Value == paused)
+            {
+                return;
+            }
+
+            Paused.Value = paused;
+            if (!paused)
+            {
+                _saveQuitVotes.Clear();
+            }
+        }
+
+        private void ApplySaveQuitVote(ulong clientId)
+        {
+            if (!Paused.Value)
+            {
+                return;
+            }
+
+            for (int i = 0; i < _saveQuitVotes.Count; i++)
+            {
+                if (_saveQuitVotes[i] == clientId)
+                {
+                    _saveQuitVotes.RemoveAt(i);
+                    return;
+                }
+            }
+
+            _saveQuitVotes.Add(clientId);
+            TryResolveSaveQuit();
+        }
+
+        private void TryResolveSaveQuit()
+        {
+            if (!IsServer || !Paused.Value || _saveQuitVotes.Count < PlayerCount.Value)
+            {
+                return;
+            }
+
+            // Unanimous — write the mid-game save, tell the client, tear down.
+            GameBootstrap.SaveGame();
+            MatchSavedAndQuitRpc();
+            Time.timeScale = 1f;
+            GameBootstrap.ReturnToMainMenu();
+        }
+
+        /// Host -> client: the Save & Quit vote passed, we've saved, go to
+        /// the menu. (The client also gets a disconnect when the host tears
+        /// down; this just makes it immediate and unambiguous.)
+        [Rpc(SendTo.NotServer)]
+        private void MatchSavedAndQuitRpc()
+        {
+            Time.timeScale = 1f;
+            GameBootstrap.ReturnToMainMenu();
         }
     }
 }

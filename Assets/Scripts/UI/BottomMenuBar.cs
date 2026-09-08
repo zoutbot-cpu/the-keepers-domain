@@ -151,6 +151,16 @@ namespace KeepersDomain.UI
 
         private void OnGUI()
         {
+            // While the multiplayer game is paused, NetPauseScreen is the
+            // only interaction — hide the whole HUD so nothing shows or
+            // clicks through under the overlay.
+            var netGame = KeepersDomain.Net.NetGame.Instance;
+            if (netGame != null && netGame.Paused.Value)
+            {
+                PointerOverPanel = true;
+                return;
+            }
+
             var barRect = new Rect(0f, Screen.height - BarHeight, Screen.width, BarHeight);
             var panelRect = new Rect(10f, barRect.y - PanelHeight - 6f, PanelWidth, PanelHeight);
             var inspectionRect = new Rect(Screen.width - InspectionPanelWidth - 10f, 10f, InspectionPanelWidth, InspectionPanelHeight);
@@ -306,6 +316,18 @@ namespace KeepersDomain.UI
             DrawTabButton(MenuTab.Tasks, "Tasks");
             DrawTabButton(MenuTab.Settings, "Settings");
             GUILayout.FlexibleSpace();
+
+            // Multiplayer only — freezes the sim for both players and opens
+            // the pause overlay (NetPauseScreen), where either can vote to
+            // Save & Quit. NetGame.Instance is non-null exactly for a
+            // networked session (host or client).
+            var net = KeepersDomain.Net.NetGame.Instance;
+            if (net != null && GUILayout.Button(net.Paused.Value ? "Resume" : "Pause",
+                    GUILayout.Width(TabButtonWidth), GUILayout.Height(BarHeight - 8f)))
+            {
+                net.ToggleLocalPause();
+            }
+
             // Tears the whole running game down and shows the main menu
             // again — see GameBootstrap.ReturnToMainMenu. No confirmation
             // prompt, matching every other button on this bar (Sell, cancel

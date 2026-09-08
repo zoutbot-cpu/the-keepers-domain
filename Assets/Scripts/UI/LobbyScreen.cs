@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using KeepersDomain.Core;
 using KeepersDomain.LevelDesigner;
 using KeepersDomain.Net;
 
@@ -197,8 +198,15 @@ namespace KeepersDomain.UI
             return _maps[i];
         }
 
-        private static string MapLabel(string id) =>
-            string.IsNullOrEmpty(id) ? "Fresh procedural map" : id;
+        private static string MapLabel(string id)
+        {
+            if (string.IsNullOrEmpty(id))
+            {
+                return "Fresh procedural map";
+            }
+
+            return id == GameBootstrap.SaveGameSlot ? "Resume saved game" : id;
+        }
 
         private void DrawLeave(float x, float y, float w)
         {
