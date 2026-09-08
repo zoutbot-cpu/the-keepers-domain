@@ -198,17 +198,9 @@ namespace KeepersDomain.Monsters
         // this Warlock onto a Training Room tile — see SetTrainingPriority.
         private bool _hasTrainingPriority;
 
-        private readonly List<Vector2Int> _gridPathBuffer = new List<Vector2Int>();
-        private readonly List<Vector3> _waypoints = new List<Vector3>();
-        private int _waypointIndex;
-
-        // The goal last handed to PlanPathTo — cached so
-        // ReplanPathFromCurrentPosition can re-run the exact same call
-        // after this Warlock's position changes out from under it (see
-        // MinionGrabController), without needing to know which task kind
-        // that goal belonged to.
-        private Vector2Int _lastGoalCoord;
-        private Vector3 _lastGoalWorldPos;
+        // A*-planned route walking (PlanPathTo / MoveAlongPathThen /
+        // Replan) — shared with every other creature agent, see GridMover.
+        private readonly GridMover _mover = new GridMover();
 
         private void Awake()
         {
@@ -222,6 +214,7 @@ namespace KeepersDomain.Monsters
         public void Initialize(DungeonGrid grid, LairManager lairManager, TavernManager tavernManager, LibraryManager libraryManager, TrainingRoomManager trainingRoomManager, TreasuryManager treasuryManager, Portal portal, int ownerId)
         {
             _grid = grid;
+            _mover.Initialize(grid, transform, () => _creature.Stats.Movespeed);
             _lairManager = lairManager;
             _tavernManager = tavernManager;
             _libraryManager = libraryManager;
@@ -991,7 +984,7 @@ namespace KeepersDomain.Monsters
                 return;
             }
 
-            if (PlanPathTo(_lastGoalCoord, _lastGoalWorldPos))
+            if (_mover.Replan())
             {
                 return;
             }
@@ -1005,54 +998,16 @@ namespace KeepersDomain.Monsters
                 or WarlockTask.MovingToTraining or WarlockTask.MovingToAttackTarget or WarlockTask.MovingToPortal;
         }
 
-        // Same A*-planned-route movement ImplingAgent uses (see its own
-        // PlanPathTo/MoveAlongPathThen for the full rationale) — duplicated
-        // here rather than shared, matching how GremlinSpawner/WarlockSpawner
-        // are already duplicated rather than sharing a base.
+        // Thin forwarders to the shared GridMover (see its header) — kept
+        // as private methods so the ~20 call sites in this file don't change.
         private bool PlanPathTo(Vector2Int goalCoord, Vector3 finalWorldPos)
         {
-            _lastGoalCoord = goalCoord;
-            _lastGoalWorldPos = finalWorldPos;
-
-            var startCoord = _grid.WorldToGrid(transform.position);
-            var found = AStarPathfinder.TryFindPath(_grid, startCoord, goalCoord, _gridPathBuffer);
-
-            _waypoints.Clear();
-            _waypointIndex = 0;
-
-            if (!found)
-            {
-                return false;
-            }
-
-            for (int i = 0; i < _gridPathBuffer.Count - 1; i++)
-            {
-                _waypoints.Add(_grid.GridToWorld(_gridPathBuffer[i]));
-            }
-
-            _waypoints.Add(finalWorldPos);
-            return true;
+            return _mover.PlanPathTo(goalCoord, finalWorldPos);
         }
 
         private void MoveAlongPathThen(Action onArrive)
         {
-            if (_waypointIndex >= _waypoints.Count)
-            {
-                onArrive();
-                return;
-            }
-
-            var target = _waypoints[_waypointIndex];
-            var flatTarget = new Vector3(target.x, transform.position.y, target.z);
-            transform.position = Vector3.MoveTowards(transform.position, flatTarget, _creature.Stats.Movespeed * Time.deltaTime);
-            if (Vector3.Distance(transform.position, flatTarget) < 0.05f)
-            {
-                _waypointIndex++;
-                if (_waypointIndex >= _waypoints.Count)
-                {
-                    onArrive();
-                }
-            }
+            _mover.MoveAlongPathThen(onArrive);
         }
     }
 }

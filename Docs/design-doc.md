@@ -281,7 +281,7 @@ Combat is the system that forces the netcode decision. The recommended model is 
 Under host-authority the host owns and resolves: every `CreatureStats.HP`, all damage and Lifesteal math, all combat RNG, the `StanceRegistry`, and every faint / recover / permadeath / capture transition. Clients predict only their own hand/camera.
 
 Prerequisite refactors, in order:
-1. Extract the duplicated per-creature movement (`PlanPathTo` / `MoveAlongPathThen` / `ReplanPathFromCurrentPosition`, currently byte-identical across every agent) into a composed `GridMover`, and add combat as a composed `Combatant` component — same composition pattern `Creature` / `Hunger` / `Pay` / `Happiness` already use. Each species keeps its own `EvaluateAndAct` priority ladder.
+1. Extract the duplicated per-creature movement into a composed `GridMover` (same composition pattern `Creature` / `Hunger` / `Pay` / `Happiness` / `Combatant` already use). **Mostly done** — `Assets/Scripts/Grid/GridMover.cs` holds `PlanPathTo` / `MoveAlongPathThen` / `Replan` and the five backing fields; the five Monster agents and the Imp each hold one and forward to it (their own `PlanPathTo` / `MoveAlongPathThen` are now thin forwarders so call sites didn't change, and `ReplanPathFromCurrentPosition` — still species-side, it touches the species task enum — calls `_mover.Replan()`). **`Combatant` still carries its own copy** — its waypoints are all cell centres and it steps without an on-arrive callback, so it needs a slightly wider `GridMover` before it can fold in.
 2. Route gameplay ticks through one host-gated simulation step instead of every agent's own `Update()`.
 3. Consolidate gameplay RNG and ID assignment into host-authoritative services.
 4. Split `GameBootstrap` world-building into "host builds, client receives" (the `LevelData` load path is already most of the way there).
@@ -308,7 +308,7 @@ Shipped (compiles clean; **first playtested 2026-09-03** — the core fight loop
 
 **2026-09-08, "Next Steps" batch** (same caveat): the **lose-condition** (Throne 0 HP → `EndScreen`, see "The Throne as a target"); a **stance editor** in the Settings menu (see "Keeper stances"); the **Maze Rattler** got its own stat block (fast/fragile skirmisher) instead of a Gremlin copy — and the design doc's old "one shared growth ratio" claim is corrected: every creature's `_growthPerLevel` is already hand-differentiated.
 
-Deferred: the `GridMover` extraction (netcode prerequisite #1 — `Combatant` carries its own copy of the path/move helpers for now; the five Monster agents still duplicate theirs), the health-ring damage flash, and ScriptableObject stat blocks.
+Deferred: folding `Combatant`'s own path/move copy into `GridMover` (the 5 Monster agents + the Imp are done — see netcode prerequisite #1), the health-ring damage flash, and ScriptableObject stat blocks.
 
 ## Terrain (current implementation note)
 New tile types beyond Rock/Floor, each with its own walkability rule (`DungeonGrid.IsWalkable`/`TileType`):

@@ -183,17 +183,9 @@ namespace KeepersDomain.Monsters
         private float _attackCheckTimer;
         private float _attackHitTimer;
 
-        private readonly List<Vector2Int> _gridPathBuffer = new List<Vector2Int>();
-        private readonly List<Vector3> _waypoints = new List<Vector3>();
-        private int _waypointIndex;
-
-        // The goal last handed to PlanPathTo — cached so
-        // ReplanPathFromCurrentPosition can re-run the exact same call
-        // after this Maze Rattler's position changes out from under it
-        // (see MinionGrabController), without needing to know which task
-        // kind that goal belonged to.
-        private Vector2Int _lastGoalCoord;
-        private Vector3 _lastGoalWorldPos;
+        // A*-planned route walking (PlanPathTo / MoveAlongPathThen /
+        // Replan) — shared with every other creature agent, see GridMover.
+        private readonly GridMover _mover = new GridMover();
 
         private void Awake()
         {
@@ -207,6 +199,7 @@ namespace KeepersDomain.Monsters
         public void Initialize(DungeonGrid grid, LairManager lairManager, TavernManager tavernManager, TrainingRoomManager trainingRoomManager, JailManager jailManager, TreasuryManager treasuryManager, Portal portal, int ownerId)
         {
             _grid = grid;
+            _mover.Initialize(grid, transform, () => _creature.Stats.Movespeed);
             _lairManager = lairManager;
             _tavernManager = tavernManager;
             _trainingRoomManager = trainingRoomManager;
@@ -855,7 +848,7 @@ namespace KeepersDomain.Monsters
                 return;
             }
 
-            if (PlanPathTo(_lastGoalCoord, _lastGoalWorldPos))
+            if (_mover.Replan())
             {
                 return;
             }
@@ -872,48 +865,12 @@ namespace KeepersDomain.Monsters
 
         private bool PlanPathTo(Vector2Int goalCoord, Vector3 finalWorldPos)
         {
-            _lastGoalCoord = goalCoord;
-            _lastGoalWorldPos = finalWorldPos;
-
-            var startCoord = _grid.WorldToGrid(transform.position);
-            var found = AStarPathfinder.TryFindPath(_grid, startCoord, goalCoord, _gridPathBuffer);
-
-            _waypoints.Clear();
-            _waypointIndex = 0;
-
-            if (!found)
-            {
-                return false;
-            }
-
-            for (int i = 0; i < _gridPathBuffer.Count - 1; i++)
-            {
-                _waypoints.Add(_grid.GridToWorld(_gridPathBuffer[i]));
-            }
-
-            _waypoints.Add(finalWorldPos);
-            return true;
+            return _mover.PlanPathTo(goalCoord, finalWorldPos);
         }
 
         private void MoveAlongPathThen(Action onArrive)
         {
-            if (_waypointIndex >= _waypoints.Count)
-            {
-                onArrive();
-                return;
-            }
-
-            var target = _waypoints[_waypointIndex];
-            var flatTarget = new Vector3(target.x, transform.position.y, target.z);
-            transform.position = Vector3.MoveTowards(transform.position, flatTarget, _creature.Stats.Movespeed * Time.deltaTime);
-            if (Vector3.Distance(transform.position, flatTarget) < 0.05f)
-            {
-                _waypointIndex++;
-                if (_waypointIndex >= _waypoints.Count)
-                {
-                    onArrive();
-                }
-            }
+            _mover.MoveAlongPathThen(onArrive);
         }
     }
 }
