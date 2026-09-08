@@ -26,7 +26,7 @@ Phase 1's core loop is implemented and playable: **dig → claim → build → i
 
 **2026-09-08 — a playtest-bug pass** (compiles clean; not yet re-verified in the Editor): jailed prisoners stand upright in their cell instead of lying on their side; a defeated **Imp** now vanishes and refunds its reserved upkeep mana instead of leaving a rescuable body that locked the mana forever; **Rescue Ally / Capture Enemy** became reorderable job-priority entries in the Impling menu; a **Jail** must be placed on already-dug floor now (it used to auto-dig rock and silently delete dungeon walls); Imps now **contest a rival's border tiles**, slowly flipping claimed floor along the frontier; a networked **client** can inspect creatures in View mode; the **[Dev] Terrain** tools repaint any non-room tile freely (and can paint plain Floor / Rock back).
 
-**2026-09-08 — a follow-up feature batch** (same "compiles clean, not Editor-verified" caveat): a real **lose-condition** — a Throne Room beaten to 0 HP ends the match with a VICTORY / DEFEAT screen; a **stance editor** in the Settings menu (set each rival keeper's stance instead of everyone being hard-Aggressive); a new **Unholy Ground** terrain tile (Holy Ground's dark twin, mechanically identical for now); the **Maze Rattler** got its own stat block — a fast, fragile skirmisher — instead of a Gremlin copy; the ~1500 lines of byte-identical path/move code across the six creature agents were pulled into one shared **`GridMover`**; and the networked **client's Creatures roster and Tasks list** now populate instead of showing "not available yet" — the roster from replicated creature ghosts (species / level / owner / HP + a coarse activity bucket), the cancelable dig/reinforce/build lists from queued-tile flags, and claim/repair job *counts* off `KeeperNetState`.
+**2026-09-08 — a follow-up feature batch** (same "compiles clean, not Editor-verified" caveat): a real **lose-condition** — a Throne Room beaten to 0 HP ends the match with a VICTORY / DEFEAT screen; a **stance editor** in the Settings menu (set each rival keeper's stance instead of everyone being hard-Aggressive); a new **Unholy Ground** terrain tile (Holy Ground's dark twin, mechanically identical for now); the **Maze Rattler** got its own stat block — a fast, fragile skirmisher — instead of a Gremlin copy; the ~1500 lines of byte-identical path/move code across the six creature agents were pulled into one shared **`GridMover`**; and the networked **client's Creatures roster and Tasks list** now populate instead of showing "not available yet" — the roster from replicated creature ghosts (species / level / owner / HP + a coarse activity bucket), the cancelable dig/reinforce/build lists from queued-tile flags, and claim/repair job *counts* off `KeeperNetState`. And a **mid-game save**: a "Save game" button in the Settings menu writes a resume slot, and a **Continue** button appears on the Main Menu whenever one exists.
 
 ---
 
@@ -72,7 +72,9 @@ All six carry a composed **`Combatant`** (below) and a composed **`GridMover`** 
 
 **Art & Visuals** — Real modular art from a purpose-bought "dungeon_pack" set across most of the dungeon: a real mesh per wall type (owner-tinted reinforced orbs), real Claimed/Unclaimed floor textures, real Throne Room / Portal props, animated Water & Lava, and real furniture/floor art for **every room except Conversion Class** (Lair / Training Room / Library / Tavern in v0.0005; Treasury / Slime Hatchery / Jail / Bridge in v0.0006). Creatures are still placeholder capsules; a knocked-out one tips onto its side (a jailed prisoner stands back up), and the Throne Room now carries a scaled-up health ring. The build version number is shown in the top-right corner in-game.
 
-**Level Designer & persistent starting level** — Placing a room (or loading a save) builds the exact same real room decorations gameplay builds, via a shared `IRestorableRoomManager`/`RestoreRoom` path — all nine room types now, Bridge included: the Map Design menu has a **Bridge** tool that paints a bridge tile (real plank mesh) onto any Water/Lava it's dragged over, and it round-trips through save/load like everything else. Per-tile ownership covers Reinforced walls; an **Edit mode** reassigns which player owns a tile/wall/room/structure/creature, and a **Remove mode** deletes any placed tile/wall/room/structure/creature regardless of owner (a room takes its whole footprint back to Rock). **"Start Game" loads a persistent `level1` save** if one exists (real room managers, job board, spawners reconstruct it, including creatures as live agents); procedural generation still runs on a first-ever install and auto-saves its output as `level1`.
+**Level Designer & persistent starting level** — Placing a room (or loading a save) builds the exact same real room decorations gameplay builds, via a shared `IRestorableRoomManager`/`RestoreRoom` path — all nine room types now, Bridge included: the Map Design menu has a **Bridge** tool that paints a bridge tile (real plank mesh) onto any Water/Lava it's dragged over, and it round-trips through save/load like everything else. Per-tile ownership covers Reinforced walls; an **Edit mode** reassigns which player owns a tile/wall/room/structure/creature, and a **Remove mode** deletes any placed tile/wall/room/structure/creature regardless of owner (a room takes its whole footprint back to Rock). **"Start Game" loads the bundled `level1` template** (real room managers, job board, spawners reconstruct it, including creatures as live agents) — always a fresh run.
+
+**Mid-game save / Continue** — the in-game Settings menu has a **Save game** button (`GameBootstrap.SaveGame` → a `savegame` slot via the same `LevelData`/`LevelFileIO` path). The Main Menu grows a **Continue** button whenever that slot exists; "Start Game" and the match-over screen both delete it. The snapshot captures the map, every room, each keeper's gold / mana / bacon, and every creature's kind / position / owner / **level + exp**. It does **not** capture creature hunger / pay / happiness / current HP / task, queued jobs, or jail prisoners — those reset to defaults on Continue. Multiplayer: the host can save, but Continue rebuilds it as an offline game.
 
 ## In Progress / Partially Implemented
 
@@ -96,7 +98,7 @@ All six carry a composed **`Combatant`** (below) and a composed **`GridMover`** 
 - Real art for creatures, and for **Conversion Class** — the one room still on primitive-cube art (may be reworked first)
 - Additional creature races beyond the current six
 - Skill slots 2–6 (only slot 1, the basic attack, is defined) — where windup / cooldown / projectiles / mana costs / AoE will live
-- Saving mid-game progress (only the first "Start Game" run auto-saves itself as `level1`)
+- Full-fidelity save (the mid-game save skips creature needs / HP / tasks, queued jobs, jail prisoners)
 
 ## Known Placeholder Values (revisit before balancing)
 
@@ -123,7 +125,7 @@ All six carry a composed **`Combatant`** (below) and a composed **`GridMover`** 
 
 ## Next Steps (TODO)
 
-- [ ] **Editor/MP re-verify the 2026-09-08 changes** — the bug pass (jailed-prisoner upright, Imp-death mana refund, reorderable rescue/capture, Jail pre-dug placement, contested border claiming, client creature inspect, dev terrain repaint) *and* the feature batch (lose-condition screen, stance editor, Unholy Ground, Maze Rattler stats, `GridMover` — creature movement especially)
+- [ ] **Editor/MP re-verify the 2026-09-08 changes** — the bug pass (jailed-prisoner upright, Imp-death mana refund, reorderable rescue/capture, Jail pre-dug placement, contested border claiming, client creature inspect, dev terrain repaint) *and* the feature batch (lose-condition screen, stance editor, Unholy Ground, Maze Rattler stats, `GridMover` — creature movement especially, the client Creatures/Tasks panels, and the mid-game save → Continue round-trip)
 - [ ] **Balance combat** — TTK, aggro radius, faint-HP, leash, Throne HP/regen, and every per-creature stat + growth block (all hand-set placeholders)
 - [ ] **Polish jailing** — verify held prisoners actually convert (Bean Counter → Conversion Class pipeline), plus the capture flow generally
 - [ ] An **AI opponent** so a rival keeper's creatures actually do something (and can threaten a Throne for real)
@@ -133,7 +135,7 @@ All six carry a composed **`Combatant`** (below) and a composed **`GridMover`** 
 - [ ] A proper **stance UI** — the Settings-menu editor is functional but bare; give it a real screen, and a default other than all-Aggressive if that's wanted
 - [ ] PvE: invading hero parties
 - [ ] Extend the Throne's `IAttackTarget` pattern to other structures worth defending
-- [ ] A real "save my current game" flow, distinct from the one-time starting-level snapshot
+- [ ] Deepen the mid-game save — creature needs / HP / task, queued jobs, jail prisoners; and an online-resumable multiplayer save
 - [ ] Real art for Conversion Class (last room on primitives — possibly after a rework) and for creatures
 - [ ] Real procedural placement for Water/Lava/Chasm/Holy Ground/Unholy Ground/Bedrock
 
