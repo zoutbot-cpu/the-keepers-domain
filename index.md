@@ -26,6 +26,8 @@ Phase 1's core loop is implemented and playable: **dig → claim → build → i
 
 **2026-09-08 — a playtest-bug pass** (compiles clean; not yet re-verified in the Editor): jailed prisoners stand upright in their cell instead of lying on their side; a defeated **Imp** now vanishes and refunds its reserved upkeep mana instead of leaving a rescuable body that locked the mana forever; **Rescue Ally / Capture Enemy** became reorderable job-priority entries in the Impling menu; a **Jail** must be placed on already-dug floor now (it used to auto-dig rock and silently delete dungeon walls); Imps now **contest a rival's border tiles**, slowly flipping claimed floor along the frontier; a networked **client** can inspect creatures in View mode; the **[Dev] Terrain** tools repaint any non-room tile freely (and can paint plain Floor / Rock back).
 
+**2026-09-08 — a follow-up feature batch** (same "compiles clean, not Editor-verified" caveat): a real **lose-condition** — a Throne Room beaten to 0 HP ends the match with a VICTORY / DEFEAT screen; a **stance editor** in the Settings menu (set each rival keeper's stance instead of everyone being hard-Aggressive); a new **Unholy Ground** terrain tile (Holy Ground's dark twin, mechanically identical for now); the **Maze Rattler** got its own stat block — a fast, fragile skirmisher — instead of a Gremlin copy; and the ~1500 lines of byte-identical path/move code across the six creature agents were pulled into one shared **`GridMover`**.
+
 ---
 
 ## Phase 1 — Core Loop ✅ Done
@@ -51,22 +53,22 @@ Phase 1's core loop is implemented and playable: **dig → claim → build → i
 - **Imp** — mana-conjured, no Lair/hunger/pay needed, mines for exp; flees all hostiles except enemy Imps; runs the rescue/capture carry jobs. Doesn't leave a body when it loses a fight — it just vanishes and its reserved upkeep mana returns to the Throne Room.
 - **Gremlin** — recruited via Portal pool, has Hunger/Pay/Happiness, trains in Training Room or roams.
 - **Warlock** — recruited via Portal pool, intelligent-creature requirements, researches in Library or falls back to training.
-- **Maze Rattler** — recruited via Portal pool, requires a placed Jail; trains, otherwise haunts a Jail's pit tiles, otherwise roams.
+- **Maze Rattler** — recruited via Portal pool, requires a placed Jail; trains, otherwise haunts a Jail's pit tiles, otherwise roams. Its own stat block now — a fast, fragile skirmisher (60 HP, quick feet, fast attacks) — not the Gremlin copy it used to be.
 - **Bean Counter** — recruited via Portal pool, requires a placed Conversion Class; lectures there, tormenting a random held prisoner into joining the domain or breaking down into an Elf, otherwise trains/roams.
 - **Elf** — never recruited; only ever created as Conversion Class's torment-failure outcome — "weak and worthless," gimped stats, Hunger/roam only.
 
-All six now carry a composed **`Combatant`** (below), and all six now scale with level: Strength grows ~10%/level, Attackspeed ~7.5%/level, Movespeed ~5%/level, and Armor reaches +1 by level 10 — each off that creature's own base stats. Previously only the Imp had growth beyond MaxHP/HPRegen.
+All six carry a composed **`Combatant`** (below) and a composed **`GridMover`** (the shared A*-route walker, extracted from the ~1500 lines of identical copies the agents used to each hold). Every creature has its **own per-level growth block** — no longer one shared ratio: the Warlock is slower in melee, the Bean Counter and Elf slower still, the Maze Rattler trades HP growth for the fastest speed scaling. Armor still reaches +1 by level 10 for everyone. All numbers unbalanced placeholders.
 
-**Combat (first pass — see the v0.0007 note above)** — Directional per-keeper stances (`StanceRegistry`: Aggressive default / Neutral / Friendly). Aggro scan (5-tile stat + line-of-sight grid trace), nearest single target, melee on `1/Attackspeed`, `Armor` flat reduction, `Lifesteal`, combat exp, assist/alarm on being hit, break-off for HP≤20% (flee to Throne) / hunger / mood / grabbed / leash-from-engagement-spot. **Downed bodies**: 0 HP = faint (agent disabled, not destroyed); 10%-MaxHP finish buffer; 60s come-to; permadeath only on a deliberate finish (off-by-default Setting) or a Lava/Chasm drop — *except an Imp, which just dies and refunds its mana.* A creature hauled into a Jail (by an Imp or the Grab hand) stays parked in the pit as its own capsule, stands upright as a live prisoner, and slowly patches itself up. **The Throne Room is attackable** (`IAttackTarget`): 1000 HP, +10/sec regen, hidden-at-full health ring, rallies nearby defenders when hit; no lose-condition on 0 HP yet. All hits keeper-tagged in `Logs/gameplay-debug.log`. **Not networked yet** — combat resolves host-side only.
+**Combat (first pass — see the v0.0007 note above)** — Directional per-keeper stances (`StanceRegistry`: Aggressive default / Neutral / Friendly). Aggro scan (5-tile stat + line-of-sight grid trace), nearest single target, melee on `1/Attackspeed`, `Armor` flat reduction, `Lifesteal`, combat exp, assist/alarm on being hit, break-off for HP≤20% (flee to Throne) / hunger / mood / grabbed / leash-from-engagement-spot. **Downed bodies**: 0 HP = faint (agent disabled, not destroyed); 10%-MaxHP finish buffer; 60s come-to; permadeath only on a deliberate finish (off-by-default Setting) or a Lava/Chasm drop — *except an Imp, which just dies and refunds its mana.* A creature hauled into a Jail (by an Imp or the Grab hand) stays parked in the pit as its own capsule, stands upright as a live prisoner, and slowly patches itself up. **The Throne Room is attackable** (`IAttackTarget`): 1000 HP, +10/sec regen, hidden-at-full health ring, rallies nearby defenders when hit. **Reaching 0 HP is that keeper's defeat** — a VICTORY / DEFEAT screen with a Main Menu button; on a networked host the result is pushed to the client too. Stances are editable in the **Settings menu** now (one row per rival keeper) instead of everyone being hard-Aggressive. All hits keeper-tagged in `Logs/gameplay-debug.log`. **Combat itself isn't networked yet** — it resolves host-side only.
 
 **Rooms** — Lair, Treasury, Slime Hatchery, Tavern, Training Room, Library, Jail, Conversion Class, and Bridge. All sellable through one generic Sell tool; most merge cleanly when extended (Bridge is the exception — each tile is its own room, never merged).
 - **Jail** — a sunken pit ringed by a walkway, fence, and staircase/gate. Prisoners arrive three ways now: the Grab hand dropping a *live* creature on a pit tile (inert-blob prisoner), or an Imp / the Grab hand hauling a *knocked-out* creature in (the creature's own capsule stays in the pit). Held prisoners regen HP.
 - **Conversion Class** — a Bean Counter lectures a random held prisoner; rolls a per-creature-kind chance to rejoin the domain or transform into an Elf. The one room still on primitive-cube art (may be reworked before it gets real meshes).
 - **Tavern** — converts hauled-in slimes into bacon that non-Imp creatures eat to satisfy hunger. Real furniture/floor art as of v0.0005.
 
-**Terrain** — Water, Lava, Chasm, and Holy Ground beyond Rock/Floor, plus a permanently-unminable Bedrock wall. Walkability is creature-type-aware (Imps can't cross unbridged Water; nobody crosses Lava until it's bridged). **Bridge** lets creatures cross — in-game a straight-line paint gesture that claims territory as it goes (Lava bridges decay after 5 min); in the Level Designer, a free per-tile paint tool. In gameplay, a dev-only Build-menu tool (`[Dev] Terrain`) repaints any non-room tile freely into any of these — Water/Lava/Chasm/Holy Ground, or back to plain Floor/Rock — standing in for a real map generator.
+**Terrain** — Water, Lava, Chasm, Holy Ground, and **Unholy Ground** (Holy Ground's dark twin — near-black tile, red star; mechanically identical for now, a placeholder for a real evil-ground mechanic) beyond Rock/Floor, plus a permanently-unminable Bedrock wall. Walkability is creature-type-aware (Imps can't cross unbridged Water; nobody crosses Lava until it's bridged). **Bridge** lets creatures cross — in-game a straight-line paint gesture that claims territory as it goes (Lava bridges decay after 5 min); in the Level Designer, a free per-tile paint tool. In gameplay, a dev-only Build-menu tool (`[Dev] Terrain`) repaints any non-room tile freely into any of these — or back to plain Floor/Rock — standing in for a real map generator.
 
-**UI/Debug** — Permanent bottom menu bar (Build/Impling/Creatures/Tasks/Settings), F1/F2 debug panels, `Logs/gameplay-debug.log` (now keeper-tagged, and logs every combat hit). A **Main Menu** (logo + Start/Level Designer) gates entry. Settings menu carries the "Half wall" view toggle and a default-off **"Finish off enemies"** combat toggle; the top status bar shows Gold / Mana / Bacon / **Throne HP**.
+**UI/Debug** — Permanent bottom menu bar (Build/Impling/Creatures/Tasks/Settings), F1/F2 debug panels, `Logs/gameplay-debug.log` (now keeper-tagged, and logs every combat hit). A **Main Menu** (logo + Start/Level Designer) gates entry, and a match-over **EndScreen** exits back to it. Settings menu carries the "Half wall" view toggle, a default-off **"Finish off enemies"** combat toggle, and the **stance editor**; the top status bar shows Gold / Mana / Bacon / **Throne HP**, and the build version is in the top-right corner.
 
 **Art & Visuals** — Real modular art from a purpose-bought "dungeon_pack" set across most of the dungeon: a real mesh per wall type (owner-tinted reinforced orbs), real Claimed/Unclaimed floor textures, real Throne Room / Portal props, animated Water & Lava, and real furniture/floor art for **every room except Conversion Class** (Lair / Training Room / Library / Tavern in v0.0005; Treasury / Slime Hatchery / Jail / Bridge in v0.0006). Creatures are still placeholder capsules; a knocked-out one tips onto its side (a jailed prisoner stands back up), and the Throne Room now carries a scaled-up health ring. The build version number is shown in the top-right corner in-game.
 
@@ -77,12 +79,12 @@ All six now carry a composed **`Combatant`** (below), and all six now scale with
 - **Combat had its first playtest (2026-09-03) — the core loop works, the numbers don't yet.** Both keepers engage across any claimed floor and the fight/faint/haul chain runs; but time-to-kill, the 5-tile aggro radius, the 10%-MaxHP faint buffer, the 7-tile leash, the Throne's 1000 HP / 10-per-sec regen, and every per-creature stat block are still placeholders that need a real balance pass.
 - **Jailing needs polish** — flagged rough in the v0.0007 playtest. The 2026-09-08 pass fixed the parked prisoner lying on its side; still open: confirm a held prisoner actually gets *converted* by a Bean Counter / Conversion Class (that pipeline wasn't touched), and the capture flow generally.
 - **No opponent AI.** Non-local keepers' creatures act autonomously (claim a Lair, eat, train, roam) but nothing *directs* them — combat currently only happens by dropping creatures into contact, or default-Aggressive creatures wandering into aggro range of each other or an enemy Throne.
-- **Netcode is partway in.** Online host/join over Relay, a lobby, and a set of client action-RPCs work (v0.0008); the client renders a replicated world but simulates nothing. **Combat, faint/capture, and the rest of the sim still run host-only** — networking those (host-authoritative resolution of every HP/damage/RNG/transition) is the next milestone and hasn't started. The `GridMover` extraction (its first prerequisite) is still pending.
-- **No lose-condition** — the Throne clamps at 0 HP and regenerates back; nothing happens when it's emptied.
+- **Netcode is partway in.** Online host/join over Relay, a lobby, and a set of client action-RPCs work (v0.0008); the client renders a replicated world but simulates nothing. **Combat, faint/capture, and the rest of the sim still run host-only** — networking those (host-authoritative resolution of every HP/damage/RNG/transition) is the next milestone and hasn't started.
+- **Lose-condition is minimal.** A Throne at 0 HP ends the match with a VICTORY / DEFEAT screen — but there's no AI or networked combat to actually threaten a Throne yet, so it only fires from debug-switcher play or creatures wandering into an enemy Throne.
+- **`GridMover` extraction — mostly done.** The 5 Monster agents + the Imp share one now; `Combatant` still holds its own copy (different waypoint shape) and is the remaining piece before the netcode simulation-tick work.
 - **Structure owner retint** — reassigning a Throne Room / Portal owner in the Level Designer's Edit mode updates the saved data but doesn't retint the throne visual live.
 - **Room durability** — every room tile tracks 50 HP and Unhappy/Angry creatures chip it down, with a repair job now, but no HP UI.
 - **Mana economy** — crystals raise Max Mana 1-for-1, a placeholder ratio.
-- **The `GridMover` extraction is deferred** — `Combatant` carries its own copy of the path/move helpers; the five Monster agents still duplicate theirs. (Flagged as the first prerequisite for the netcode track.)
 
 ## Not Started
 
@@ -106,35 +108,34 @@ All six now carry a composed **`Combatant`** (below), and all six now scale with
 | Downed recovery | 60s come-to / 25%-MaxHP/min in a Lair / 5%/min + 10% on entry in a Jail | `DownedBody.cs` |
 | Combat leash | 7 tiles from where the fight started | `Combatant.cs` |
 | Combat exp | +1 per damage dealt, +0.5 per damage taken | `Combatant.cs` |
-| Throne HP / regen | 1000 HP, +10/sec, no lose-condition | `ThroneRoom.cs` |
-| Per-level stat growth | Every creature uses the same ratio off its own base stats (+10% Strength, +7.5% Attackspeed, +5% Movespeed per level, +1 Armor by level 10) — not individually tuned | per-agent `_growthPerLevel` |
+| Throne HP / regen | 1000 HP, +10/sec; 0 HP = that keeper's defeat | `ThroneRoom.cs` |
+| Per-level stat growth | Per-creature blocks, hand-differentiated but untuned (Armor still a shared +1-by-10) | per-agent `_growthPerLevel` |
 | Mana Crystal → Max Mana | 1:1 | `ThroneRoom.MaxManaPerCrystal` |
 | Bacon per meal | 1 (fully restores hunger) | `Hunger.cs` |
 | Wage | 5 gold/level, every 10 min | `Pay.cs` |
 | Happiness decay/recovery | ±20-30 per 10 min, -15/missed payday | `Happiness.cs` |
 | Room cost | 20 gold/tile (Training Room, Library, Jail, Conversion Class) | per-room managers |
 | Bridge cost / Lava decay | 15 gold/tile, instant / 5 min, no refund | `BridgeManager` |
-| Maze Rattler stats | Reuses Gremlin's stat block verbatim | `MazeRattlerAgent.cs` |
+| Maze Rattler stats | Own block now (fast/fragile skirmisher, 60 HP) — untuned | `MazeRattlerAgent.cs` |
 | Slime → Bacon | 1 slime = 4 bacon | `TavernManager` |
 | Exp per Mine hit / train tick | 5 / Training +20, Library +5 (every 2s) | impling + room managers |
 | Conversion Class join chance | Gremlin 80%, Warlock 30%, Maze Rattler 55%, other Evil 50% | `ConversionClassManager.cs` |
 
 ## Next Steps (TODO)
 
-- [ ] **Editor/MP re-verify the 2026-09-08 bug pass** — jailed-prisoner upright, Imp-death mana refund, reorderable rescue/capture, Jail pre-dug placement, contested border claiming, client creature inspect, dev terrain repaint
-- [ ] **Balance combat** — TTK, aggro radius, faint-HP, leash, Throne HP/regen (one playtest done, core loop verified; numbers untuned)
+- [ ] **Editor/MP re-verify the 2026-09-08 changes** — the bug pass (jailed-prisoner upright, Imp-death mana refund, reorderable rescue/capture, Jail pre-dug placement, contested border claiming, client creature inspect, dev terrain repaint) *and* the feature batch (lose-condition screen, stance editor, Unholy Ground, Maze Rattler stats, `GridMover` — creature movement especially)
+- [ ] **Balance combat** — TTK, aggro radius, faint-HP, leash, Throne HP/regen, and every per-creature stat + growth block (all hand-set placeholders)
 - [ ] **Polish jailing** — verify held prisoners actually convert (Bean Counter → Conversion Class pipeline), plus the capture flow generally
-- [ ] Wire a **lose-condition** to the Throne hitting 0 HP
-- [ ] An **AI opponent** so a rival keeper's creatures actually do something
+- [ ] An **AI opponent** so a rival keeper's creatures actually do something (and can threaten a Throne for real)
 - [ ] **Player attack-commands** (send creatures somewhere, defend a point)
-- [ ] **Network the simulation** (M3) — host-authoritative combat/HP/RNG/faint/capture; start with the `GridMover` extraction and a host-gated simulation tick. Also: lift the 2-player cap, and de-hardcode `ClientOwnerId = 1`
-- [ ] A **stance UI** (currently every keeper is hard-Aggressive to every other)
+- [ ] **Network the simulation** (M3) — host-authoritative combat/HP/RNG/faint/capture and a host-gated simulation tick; fold `Combatant`'s path/move into `GridMover` first. Also: lift the 2-player cap, de-hardcode `ClientOwnerId = 1`
+- [ ] Decide what **Unholy Ground** actually *does* (currently a Holy Ground clone)
+- [ ] A proper **stance UI** — the Settings-menu editor is functional but bare; give it a real screen, and a default other than all-Aggressive if that's wanted
 - [ ] PvE: invading hero parties
 - [ ] Extend the Throne's `IAttackTarget` pattern to other structures worth defending
 - [ ] A real "save my current game" flow, distinct from the one-time starting-level snapshot
-- [ ] Give each creature its own tuned stat-growth curve — all six currently reuse the same ratio (see Known Placeholder Values)
 - [ ] Real art for Conversion Class (last room on primitives — possibly after a rework) and for creatures
-- [ ] Real procedural placement for Water/Lava/Chasm/Holy Ground/Bedrock
+- [ ] Real procedural placement for Water/Lava/Chasm/Holy Ground/Unholy Ground/Bedrock
 
 ---
 
