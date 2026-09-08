@@ -769,9 +769,9 @@ namespace KeepersDomain.UI
 
         /// Networked-client roster — the real species agents run host-side,
         /// so this is built from the replicated CreatureNetView ghosts
-        /// (see CreatureNetView.All / the accessors added for View-mode
-        /// inspect). Species / level / owner / HP / coord only; name, task,
-        /// hunger, pay and happiness aren't replicated.
+        /// (see CreatureNetView.All). Species, level, owner, HP, coord and a
+        /// coarse activity bucket replicate; name / precise task / hunger /
+        /// pay / happiness don't.
         private void DrawNetworkedCreatureRoster()
         {
             var views = KeepersDomain.Net.CreatureNetView.All;
@@ -816,8 +816,7 @@ namespace KeepersDomain.UI
                 }
 
                 var coord = _grid.WorldToGrid(view.Position);
-                var downed = view.IsDowned ? "  (down)" : "";
-                GUILayout.Label($"{view.SpeciesKind}  Lv{view.Level}  P{view.OwnerId + 1}  {view.Hp:0}/{view.MaxHp:0}hp  ({coord.x},{coord.y}){downed}");
+                GUILayout.Label($"{view.SpeciesKind}  Lv{view.Level}  P{view.OwnerId + 1}  {view.Activity}  ({coord.x},{coord.y})  {view.Hp:0}/{view.MaxHp:0}hp");
             }
         }
 
@@ -841,7 +840,10 @@ namespace KeepersDomain.UI
             DrawNetJobList("Build", _netBuildJobs, _actions.CancelBuild);
 
             GUILayout.Space(6f);
-            GUILayout.Label("Claim and repair jobs run host-side and aren't listed here.");
+            var s = KeeperNetState.ForOwner(NetOwnerId);
+            GUILayout.Label(s != null
+                ? $"Claim jobs — {s.ClaimJobs.Value}   Repair jobs — {s.RepairJobs.Value}   (host-side, not cancelable)"
+                : "Claim / repair job counts unavailable.");
 
             GUILayout.EndScrollView();
         }

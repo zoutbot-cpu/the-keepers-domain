@@ -107,6 +107,7 @@ namespace KeepersDomain.Monsters
         public Combatant Combat => _combat;
         public bool IsImp => false;
         public string Species => CreatureKind;
+        public string TaskLabel => _task.ToString();
         private readonly Combatant _combat = new Combatant();
 
         // 60 starting HP per the brief. Movespeed/Strength/Attackspeed have

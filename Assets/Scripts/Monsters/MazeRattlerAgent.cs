@@ -104,6 +104,7 @@ namespace KeepersDomain.Monsters
         public Combatant Combat => _combat;
         public bool IsImp => false;
         public string Species => CreatureKind;
+        public string TaskLabel => _task.ToString();
         private readonly Combatant _combat = new Combatant();
 
         // A fast, fragile skirmisher — the ratman starts squishier than a

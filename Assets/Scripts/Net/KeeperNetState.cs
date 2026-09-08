@@ -32,6 +32,12 @@ namespace KeepersDomain.Net
         public readonly NetworkVariable<int> ThroneHp = new NetworkVariable<int>();
         public readonly NetworkVariable<int> ThroneMaxHp = new NetworkVariable<int>();
 
+        // Job counts the client's Tasks panel can't reconstruct from tile
+        // flags (claim/repair jobs aren't stored on tiles) — see
+        // BottomMenuBar.DrawNetworkedTaskList / BuilderJobBoard.ClaimJobCount.
+        public readonly NetworkVariable<int> ClaimJobs = new NetworkVariable<int>();
+        public readonly NetworkVariable<int> RepairJobs = new NetworkVariable<int>();
+
         // Tile coords of this keeper's two landmark rooms, packed
         // (throneX, throneY, portalX, portalY) — all -1 until HostBind runs.
         // Vector4 so it rides one built-in NGO serializer; the client
@@ -98,6 +104,8 @@ namespace KeepersDomain.Net
             Set(Bacon, _ctx.Tavern != null ? _ctx.Tavern.TotalBacon : 0);
             Set(ThroneHp, _ctx.Throne != null ? _ctx.Throne.Hp : 0);
             Set(ThroneMaxHp, _ctx.Throne != null ? _ctx.Throne.MaxHp : 0);
+            Set(ClaimJobs, _ctx.JobBoard != null ? _ctx.JobBoard.ClaimJobCount : 0);
+            Set(RepairJobs, _ctx.JobBoard != null ? _ctx.JobBoard.RepairJobCount : 0);
         }
 
         private static void Set(NetworkVariable<int> v, int value)

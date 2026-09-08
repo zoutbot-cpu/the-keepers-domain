@@ -26,5 +26,11 @@ namespace KeepersDomain.Creatures
         /// other, and only ever pick a fight with an enemy Imp (see
         /// design-doc.md's Combat section).
         bool IsImp { get; }
+
+        /// A short human-readable "what is it doing right now" string — the
+        /// agent's own task/state enum name (e.g. "Digging", "Training").
+        /// Mirrored into CreatureNetView so a networked client's roster can
+        /// show it (the real agent runs host-side).
+        string TaskLabel { get; }
     }
 }

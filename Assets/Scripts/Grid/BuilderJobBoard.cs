@@ -1080,6 +1080,13 @@ namespace KeepersDomain.Grid
             Log($"Claim job completed: {Coord(coord)}");
         }
 
+        /// Live counts — allocation-free, for the per-frame KeeperNetState
+        /// mirror (the networked client's Tasks panel shows these numbers;
+        /// claim/repair coords aren't tile-flagged so it can't reconstruct
+        /// the lists itself, see BottomMenuBar.DrawNetworkedTaskList).
+        public int ClaimJobCount => _claimJobs.Count;
+        public int RepairJobCount => _repairJobs.Count;
+
         /// Snapshot of every tracked claim job (open or already assigned),
         /// sorted by coordinate — for debug/inspection UI only.
         public List<Vector2Int> GetClaimJobs()

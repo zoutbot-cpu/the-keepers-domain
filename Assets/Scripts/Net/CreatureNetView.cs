@@ -34,6 +34,7 @@ namespace KeepersDomain.Net
         public float MaxHp => _maxHp.Value;
         public int Level => _level.Value;
         public bool IsDowned => _downed.Value;
+        public CreatureActivity Activity => (CreatureActivity)_activity.Value;
         public Vector3 Position => transform.position;
 
         private readonly NetworkVariable<EditorCreatureKind> _species = new NetworkVariable<EditorCreatureKind>();
@@ -43,10 +44,16 @@ namespace KeepersDomain.Net
         private readonly NetworkVariable<int> _level = new NetworkVariable<int>(1);
         private readonly NetworkVariable<bool> _downed = new NetworkVariable<bool>();
 
+        // A coarse activity bucket rather than the raw per-species task
+        // string — a byte netvar, since NetworkVariable<FixedString> has a
+        // history of tripping NGO's behaviour-sync buffer here (see NetLobby).
+        private readonly NetworkVariable<byte> _activity = new NetworkVariable<byte>();
+
         // Host only.
         private Creature _creature;
         private EditorCreatureKind _speciesKind;
         private DownedBody _downedProbe;
+        private ICombatant _statusProbe;
 
         // Client only.
         private bool _clientReady;
@@ -128,6 +135,17 @@ namespace KeepersDomain.Net
 
             var downed = _downedProbe != null;
             if (_downed.Value != downed) _downed.Value = downed;
+
+            if (_statusProbe == null)
+            {
+                _statusProbe = GetComponent<ICombatant>();
+            }
+
+            if (_statusProbe != null)
+            {
+                var activity = (byte)CreatureActivityMap.From(_statusProbe, downed);
+                if (_activity.Value != activity) _activity.Value = activity;
+            }
         }
 
         private void ClientInit()

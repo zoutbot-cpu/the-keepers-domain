@@ -82,6 +82,7 @@ namespace KeepersDomain.Implings
         public Combatant Combat => _combat;
         public bool IsImp => true;
         public string Species => "Imp";
+        public string TaskLabel => _state.ToString();
         private readonly Combatant _combat = new Combatant();
 
         // The knocked-out creature this Imp is walking to / hauling, and
