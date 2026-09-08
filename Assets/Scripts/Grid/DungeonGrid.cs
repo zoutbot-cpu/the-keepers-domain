@@ -1383,6 +1383,30 @@ namespace KeepersDomain.Grid
             }
         }
 
+        /// Flips an *already*-Claimed Floor tile to a new owner — the
+        /// contested-border case ClaimTile deliberately refuses. Used when
+        /// an Imp finishes a claim job on a rival keeper's frontier floor
+        /// (see BuilderJobBoard.ApplyClaim / ScanForEnemyClaimCandidates):
+        /// territory can now grow into a rival's, one border tile at a
+        /// time, and the rival's board can flip it straight back. Never
+        /// touches a room tile (a room manager owns that tile's
+        /// bookkeeping) or a no-op same-owner call.
+        public void ReclaimTile(Vector2Int coord, int ownerId)
+        {
+            if (!InBounds(coord))
+            {
+                return;
+            }
+
+            ref var tile = ref _tiles[coord.x, coord.y];
+            if (tile.Type == TileType.Floor && tile.Ownership == TileOwnership.Claimed
+                && !tile.HasRoom && tile.OwnerId != ownerId)
+            {
+                tile.OwnerId = ownerId;
+                RefreshVisual(coord);
+            }
+        }
+
         public bool TryAssignRoom(Vector2Int coord, string roomId)
         {
             if (!InBounds(coord))
@@ -1540,6 +1564,44 @@ namespace KeepersDomain.Grid
             tile.OwnerId = claimed ? ownerId : -1;
             tile.IsBuildable = true;
             RefreshVisual(coord);
+        }
+
+        /// The in-game "[Dev] Terrain" Build-menu tools (see
+        /// BuildMode.PlaceWater/PlaceLava/PlaceChasm/PlaceHolyGround/
+        /// PlaceFloor/PlaceRock and IKeeperActions.SetTerrain) — repaints
+        /// coord into any floor/terrain/rock type, the same free any-to-any
+        /// conversion the Level Designer's Map Design menu does, so a dev can
+        /// reshape a dug-out dungeon at runtime while the map generator
+        /// doesn't exist yet. Refuses a room tile (a room manager still owns
+        /// that tile's bookkeeping) and a Bedrock tile (the map border — and
+        /// Bedrock is the separate SetBedrock "wall" tool's job). Routes
+        /// through the same unconditional Editor* painters the Level Designer
+        /// uses so decoration/pit-depth teardown doesn't need re-deriving.
+        public void DevPaintTerrain(Vector2Int coord, TileType type)
+        {
+            if (!InBounds(coord))
+            {
+                return;
+            }
+
+            var tile = GetTile(coord);
+            if (tile.HasRoom || tile.IsBedrock)
+            {
+                return;
+            }
+
+            switch (type)
+            {
+                case TileType.Rock:
+                    EditorResetToRock(coord);
+                    break;
+                case TileType.Floor:
+                    EditorPaintFloor(coord, claimed: false, ownerId: -1);
+                    break;
+                default:
+                    EditorPaintTerrain(coord, type);
+                    break;
+            }
         }
 
         /// Reassigns coord's owner without touching anything else about

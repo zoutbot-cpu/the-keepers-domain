@@ -168,6 +168,21 @@ namespace KeepersDomain.UI
 
             DrawInspectionPanel(inspectionRect);
             DrawHoveredCoordLabel(mouseScreenPos);
+            DrawVersionLabel();
+        }
+
+        /// Build version (Player Settings > Version, same string QuickBuild
+        /// stamps onto the zip) pinned to the top-right corner.
+        private void DrawVersionLabel()
+        {
+            var version = string.IsNullOrWhiteSpace(Application.version) ? "dev" : Application.version.Trim();
+            var style = new GUIStyle(GUI.skin.label)
+            {
+                alignment = TextAnchor.UpperRight,
+                fontSize = 11
+            };
+            style.normal.textColor = new Color(1f, 1f, 1f, 0.5f);
+            GUI.Label(new Rect(Screen.width - 210f, 4f, 200f, 18f), $"v{version}", style);
         }
 
         /// Small (x, y) readout following the cursor — troubleshooting aid
@@ -439,12 +454,15 @@ namespace KeepersDomain.UI
             GUILayout.Space(8f);
             // Placeholder terrain painters standing in for the map
             // generator that doesn't exist yet (see DungeonGrid.
-            // SetTerrainFeature) — not a real player-facing tool.
+            // DevPaintTerrain) — not a real player-facing tool. Repaint any
+            // non-room tile freely, including back to plain Floor/Rock.
             GUILayout.Label("[Dev] Terrain");
             DrawBuildModeOption(BuildMode.PlaceWater, "[Dev] Place Water");
             DrawBuildModeOption(BuildMode.PlaceLava, "[Dev] Place Lava");
             DrawBuildModeOption(BuildMode.PlaceChasm, "[Dev] Place Chasm");
             DrawBuildModeOption(BuildMode.PlaceHolyGround, "[Dev] Place Holy Ground");
+            DrawBuildModeOption(BuildMode.PlaceFloor, "[Dev] Place Floor");
+            DrawBuildModeOption(BuildMode.PlaceRock, "[Dev] Place Rock");
             DrawBuildModeOption(BuildMode.PlaceBedrock, "[Dev] Place Bedrock");
 
             GUILayout.Space(8f);
@@ -606,7 +624,7 @@ namespace KeepersDomain.UI
             for (int i = 0; i < _priorityOrder.Count; i++)
             {
                 GUILayout.BeginHorizontal();
-                GUILayout.Label($"{i + 1}. {_priorityOrder[i]}", GUILayout.Width(150f));
+                GUILayout.Label($"{i + 1}. {JobKindLabel(_priorityOrder[i])}", GUILayout.Width(150f));
 
                 GUI.enabled = i > 0;
                 if (GUILayout.Button("Up", GUILayout.Width(40f)))
@@ -625,6 +643,17 @@ namespace KeepersDomain.UI
                 GUI.enabled = true;
                 GUILayout.EndHorizontal();
             }
+        }
+
+        private static string JobKindLabel(JobKind kind)
+        {
+            return kind switch
+            {
+                JobKind.RepairRoom => "Repair Room",
+                JobKind.RescueAlly => "Rescue Allies",
+                JobKind.CaptureEnemy => "Capture Enemies",
+                _ => kind.ToString()
+            };
         }
 
         private void DrawCreaturesMenu()

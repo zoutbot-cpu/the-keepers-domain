@@ -86,7 +86,7 @@ namespace KeepersDomain.Implings
 
         // The knocked-out creature this Imp is walking to / hauling, and
         // where it's taking it (a Lair tile to recover, or a Jail pit to
-        // capture). See TryStartDownedBodyJob.
+        // capture). See TryStartRescueJob / TryStartCaptureJob.
         private DownedBody _bodyTarget;
         private bool _bodyToJail;
         private Vector2Int _bodyDeliverCoord;
@@ -376,13 +376,6 @@ namespace KeepersDomain.Implings
 
         private void TrySeekJob()
         {
-            // Rescue Ally / Capture Enemy come ahead of every board job —
-            // see design-doc.md's Combat section.
-            if (TryStartDownedBodyJob())
-            {
-                return;
-            }
-
             // A full inventory takes priority over picking up a new job —
             // there'd be nowhere to put anything more mined anyway.
             if (_inventory.IsFull && TryFindDepositTarget(out var fullCoord, out var fullKind))
@@ -391,8 +384,21 @@ namespace KeepersDomain.Implings
                 return;
             }
 
-            if (_jobBoard.TryClaimNearestJob(this, out var coord, out var slotIndex, out var approachCoord, out var kind))
+            // Rescue Ally / Capture Enemy are ranked in the job board's
+            // priority order alongside the tile jobs (see BottomMenuBar's
+            // Impling menu) but handled here — a downed body is a moving
+            // entity, not a coord the board can key. The delegates below run
+            // at their kind's spot in that order; on success they've already
+            // put this Imp into MovingToDownedBody, so there's no tile-job
+            // travel to set up.
+            if (_jobBoard.TryClaimNearestJob(this, out var coord, out var slotIndex, out var approachCoord, out var kind,
+                    TryStartRescueJob, TryStartCaptureJob))
             {
+                if (kind is JobKind.RescueAlly or JobKind.CaptureEnemy)
+                {
+                    return;
+                }
+
                 var standWorldPos = GetStandWorldPos(approachCoord, coord, slotIndex);
                 if (PlanPathTo(approachCoord, standWorldPos))
                 {
@@ -441,14 +447,14 @@ namespace KeepersDomain.Implings
             // will retry on its own once the world reconnects.
         }
 
-        /// Rescue Ally (own knocked-out creature -> carry to a Lair tile to
-        /// recover) or Capture Enemy (hostile knocked-out creature -> carry
-        /// to a Jail pit; only if this keeper has a Jail with a free pit) —
-        /// see design-doc.md's Combat section. Rescue outranks capture.
-        /// Both are handled Imp-side rather than as BuilderJobBoard job
-        /// kinds because a downed body is a moving entity, not a fixed tile
-        /// the coord-keyed board could track.
-        private bool TryStartDownedBodyJob()
+        /// Rescue Ally — own knocked-out creature -> carry to a Lair tile to
+        /// recover. Handed to BuilderJobBoard.TryClaimNearestJob as the
+        /// tryRescue delegate so it fires at JobKind.RescueAlly's spot in
+        /// the player's priority order; handled here rather than as a real
+        /// board job because a downed body is a moving entity, not a fixed
+        /// tile the coord-keyed board could track. Returns true (and puts
+        /// this Imp into MovingToDownedBody) once it has claimed a body.
+        private bool TryStartRescueJob()
         {
             if (DownedBody.All.Count == 0)
             {
@@ -456,7 +462,7 @@ namespace KeepersDomain.Implings
             }
 
             var ctx = KeepersDomain.Core.KeeperContext.ForOwner(_creature.OwnerId);
-            if (ctx == null)
+            if (ctx?.Lair == null)
             {
                 return false;
             }
@@ -464,8 +470,7 @@ namespace KeepersDomain.Implings
             var from = _grid.WorldToGrid(transform.position);
             var reachable = _grid.GetReachableFloorDistances(from, isImp: true);
 
-            if (ctx.Lair != null
-                && TryPickNearestBody(reachable, wantAlly: true, out var ally)
+            if (TryPickNearestBody(reachable, wantAlly: true, out var ally)
                 && ctx.Lair.TryFindNearestLairTile(from, out var lairCoord)
                 && PlanPathTo(_grid.WorldToGrid(ally.transform.position), ally.transform.position))
             {
@@ -476,8 +481,29 @@ namespace KeepersDomain.Implings
                 return true;
             }
 
-            if (ctx.Jail != null && ctx.Jail.HasFreePitTile()
-                && TryPickNearestBody(reachable, wantAlly: false, out var enemy)
+            return false;
+        }
+
+        /// Capture Enemy — hostile knocked-out creature -> carry to a free
+        /// Jail pit. The tryCapture counterpart to TryStartRescueJob; only
+        /// viable if this keeper has a Jail with an open pit.
+        private bool TryStartCaptureJob()
+        {
+            if (DownedBody.All.Count == 0)
+            {
+                return false;
+            }
+
+            var ctx = KeepersDomain.Core.KeeperContext.ForOwner(_creature.OwnerId);
+            if (ctx?.Jail == null || !ctx.Jail.HasFreePitTile())
+            {
+                return false;
+            }
+
+            var from = _grid.WorldToGrid(transform.position);
+            var reachable = _grid.GetReachableFloorDistances(from, isImp: true);
+
+            if (TryPickNearestBody(reachable, wantAlly: false, out var enemy)
                 && ctx.Jail.TryFindNearestFreePitTile(from, out var pitCoord)
                 && PlanPathTo(_grid.WorldToGrid(enemy.transform.position), enemy.transform.position))
             {

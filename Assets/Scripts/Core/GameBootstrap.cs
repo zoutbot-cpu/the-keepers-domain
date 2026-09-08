@@ -330,12 +330,6 @@ namespace KeepersDomain.Core
         ///   edited. It has no Rooms-menu button (a bridge is a line, not a
         ///   rectangle) — it's here only so a saved bridge tile still
         ///   reconstructs (see BridgeManager.RestoreRoom).
-        /// - JailManager gets a null BuilderJobBoard (the Level Designer
-        ///   has no dig-job queue, and BuilderJobBoard.Update auto-queues
-        ///   real reinforce jobs across the whole grid, which the Level
-        ///   Designer must never do in the background) — safe because its
-        ///   only use is guarded (see JailManager.Initialize's own
-        ///   comment).
         /// - ConversionClassManager gets null JailManager-linked prisoner
         ///   release and null creature spawners — already all null-safe
         ///   internally, and none of that behavior is reachable without a
@@ -363,7 +357,7 @@ namespace KeepersDomain.Core
             libraryManager.Initialize(grid, lairManager, treasuryManager, ownerId);
 
             var jailManager = CreateComponent<JailManager>("JailManager");
-            jailManager.Initialize(grid, jobBoard: null, lairManager, treasuryManager, ownerId);
+            jailManager.Initialize(grid, lairManager, treasuryManager, ownerId);
 
             var conversionClassManager = CreateComponent<ConversionClassManager>("ConversionClassManager");
             conversionClassManager.Initialize(grid, lairManager, treasuryManager, jailManager,
@@ -1383,7 +1377,7 @@ namespace KeepersDomain.Core
             ctx.Library.Initialize(grid, ctx.Lair, ctx.Treasury, owner);
 
             ctx.Jail = CreateComponent<JailManager>($"JailManager P{owner + 1}", parent);
-            ctx.Jail.Initialize(grid, ctx.JobBoard, ctx.Lair, ctx.Treasury, owner);
+            ctx.Jail.Initialize(grid, ctx.Lair, ctx.Treasury, owner);
 
             ctx.Bridge = CreateComponent<BridgeManager>($"BridgeManager P{owner + 1}", parent);
             ctx.Bridge.Initialize(grid, ctx.Lair, ctx.Treasury, owner);

@@ -786,6 +786,27 @@ namespace KeepersDomain.Creatures
             _waypoints.Clear();
             _waypointIndex = 0;
 
+            // An Imp is a mana-conjured construct, not a creature that can be
+            // hauled off the field and rescued — it just dies. Destroying the
+            // GameObject runs ImplingAgent.OnDestroy, which hands the Imp's
+            // reserved upkeep mana back to the Throne Room, drops any body it
+            // was carrying, and pulls it off the job board. Every other
+            // creature drops a rescuable DownedBody instead.
+            if (_isImp)
+            {
+                GameplayLog.Write(_owner, killer != null
+                    ? $"{SelfName} was destroyed by {killer.Name}"
+                    : $"{SelfName} was destroyed");
+                if (_agent != null)
+                {
+                    _agent.enabled = false;
+                }
+
+                UnityEngine.Object.Destroy(_go);
+                _wasActive = false;
+                return;
+            }
+
             var body = _go.AddComponent<DownedBody>();
             body.Configure(this, _agent, _grid, _creature, _throneCoord, _getLairCoord, _isImp);
 

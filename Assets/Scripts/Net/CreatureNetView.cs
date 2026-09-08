@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Unity.Netcode;
 using UnityEngine;
 using KeepersDomain.Creatures;
@@ -18,6 +19,22 @@ namespace KeepersDomain.Net
         /// networked path only then; offline and on the client, false.
         public static bool HostActive =>
             NetworkManager.Singleton != null && NetworkManager.Singleton.IsServer;
+
+        /// Every spawned CreatureNetView — the client's only handle on the
+        /// live creatures (the real species agents run host-side), used by
+        /// TileInteractionController.Inspect so View mode can read a ghost.
+        /// Populated on both host and client; on the host the real agents
+        /// still match first, so this list is only ever consulted on the
+        /// client where those agent rosters are empty.
+        public static readonly List<CreatureNetView> All = new List<CreatureNetView>();
+
+        public EditorCreatureKind SpeciesKind => _species.Value;
+        public int OwnerId => _owner.Value;
+        public float Hp => _hp.Value;
+        public float MaxHp => _maxHp.Value;
+        public int Level => _level.Value;
+        public bool IsDowned => _downed.Value;
+        public Vector3 Position => transform.position;
 
         private readonly NetworkVariable<EditorCreatureKind> _species = new NetworkVariable<EditorCreatureKind>();
         private readonly NetworkVariable<int> _owner = new NetworkVariable<int>();
@@ -63,6 +80,20 @@ namespace KeepersDomain.Net
             view._creature = creature;
             view._speciesKind = kind;
             go.GetComponent<NetworkObject>().Spawn();
+        }
+
+        public override void OnNetworkSpawn()
+        {
+            if (!All.Contains(this))
+            {
+                All.Add(this);
+            }
+        }
+
+        public override void OnDestroy()
+        {
+            All.Remove(this);
+            base.OnDestroy();
         }
 
         private void Update()

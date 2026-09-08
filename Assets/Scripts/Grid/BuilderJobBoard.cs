@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using KeepersDomain.DebugUI;
@@ -22,7 +23,19 @@ namespace KeepersDomain.Grid
         Claim,
         Reinforce,
         Build,
-        RepairRoom
+        RepairRoom,
+
+        /// Carry a knocked-out ally creature back to a Lair to recover.
+        /// Handled Imp-side (a downed body is a moving entity, not a fixed
+        /// tile this board can key by coord) but ranked here so the player
+        /// can reorder it against the tile jobs — see
+        /// ImplingAgent.TryStartRescueJob and TryClaimNearestJob's
+        /// tryRescue/tryCapture delegates.
+        RescueAlly,
+
+        /// Carry a knocked-out hostile creature to a Jail pit. Same Imp-side
+        /// handling as RescueAlly — see ImplingAgent.TryStartCaptureJob.
+        CaptureEnemy
     }
 
     public readonly struct JobInfo
@@ -109,7 +122,11 @@ namespace KeepersDomain.Grid
         // future priority UI has something to call without touching the
         // search logic itself (same placeholder pattern as
         // TileInteractionController.SetSquareModeToggle).
-        private JobKind[] _jobPriorityOrder = { JobKind.Dig, JobKind.RepairRoom, JobKind.Reinforce, JobKind.Build, JobKind.Claim };
+        private JobKind[] _jobPriorityOrder =
+        {
+            JobKind.RescueAlly, JobKind.CaptureEnemy,
+            JobKind.Dig, JobKind.RepairRoom, JobKind.Reinforce, JobKind.Build, JobKind.Claim
+        };
 
         // Gates only the Dig case in TryClaimFromKind — implings already
         // mid-dig keep going, and Reinforce/Build/Claim are unaffected, so
@@ -128,6 +145,15 @@ namespace KeepersDomain.Grid
         private const float AutoReinforceScanInterval = 1f;
         private bool _isAutoReinforceEnabled;
         private float _nextAutoReinforceScanTime;
+
+        // Contested-border expansion: always on. Every interval,
+        // ScanForEnemyClaimCandidates queues a claim job on each enemy-owned
+        // Floor tile that borders this keeper's own Claimed frontier, so
+        // Imps push the border into a rival's territory the same "one ring
+        // at a time" way they claim unclaimed ground. Cheap grid sweep at
+        // prototype scale, same shape as the auto-reinforce scan.
+        private const float EnemyClaimScanInterval = 1f;
+        private float _nextEnemyClaimScanTime;
 
         public void Initialize(DungeonGrid grid, int ownerId = 0)
         {
@@ -177,6 +203,39 @@ namespace KeepersDomain.Grid
             {
                 _nextAutoReinforceScanTime = Time.time + AutoReinforceScanInterval;
                 ScanForAutoReinforceCandidates();
+            }
+
+            if (Time.time >= _nextEnemyClaimScanTime)
+            {
+                _nextEnemyClaimScanTime = Time.time + EnemyClaimScanInterval;
+                ScanForEnemyClaimCandidates();
+            }
+        }
+
+        /// Queues a claim job on every rival-owned Floor tile bordering this
+        /// keeper's Claimed frontier — see the _nextEnemyClaimScanTime field
+        /// comment. TryClaimClaimJob's own BordersClaimedTile / IsStillClaimable
+        /// checks still gate whether and when an Imp actually takes one;
+        /// ApplyClaim flips the owner (DungeonGrid.ReclaimTile).
+        private void ScanForEnemyClaimCandidates()
+        {
+            for (int x = 0; x < _grid.Width; x++)
+            {
+                for (int y = 0; y < _grid.Height; y++)
+                {
+                    var coord = new Vector2Int(x, y);
+                    var tile = _grid.GetTile(coord);
+                    if (tile.Type == TileType.Floor
+                        && tile.Ownership == TileOwnership.Claimed
+                        && tile.OwnerId != _ownerId
+                        && !tile.HasRoom
+                        && !_claimJobs.ContainsKey(coord)
+                        && _grid.BordersClaimedTile(coord, _ownerId))
+                    {
+                        _claimJobs[coord] = false;
+                        Log($"Enemy-frontier claim job queued: {Coord(coord)}");
+                    }
+                }
             }
         }
 
@@ -449,7 +508,15 @@ namespace KeepersDomain.Grid
         /// kind is even considered. See TryClaimDigJob/TryClaimClaimJob/
         /// TryClaimReinforceJob for how each kind actually ranks and assigns
         /// its candidates.
-        public bool TryClaimNearestJob(IJobWorker requester, out Vector2Int coord, out int slotIndex, out Vector2Int approachCoord, out JobKind kind)
+        /// tryRescue / tryCapture are the Imp-side handlers for the
+        /// RescueAlly / CaptureEnemy kinds (a downed body is a moving entity
+        /// this coord-keyed board can't track, so the Imp owns that logic —
+        /// see ImplingAgent.TryStartRescueJob/TryStartCaptureJob). Each is
+        /// invoked at its kind's position in _jobPriorityOrder and, on
+        /// success, has already transitioned the Imp; the board just reports
+        /// which kind won so the caller skips its own tile-job travel setup.
+        public bool TryClaimNearestJob(IJobWorker requester, out Vector2Int coord, out int slotIndex, out Vector2Int approachCoord, out JobKind kind,
+            Func<bool> tryRescue = null, Func<bool> tryCapture = null)
         {
             PromoteReadyPendingJobs();
 
@@ -458,6 +525,21 @@ namespace KeepersDomain.Grid
 
             foreach (var candidateKind in _jobPriorityOrder)
             {
+                if (candidateKind == JobKind.RescueAlly || candidateKind == JobKind.CaptureEnemy)
+                {
+                    var handler = candidateKind == JobKind.RescueAlly ? tryRescue : tryCapture;
+                    if (handler != null && handler())
+                    {
+                        coord = default;
+                        slotIndex = -1;
+                        approachCoord = default;
+                        kind = candidateKind;
+                        return true;
+                    }
+
+                    continue;
+                }
+
                 if (TryClaimFromKind(candidateKind, requester, requesterDistances, otherWorkerDistances, out coord, out slotIndex, out approachCoord))
                 {
                     kind = candidateKind;
@@ -960,21 +1042,40 @@ namespace KeepersDomain.Grid
             return destroyed;
         }
 
-        /// Whether coord is still an unclaimed Floor tile worth claiming —
-        /// mirrors IsStillDiggable's role for dig jobs, though in practice a
-        /// claim job's single worker slot means there's nothing else that
-        /// could have claimed it out from under them.
+        /// Whether coord is still a Floor tile worth a claim job for this
+        /// keeper — either genuinely unclaimed, or a rival's non-room floor
+        /// this keeper can convert (see ScanForEnemyClaimCandidates). Its
+        /// own already-Claimed floor and any room tile are done. Mirrors
+        /// IsStillDiggable's role for dig jobs.
         public bool IsStillClaimable(Vector2Int coord)
         {
-            return _grid.GetTile(coord) is { Type: TileType.Floor, Ownership: TileOwnership.Unclaimed };
+            var tile = _grid.GetTile(coord);
+            if (tile.Type != TileType.Floor || tile.HasRoom)
+            {
+                return false;
+            }
+
+            return tile.Ownership == TileOwnership.Unclaimed
+                || (tile.Ownership == TileOwnership.Claimed && tile.OwnerId != _ownerId);
         }
 
         /// Finalizes a claim job once an impling has spent its claim
-        /// duration standing there — marks the tile Claimed on the grid and
-        /// drops it from tracking, mirroring ApplyHit's role for dig jobs.
+        /// duration standing there — marks the tile this keeper's on the
+        /// grid and drops it from tracking, mirroring ApplyHit's role for
+        /// dig jobs. ReclaimTile for a rival's tile (ClaimTile refuses an
+        /// already-Claimed one), plain ClaimTile for unclaimed ground.
         public void ApplyClaim(Vector2Int coord)
         {
-            _grid.ClaimTile(coord, _ownerId);
+            var tile = _grid.GetTile(coord);
+            if (tile.Ownership == TileOwnership.Claimed && tile.OwnerId != _ownerId)
+            {
+                _grid.ReclaimTile(coord, _ownerId);
+            }
+            else
+            {
+                _grid.ClaimTile(coord, _ownerId);
+            }
+
             _claimJobs.Remove(coord);
             Log($"Claim job completed: {Coord(coord)}");
         }

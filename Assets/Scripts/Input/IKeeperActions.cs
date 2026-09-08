@@ -138,7 +138,7 @@ namespace KeepersDomain.Input
             }
         }
 
-        public void SetTerrain(Vector2Int coord, TileType type) => _grid.SetTerrainFeature(coord, type);
+        public void SetTerrain(Vector2Int coord, TileType type) => _grid.DevPaintTerrain(coord, type);
         public void SetBedrock(Vector2Int coord) => _grid.SetBedrock(coord);
 
         public void SetDigJobsPaused(bool paused) => _ctx.JobBoard?.SetDigJobsPaused(paused);

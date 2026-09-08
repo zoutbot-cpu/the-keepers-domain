@@ -40,13 +40,7 @@ namespace KeepersDomain.Rooms
     /// room (not just the newly added footprint) on every placement for
     /// exactly this reason.
     ///
-    /// Two things set a Jail apart from every other room type:
-    /// - It can be placed directly on undug Rock — CanPlaceFootprint
-    ///   accepts Rock tiles (dug and claimed on the spot, see
-    ///   TryPlaceJailInternal) alongside the usual already-dug
-    ///   DungeonGrid.CanBuildRoomOn tiles every other room requires. Per
-    ///   the brief: "not needed to be dug out, placing the room tiles
-    ///   will do that."
+    /// One thing sets a Jail apart from every other room type:
     /// - Its floor renders one level lower (DungeonGrid.SetPitDepth) than
     ///   ordinary floor. That's a render-time Y offset only —
     ///   DungeonGrid.IsWalkable checks Type/IsBlocked, never Y — so a Jail
@@ -224,7 +218,6 @@ namespace KeepersDomain.Rooms
         private const float RockTopY = 0.5f;
 
         private DungeonGrid _grid;
-        private BuilderJobBoard _jobBoard;
         private TreasuryManager _treasuryManager;
         private int _ownerId;
         private int _nextRoomId;
@@ -317,15 +310,9 @@ namespace KeepersDomain.Rooms
         private readonly Dictionary<Vector2Int, JailedPrisoner> _prisoners = new Dictionary<Vector2Int, JailedPrisoner>();
         private readonly Dictionary<Vector2Int, GameObject> _prisonerVisuals = new Dictionary<Vector2Int, GameObject>();
 
-        /// jobBoard may be null — the Level Designer wires Jail with no
-        /// BuilderJobBoard at all (it has no dig-job queue and shouldn't
-        /// run one just to host this room), so the one place that uses it
-        /// (auto-dig-and-claim on placement, see TryPlaceJailInternal)
-        /// guards with a null-conditional instead of assuming it exists.
-        public void Initialize(DungeonGrid grid, BuilderJobBoard jobBoard, LairManager lairManager, TreasuryManager treasuryManager, int ownerId = 0)
+        public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager, int ownerId = 0)
         {
             _grid = grid;
-            _jobBoard = jobBoard;
             _treasuryManager = treasuryManager;
             _ownerId = ownerId;
             _nextRoomId = ownerId * DungeonGrid.RoomIdOwnerStride;
@@ -364,7 +351,7 @@ namespace KeepersDomain.Rooms
 
         /// Whether any placed Jail has at least one unoccupied pit tile —
         /// checked before an Imp starts a Capture Enemy job (see
-        /// ImplingAgent.TryStartDownedBodyJob / design-doc.md's Combat
+        /// ImplingAgent.TryStartCaptureJob / design-doc.md's Combat
         /// section).
         public bool HasFreePitTile()
         {
@@ -587,9 +574,9 @@ namespace KeepersDomain.Rooms
         public int RoomCount => _roomTiles.Count;
 
         /// Places a Jail spanning the rectangle between startCoord and
-        /// endCoord inclusive. Unlike every other room, footprint tiles
-        /// don't need to already be dug — see CanPlaceFootprint. Fails
-        /// atomically, same as every other room manager's Try* method.
+        /// endCoord inclusive, on pre-dug Claimed Floor — see
+        /// CanPlaceFootprint. Fails atomically, same as every other room
+        /// manager's Try* method.
         public bool TryPlaceJail(Vector2Int startCoord, Vector2Int endCoord)
         {
             return TryPlaceJailInternal(startCoord, endCoord, chargeGold: true);
@@ -654,20 +641,6 @@ namespace KeepersDomain.Rooms
 
             foreach (var coord in footprint)
             {
-                // Dig-and-claim on the spot rather than requiring a
-                // pre-dug Claimed Floor — "not needed to be dug out,
-                // placing the room tiles will do that." ApplyClaim (not
-                // a bare DungeonGrid.ClaimTile) so the claim job
-                // CompleteDig just queued (DungeonGrid.FloorNeedsClaim)
-                // is cleared immediately too, instead of lingering as a
-                // phantom already-satisfied job in BuilderJobBoard's
-                // Tasks list.
-                if (_grid.GetTile(coord).Type == TileType.Rock)
-                {
-                    _grid.CompleteDig(coord, _ownerId);
-                    _jobBoard?.ApplyClaim(coord);
-                }
-
                 _grid.TryAssignRoom(coord, roomId);
             }
 
@@ -895,31 +868,15 @@ namespace KeepersDomain.Rooms
             go.transform.localScale = new Vector3(full.Scale.x, full.Scale.y * HalfWallHeightScale, full.Scale.z);
         }
 
-        /// Whether footprint could become a Jail right now. Unlike every
-        /// other room's CanPlaceFootprint (which funnels entirely through
-        /// DungeonGrid.CanBuildRoomOn), an undug Rock tile passes too — it
-        /// gets dug and claimed as part of placement instead of needing
-        /// to be pre-dug.
+        /// Whether footprint could become a Jail right now — dug, Claimed,
+        /// room-free Floor this keeper owns, same rule every other room
+        /// funnels through DungeonGrid.CanBuildRoomOn. (A Jail used to
+        /// auto-dig undug Rock on placement; that quietly destroyed
+        /// dungeon walls, so it now needs pre-dug floor like the rest.)
         private bool CanPlaceFootprint(List<Vector2Int> footprint)
         {
             foreach (var coord in footprint)
             {
-                if (!_grid.InBounds(coord))
-                {
-                    return false;
-                }
-
-                var tile = _grid.GetTile(coord);
-                if (tile.HasRoom)
-                {
-                    return false;
-                }
-
-                if (tile.Type == TileType.Rock)
-                {
-                    continue;
-                }
-
                 if (!_grid.CanBuildRoomOn(coord, _ownerId))
                 {
                     return false;

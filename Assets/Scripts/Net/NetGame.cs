@@ -861,7 +861,7 @@ namespace KeepersDomain.Net
         [Rpc(SendTo.Server)]
         public void RequestSetTerrainRpc(NetCoord coord, byte tileType)
         {
-            if (_grid != null) _grid.SetTerrainFeature(coord.ToVector2Int(), (TileType)tileType);
+            if (_grid != null) _grid.DevPaintTerrain(coord.ToVector2Int(), (TileType)tileType);
         }
 
         [Rpc(SendTo.Server)]

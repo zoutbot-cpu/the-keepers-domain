@@ -6,6 +6,7 @@ using KeepersDomain.Rooms;
 using KeepersDomain.Implings;
 using KeepersDomain.Monsters;
 using KeepersDomain.Creatures;
+using KeepersDomain.Net;
 using KeepersDomain.UI;
 
 namespace KeepersDomain.Input
@@ -62,13 +63,16 @@ namespace KeepersDomain.Input
         /// BridgeManager) — instant and gold-charged per tile, unlike
         /// Mine/Reinforce/Construct's queue-a-job shape.
         Bridge,
-        /// Dev-only terrain placement (see DungeonGrid.SetTerrainFeature) —
-        /// paints a Rock tile directly into Water/Lava/Chasm/HolyGround,
-        /// standing in for the map generator that doesn't exist yet.
+        /// Dev-only terrain placement (see DungeonGrid.DevPaintTerrain) —
+        /// repaints any non-room tile into Water/Lava/Chasm/HolyGround or
+        /// back to plain Floor/Rock, standing in for the map generator that
+        /// doesn't exist yet.
         PlaceWater,
         PlaceLava,
         PlaceChasm,
         PlaceHolyGround,
+        PlaceFloor,
+        PlaceRock,
         /// Dev-only wall placement (see DungeonGrid.SetBedrock) — marks a
         /// Rock tile permanently unminable.
         PlaceBedrock
@@ -571,7 +575,8 @@ namespace KeepersDomain.Input
                 return;
             }
 
-            if (_buildMode is BuildMode.PlaceWater or BuildMode.PlaceLava or BuildMode.PlaceChasm or BuildMode.PlaceHolyGround or BuildMode.PlaceBedrock)
+            if (_buildMode is BuildMode.PlaceWater or BuildMode.PlaceLava or BuildMode.PlaceChasm or BuildMode.PlaceHolyGround
+                or BuildMode.PlaceFloor or BuildMode.PlaceRock or BuildMode.PlaceBedrock)
             {
                 _gestureMode = GestureMode.PlaceTerrain;
                 ApplyGestureAction(coord);
@@ -954,6 +959,23 @@ namespace KeepersDomain.Input
                 }
             }
 
+            // Networked client: the real species agents run host-side, so
+            // the rosters above are all empty here — fall back to the
+            // replicated CreatureNetView ghost (empty list offline / on the
+            // host, where an agent already matched).
+            foreach (var view in CreatureNetView.All)
+            {
+                if (view != null && _grid.WorldToGrid(view.Position) == coord)
+                {
+                    _inspectedDescription =
+                        $"{view.SpeciesKind} (Player {view.OwnerId + 1}) — ({coord.x},{coord.y})\n"
+                        + $"Level {view.Level}\n"
+                        + $"HP: {view.Hp:0}/{view.MaxHp:0}"
+                        + (view.IsDowned ? "\nKnocked out" : "");
+                    return;
+                }
+            }
+
             var tile = _grid.GetTile(coord);
             if (tile.Type == TileType.Rock && tile.IsBedrock)
             {
@@ -1085,6 +1107,12 @@ namespace KeepersDomain.Input
                             break;
                         case BuildMode.PlaceHolyGround:
                             _actions.SetTerrain(coord, TileType.HolyGround);
+                            break;
+                        case BuildMode.PlaceFloor:
+                            _actions.SetTerrain(coord, TileType.Floor);
+                            break;
+                        case BuildMode.PlaceRock:
+                            _actions.SetTerrain(coord, TileType.Rock);
                             break;
                         case BuildMode.PlaceBedrock:
                             _actions.SetBedrock(coord);

@@ -187,6 +187,14 @@ namespace KeepersDomain.Creatures
             _jailed = true;
             _carried = false;
             _recovering = false;
+
+            // A prisoner stands in its cell — it's a live (healing) captive
+            // now, not a knocked-out body on the floor. Configure tipped the
+            // capsule onto its side while it was down; put it back upright,
+            // since MarkJailed's own healing loop never reaches StandUp
+            // (a prisoner only leaves via the Conversion Class or a sale).
+            transform.rotation = _uprightRotation;
+
             _creature.Stats.HP = Mathf.Min(_creature.Stats.MaxHP,
                 _creature.Stats.HP + _creature.Stats.MaxHP * JailEntryHealFraction);
             if (_agent != null)
