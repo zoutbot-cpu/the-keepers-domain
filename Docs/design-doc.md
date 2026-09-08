@@ -74,7 +74,7 @@ View mode's tap-to-inspect (see `TileInteractionController.Inspect`) shows every
 - Imp-specific: carried Gold/Mana Crystals/Slimes (`ImplingInventory`).
 - Gremlin/Warlock-specific: Hunger value (+ "(hungry)" tag), wage + "(unpaid!)" tag, Happiness value and tier.
 
-On a networked **client** the real species agents don't exist (they run host-side), so `Inspect` falls back to the replicated `CreatureNetView` ghost after the agent rosters come up empty — a shorter readout of species, owner, level, HP, and whether it's knocked out, from `CreatureNetView.All` + its netvars.
+On a networked **client** the real species agents don't exist (they run host-side), so `Inspect` falls back to the replicated `CreatureNetView` ghost after the agent rosters come up empty — a shorter readout of species, owner, level, HP, and whether it's knocked out, from `CreatureNetView.All` + its netvars. The **Creatures panel** roster and the **Tasks panel** job list are rebuilt the same way on the client, from data already on the wire — the roster from `CreatureNetView.All`, and the (cancelable) Dig / Reinforce / Build lists from a throttled scan of the replicated grid for tiles this keeper queued (`TileState.IsQueuedFor*` / `QueuedByOwnerId`). Claim and repair jobs aren't tile-flagged, so those stay host-only.
 
 ### Hunger
 Non-Imp minions only — Imps don't get hungry. See `Assets/Scripts/Creatures/Hunger.cs`.

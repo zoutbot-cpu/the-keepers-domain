@@ -94,6 +94,16 @@ namespace KeepersDomain.UI
         private Vector2 _tasksScrollPos;
         private Vector2 _creaturesScrollPos;
 
+        // Networked-client Tasks panel: there's no BuilderJobBoard here, so
+        // the dig/reinforce/build lists are rebuilt by scanning the
+        // replicated grid for this keeper's queued tiles. Throttled — a
+        // full-grid sweep every OnGUI pass would be wasteful.
+        private const float NetTaskScanInterval = 0.4f;
+        private float _nextNetTaskScanTime;
+        private readonly List<Vector2Int> _netDigJobs = new List<Vector2Int>();
+        private readonly List<Vector2Int> _netReinforceJobs = new List<Vector2Int>();
+        private readonly List<Vector2Int> _netBuildJobs = new List<Vector2Int>();
+
         public void Initialize(DungeonGrid grid, KeeperContext[] contexts, TileInteractionController interactionController, LocalPlayerController localPlayer, int activeIndex, IKeeperActions actions = null, bool networked = false)
         {
             _grid = grid;
@@ -695,10 +705,7 @@ namespace KeepersDomain.UI
 
             if (_networked)
             {
-                // The creature agents live host-side; the client only has
-                // CreatureNetView ghosts, which aren't in these rosters.
-                // (The count/detail roster is a later replication pass.)
-                GUILayout.Label("Creature roster isn't replicated to the client yet.");
+                DrawNetworkedCreatureRoster();
                 GUILayout.EndScrollView();
                 return;
             }
@@ -758,6 +765,133 @@ namespace KeepersDomain.UI
             }
 
             GUILayout.EndScrollView();
+        }
+
+        /// Networked-client roster — the real species agents run host-side,
+        /// so this is built from the replicated CreatureNetView ghosts
+        /// (see CreatureNetView.All / the accessors added for View-mode
+        /// inspect). Species / level / owner / HP / coord only; name, task,
+        /// hunger, pay and happiness aren't replicated.
+        private void DrawNetworkedCreatureRoster()
+        {
+            var views = KeepersDomain.Net.CreatureNetView.All;
+            if (views.Count == 0)
+            {
+                GUILayout.Label("No creatures replicated yet.");
+                return;
+            }
+
+            var counts = new Dictionary<EditorCreatureKind, int>();
+            foreach (var view in views)
+            {
+                if (view == null)
+                {
+                    continue;
+                }
+
+                counts.TryGetValue(view.SpeciesKind, out var n);
+                counts[view.SpeciesKind] = n + 1;
+            }
+
+            var summary = new System.Text.StringBuilder();
+            foreach (var kind in System.Enum.GetValues(typeof(EditorCreatureKind)))
+            {
+                if (counts.TryGetValue((EditorCreatureKind)kind, out var n) && n > 0)
+                {
+                    if (summary.Length > 0)
+                    {
+                        summary.Append(", ");
+                    }
+
+                    summary.Append($"{n} {kind}");
+                }
+            }
+            GUILayout.Label(summary.Length > 0 ? summary.ToString() : "No creatures");
+
+            foreach (var view in views)
+            {
+                if (view == null)
+                {
+                    continue;
+                }
+
+                var coord = _grid.WorldToGrid(view.Position);
+                var downed = view.IsDowned ? "  (down)" : "";
+                GUILayout.Label($"{view.SpeciesKind}  Lv{view.Level}  P{view.OwnerId + 1}  {view.Hp:0}/{view.MaxHp:0}hp  ({coord.x},{coord.y}){downed}");
+            }
+        }
+
+        /// Networked-client Tasks panel — no BuilderJobBoard here, so the
+        /// dig / reinforce / build lists are rebuilt (throttled, see
+        /// _nextNetTaskScanTime) by scanning the replicated grid for tiles
+        /// this keeper queued. Claim and repair jobs aren't tile-flagged, so
+        /// they can't be reconstructed this way and are left to the host.
+        private void DrawNetworkedTaskList()
+        {
+            if (Time.time >= _nextNetTaskScanTime)
+            {
+                _nextNetTaskScanTime = Time.time + NetTaskScanInterval;
+                RescanNetworkedJobs();
+            }
+
+            _tasksScrollPos = GUILayout.BeginScrollView(_tasksScrollPos, GUILayout.Height(210f));
+
+            DrawNetJobList("Dig", _netDigJobs, _actions.CancelDig);
+            DrawNetJobList("Reinforce", _netReinforceJobs, _actions.CancelReinforce);
+            DrawNetJobList("Build", _netBuildJobs, _actions.CancelBuild);
+
+            GUILayout.Space(6f);
+            GUILayout.Label("Claim and repair jobs run host-side and aren't listed here.");
+
+            GUILayout.EndScrollView();
+        }
+
+        private void RescanNetworkedJobs()
+        {
+            _netDigJobs.Clear();
+            _netReinforceJobs.Clear();
+            _netBuildJobs.Clear();
+
+            for (int x = 0; x < _grid.Width; x++)
+            {
+                for (int y = 0; y < _grid.Height; y++)
+                {
+                    var tile = _grid.GetTile(new Vector2Int(x, y));
+                    if (tile.QueuedByOwnerId != NetOwnerId)
+                    {
+                        continue;
+                    }
+
+                    if (tile.IsQueuedForDig)
+                    {
+                        _netDigJobs.Add(new Vector2Int(x, y));
+                    }
+                    else if (tile.IsQueuedForReinforce)
+                    {
+                        _netReinforceJobs.Add(new Vector2Int(x, y));
+                    }
+                    else if (tile.IsQueuedForBuild)
+                    {
+                        _netBuildJobs.Add(new Vector2Int(x, y));
+                    }
+                }
+            }
+        }
+
+        private void DrawNetJobList(string label, List<Vector2Int> jobs, Action<Vector2Int> cancel)
+        {
+            GUILayout.Label($"{label} jobs — {jobs.Count}");
+            foreach (var coord in jobs)
+            {
+                GUILayout.BeginHorizontal();
+                var tile = _grid.GetTile(coord);
+                GUILayout.Label($"({coord.x},{coord.y}) hp {tile.Hp}", GUILayout.Width(210f));
+                if (GUILayout.Button("X", GUILayout.Width(24f)))
+                {
+                    cancel(coord);
+                }
+                GUILayout.EndHorizontal();
+            }
         }
 
         /// Display-only options that don't touch game state — currently just
@@ -828,10 +962,9 @@ namespace KeepersDomain.UI
         {
             if (_jobBoard == null)
             {
-                // No job board on a networked client -- the live job lists
-                // aren't replicated. Cancelling is still possible from the
-                // map (the Mine/Reinforce tool over an already-queued tile).
-                GUILayout.Label("Job list isn't available on a networked client yet.");
+                // No job board on a networked client — rebuild the
+                // cancelable lists from the replicated grid instead.
+                DrawNetworkedTaskList();
                 return;
             }
 
