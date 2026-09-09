@@ -28,16 +28,17 @@ namespace KeepersDomain.LevelDesigner
 
     /// Builds a fair, seed-reproducible <see cref="LevelData"/> — one Throne
     /// Room with an attached Portal Room per player, a small starting domain
-    /// (Treasury + Lair) each, and a resource-wall scatter that is *identical*
-    /// in every player's own local frame, so gold and mana crystal yields are
-    /// equal between keepers by construction.
+    /// (Treasury + Lair) each, a resource-wall scatter, and irregular
+    /// water/lava pools — all *identical* in every player's own local frame,
+    /// so resource yields and terrain hazards are equal between keepers by
+    /// construction.
     ///
     /// Emitting a LevelData (rather than carving a grid directly) means the
     /// result rides every existing load path unchanged: GameBootstrap.
     /// BuildWorld's data != null branch, per-owner room reconstruction
     /// (RoomReconstruction), the Level Designer's own loader, and JSON
-    /// save/load. New generator features (fauna, terrain features, treasure
-    /// props, ...) just add more to the same LevelData.
+    /// save/load. New generator features (fauna, Chasms, treasure props, ...)
+    /// just add more to the same LevelData.
     public static class MapGenerator
     {
         public const int StartingGoldPerPlayer = 1500;
@@ -59,8 +60,28 @@ namespace KeepersDomain.LevelDesigner
         // tiles from the map centre. Skipped for a 1-player map.
         private const int NeutralCoreRadius = 5;
 
-        // Keep resource veins at least this far inside the bedrock border.
+        // Keep resource veins / terrain pools at least this far inside the
+        // bedrock border.
         private const int BorderKeepout = 3;
+
+        // Natural water/lava bodies, grown as irregular blobs in each keeper's
+        // local frame and stamped into every player's transform (like the
+        // resource scatter) so terrain hazards are symmetric between keepers.
+        // Both Water and Lava gate Imp movement until bridged (see the design
+        // doc's Terrain section), so counts stay modest — and a pool never
+        // laps against the kit or fully moats a vein (see PoolKitClearance).
+        // Tune here.
+        public const int WaterPoolsPerPlayer = 3;
+        public const int LavaPoolsPerPlayer = 2;
+        private const int WaterPoolMinTiles = 8;
+        private const int WaterPoolMaxTiles = 28;
+        private const int LavaPoolMinTiles = 5;
+        private const int LavaPoolMaxTiles = 16;
+
+        // Pool-free buffer (Chebyshev) kept around every claimed-floor tile
+        // (throne / portal / corridors / rooms); veins keep a 1-tile mineable
+        // shore.
+        private const int PoolKitClearance = 2;
 
         private const int ThroneHalfSize = 2; // 5x5 room, 3x3 platform
         private const int PortalHalfSize = 1; // 3x3 room
@@ -180,6 +201,7 @@ namespace KeepersDomain.LevelDesigner
             }
 
             ScatterResources(rng, playerCount, width, height, center, anchors, turns, tiles);
+            ScatterTerrainPools(rng, playerCount, width, height, anchors, turns, tiles);
 
             var ordered = new List<LevelTileData>(tiles.Values);
             ordered.Sort((a, b) => a.X != b.X ? a.X - b.X : a.Y - b.Y);
@@ -414,6 +436,199 @@ namespace KeepersDomain.LevelDesigner
                 Debug.LogWarning($"MapGenerator: only placed {placed}/{bag.Count} resource veins per player " +
                                  "— map may be too small or too crowded for the configured counts.");
             }
+        }
+
+        /// Grows WaterPoolsPerPlayer + LavaPoolsPerPlayer irregular blobs in
+        /// the local frame and stamps each into every player's rotated
+        /// transform, so the terrain hazards are the same for every keeper. A
+        /// blob is only committed if every one of its cells is valid — in
+        /// bounds, off the border keepout, clear of the kit buffer / vein
+        /// shore, still plain rock, and non-overlapping across the player
+        /// transforms — for *all* players. Runs after ScatterResources so
+        /// pools flow around veins rather than burying them.
+        private static void ScatterTerrainPools(System.Random rng, int playerCount, int width, int height,
+            Vector2Int[] anchors, int[] turns, Dictionary<Vector2Int, LevelTileData> tiles)
+        {
+            // Pools may not touch the kit (2-tile buffer) or seal a vein off
+            // from being mined (1-tile shore).
+            var keepClear = new HashSet<Vector2Int>();
+            foreach (var kv in tiles)
+            {
+                int buffer;
+                if (kv.Value.Type == TileType.Floor)
+                {
+                    buffer = PoolKitClearance;
+                }
+                else if (kv.Value.WallResourceType != WallResourceType.None)
+                {
+                    buffer = 1;
+                }
+                else
+                {
+                    continue;
+                }
+
+                for (int dx = -buffer; dx <= buffer; dx++)
+                {
+                    for (int dy = -buffer; dy <= buffer; dy++)
+                    {
+                        keepClear.Add(new Vector2Int(kv.Key.x + dx, kv.Key.y + dy));
+                    }
+                }
+            }
+
+            var kinds = new List<TileType>();
+            for (int i = 0; i < WaterPoolsPerPlayer; i++) kinds.Add(TileType.Water);
+            for (int i = 0; i < LavaPoolsPerPlayer; i++) kinds.Add(TileType.Lava);
+            for (int i = kinds.Count - 1; i > 0; i--)
+            {
+                var j = rng.Next(i + 1);
+                (kinds[i], kinds[j]) = (kinds[j], kinds[i]);
+            }
+
+            var reach = Mathf.Min(width, height) / 2;
+            var placed = 0;
+            var attempts = 0;
+            var maxAttempts = Mathf.Max(1, kinds.Count) * 150;
+
+            while (placed < kinds.Count && attempts < maxAttempts)
+            {
+                attempts++;
+                var kind = kinds[placed];
+                var minTiles = kind == TileType.Lava ? LavaPoolMinTiles : WaterPoolMinTiles;
+                var maxTiles = kind == TileType.Lava ? LavaPoolMaxTiles : WaterPoolMaxTiles;
+
+                var seed = new Vector2Int(rng.Next(-reach, reach + 1), rng.Next(-reach, reach + 1));
+                var blob = GrowBlob(rng, seed, rng.Next(minTiles, maxTiles + 1));
+
+                var worldCells = new HashSet<Vector2Int>();
+                var ok = true;
+                foreach (var local in blob)
+                {
+                    for (int p = 0; p < playerCount && ok; p++)
+                    {
+                        var wc = anchors[p] + RotateQuarters(local, turns[p]);
+                        if (wc.x <= BorderKeepout || wc.y <= BorderKeepout ||
+                            wc.x >= width - 1 - BorderKeepout || wc.y >= height - 1 - BorderKeepout ||
+                            tiles.ContainsKey(wc) || keepClear.Contains(wc) || !worldCells.Add(wc))
+                        {
+                            ok = false;
+                        }
+                    }
+
+                    if (!ok)
+                    {
+                        break;
+                    }
+                }
+
+                if (!ok)
+                {
+                    continue;
+                }
+
+                foreach (var wc in worldCells)
+                {
+                    tiles[wc] = new LevelTileData { X = wc.x, Y = wc.y, Type = kind };
+                }
+
+                placed++;
+            }
+
+            if (placed < kinds.Count)
+            {
+                Debug.LogWarning($"MapGenerator: only placed {placed}/{kinds.Count} terrain pools per player " +
+                                 "— map may be too small or too crowded for the configured counts.");
+            }
+        }
+
+        /// A random-accretion blob (a "drunkard's walk" over the frontier)
+        /// grown to roughly targetSize cells, then lightly smoothed: two fill
+        /// passes (a gap with >= 3 blob neighbours joins) round out
+        /// concavities, then one shave pass (a cell with <= 1 blob neighbour
+        /// drops) trims the stringy tendrils the raw walk leaves — so the
+        /// result reads as an irregular lake, not a rectangle or a squiggle.
+        private static List<Vector2Int> GrowBlob(System.Random rng, Vector2Int seed, int targetSize)
+        {
+            var blob = new HashSet<Vector2Int> { seed };
+            var frontier = new List<Vector2Int>();
+            foreach (var d in GridDirections.Cardinal)
+            {
+                frontier.Add(seed + d);
+            }
+
+            while (blob.Count < targetSize && frontier.Count > 0)
+            {
+                var idx = rng.Next(frontier.Count);
+                var cell = frontier[idx];
+                frontier[idx] = frontier[frontier.Count - 1];
+                frontier.RemoveAt(frontier.Count - 1);
+
+                if (!blob.Add(cell))
+                {
+                    continue;
+                }
+
+                foreach (var d in GridDirections.Cardinal)
+                {
+                    var n = cell + d;
+                    if (!blob.Contains(n))
+                    {
+                        frontier.Add(n);
+                    }
+                }
+            }
+
+            for (int pass = 0; pass < 2; pass++)
+            {
+                var toAdd = new List<Vector2Int>();
+                foreach (var cell in blob)
+                {
+                    foreach (var d in GridDirections.Cardinal)
+                    {
+                        var n = cell + d;
+                        if (!blob.Contains(n) && CountBlobNeighbours(blob, n) >= 3)
+                        {
+                            toAdd.Add(n);
+                        }
+                    }
+                }
+
+                foreach (var c in toAdd)
+                {
+                    blob.Add(c);
+                }
+            }
+
+            var toRemove = new List<Vector2Int>();
+            foreach (var cell in blob)
+            {
+                if (cell != seed && CountBlobNeighbours(blob, cell) <= 1)
+                {
+                    toRemove.Add(cell);
+                }
+            }
+
+            foreach (var c in toRemove)
+            {
+                blob.Remove(c);
+            }
+
+            return new List<Vector2Int>(blob);
+        }
+
+        private static int CountBlobNeighbours(HashSet<Vector2Int> blob, Vector2Int cell)
+        {
+            var count = 0;
+            foreach (var d in GridDirections.Cardinal)
+            {
+                if (blob.Contains(cell + d))
+                {
+                    count++;
+                }
+            }
+
+            return count;
         }
 
         private static int Chebyshev(Vector2Int a, Vector2Int b)
