@@ -33,6 +33,11 @@ namespace KeepersDomain.Rooms
 
             transform.position = grid.GridToWorld(coord);
             BuildStairway(grid.CellSize, grid.FloorSurfaceY);
+
+            // Fog of war — the stairway prop stays hidden behind the rock
+            // face until its tile has been seen. Inert when no FogOfWar
+            // exists (networked client / Level Designer).
+            FogObscurable.Attach(gameObject, FogObscurableKind.Structure);
         }
 
         /// Adds count to this portal's pool of a recruitable creature kind.

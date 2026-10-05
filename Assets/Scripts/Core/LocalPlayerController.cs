@@ -59,6 +59,16 @@ namespace KeepersDomain.Core
             _grab?.SetActiveContext(ctx);
             _bar?.SetActiveContext(ctx);
             _isoCamera?.CenterOn(_grid.GridToWorld(ctx.ThroneCoord));
+
+            // Show the now-active keeper's own queued-job icons, not the
+            // previous keeper's (fog stays anchored to keeper 0 — see
+            // FogOfWar — but selections follow the switcher). suppressNotify:
+            // a viewer change is purely local, no replication delta.
+            if (_grid.LocalViewerOwnerId != ctx.OwnerId)
+            {
+                _grid.LocalViewerOwnerId = ctx.OwnerId;
+                _grid.RefreshAllVisuals(suppressNotify: true);
+            }
         }
 
         private void Update()

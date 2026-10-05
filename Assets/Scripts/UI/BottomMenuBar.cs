@@ -49,6 +49,10 @@ namespace KeepersDomain.UI
         private TileInteractionController _interactionController;
         private LocalPlayerController _localPlayer;
 
+        // Local-keeper fog of war (offline / host); null on the networked
+        // client, where the Settings toggle for it is hidden.
+        private FogOfWar _fog;
+
         // Every mutating button press routes through here -- LocalKeeperActions
         // on the host (identical to the direct manager calls this used to
         // make), NetworkedKeeperActions on a client (a server RPC).
@@ -87,6 +91,7 @@ namespace KeepersDomain.UI
         private bool _squareModeOn;
         private bool _halfWallsOn;
         private bool _finishOffEnemiesOn;
+        private bool _fogOfWarOn = true;
         private bool _digQueuePaused;
         private bool _autoReinforceOn;
         private List<JobKind> _priorityOrder;
@@ -105,7 +110,7 @@ namespace KeepersDomain.UI
         private readonly List<Vector2Int> _netReinforceJobs = new List<Vector2Int>();
         private readonly List<Vector2Int> _netBuildJobs = new List<Vector2Int>();
 
-        public void Initialize(DungeonGrid grid, KeeperContext[] contexts, TileInteractionController interactionController, LocalPlayerController localPlayer, int activeIndex, IKeeperActions actions = null, bool networked = false)
+        public void Initialize(DungeonGrid grid, KeeperContext[] contexts, TileInteractionController interactionController, LocalPlayerController localPlayer, int activeIndex, IKeeperActions actions = null, bool networked = false, FogOfWar fog = null)
         {
             _grid = grid;
             _contexts = contexts;
@@ -113,6 +118,8 @@ namespace KeepersDomain.UI
             _localPlayer = localPlayer;
             _providedActions = actions;
             _networked = networked;
+            _fog = fog;
+            _fogOfWarOn = fog != null && fog.Enabled;
             SetActiveContext(contexts[activeIndex]);
         }
 
@@ -944,6 +951,19 @@ namespace KeepersDomain.UI
                 _jailManager.SetHalfWalls(_halfWallsOn);
             }
             GUILayout.Label("Squashes every wall to half height — bottom half kept, top pressed down. Also lowers Jail pit rims.");
+
+            if (_fog != null)
+            {
+                GUILayout.Space(6f);
+
+                var fogOn = GUILayout.Toggle(_fogOfWarOn, "Fog of war");
+                if (fogOn != _fogOfWarOn)
+                {
+                    _fogOfWarOn = fogOn;
+                    _fog.Enabled = _fogOfWarOn;
+                }
+                GUILayout.Label("Hides everything your minions can't currently see as plain rock. Your Throne Room shows on the map but stays static without a minion nearby.");
+            }
 
             GUILayout.Space(6f);
 

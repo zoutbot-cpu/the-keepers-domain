@@ -68,6 +68,13 @@ namespace KeepersDomain.Creatures
         private int _litSegments = -1;
         private Color _fillColor = new Color(0f, 0f, 0f, 0f);
 
+        /// Fog of war: returns whether a world point currently has live
+        /// vision. Set by FogOfWar (and cleared on its teardown / when fog is
+        /// switched off); null on every non-fogged path, where the ring
+        /// always shows. A ring on a tile with no vision is hidden outright,
+        /// regardless of HP.
+        public static System.Func<Vector3, bool> IsWorldPointVisibleForRing;
+
         /// Adds the ring to host and wires it to creature/grid — call once
         /// from the creature agent's Initialize (or ThroneRoom's).
         public static CreatureHealthRing Attach(GameObject host, Creature creature, DungeonGrid grid,
@@ -148,6 +155,23 @@ namespace KeepersDomain.Creatures
 
             var pos = _host.position;
             _container.transform.position = new Vector3(pos.x, _grid.FloorSurfaceY + HeightAboveFloor, pos.z);
+
+            if (IsWorldPointVisibleForRing != null && !IsWorldPointVisibleForRing(pos))
+            {
+                if (_container.activeSelf)
+                {
+                    _container.SetActive(false);
+                }
+                return;
+            }
+
+            // SyncRing manages activeSelf itself for a _hideWhenFull ring
+            // (the Throne's), but a creature ring is assumed always-on — so
+            // undo a fog hide before syncing.
+            if (!_hideWhenFull && !_container.activeSelf)
+            {
+                _container.SetActive(true);
+            }
 
             SyncRing();
         }

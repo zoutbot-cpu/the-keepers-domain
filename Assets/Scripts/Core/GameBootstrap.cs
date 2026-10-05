@@ -670,6 +670,11 @@ namespace KeepersDomain.Core
             var grid = CreateComponent<DungeonGrid>("DungeonGrid");
             grid.Initialize(width, height, CellSize);
 
+            // The client is keeper 1 (see clientCtx below) — only draw this
+            // keeper's own queued Mine/Reinforce/Construct icons, not the
+            // host keeper's, even though the replicated tiles carry both.
+            grid.LocalViewerOwnerId = 1;
+
             // Placeholder 2-colour palette so owner-tinted floor / orbs /
             // rings read on the client until the real roster syncs (M2).
             // PlayerColor first (fallback for -1/out-of-range owners), THEN
@@ -1006,6 +1011,20 @@ namespace KeepersDomain.Core
 
             const int localPlayerIndex = 0;
 
+            // Local-keeper fog of war. Every path through BuildWorld gets one
+            // — offline "Start Game", "Skirmish (generated)", "Continue", and
+            // the multiplayer host (BuildHostGame calls BuildWorld). The
+            // networked client (BuildClientWorld) and the Level Designer
+            // never create one, so their DungeonGrid.Fog stays null and the
+            // whole map renders live. Seeds the local Throne Room's footprint
+            // as explored so it shows on the map from the start.
+            var fogOfWar = CreateComponent<FogOfWar>("FogOfWar");
+            fogOfWar.Initialize(grid, localPlayerIndex, contexts[localPlayerIndex].ThroneCoord, ThroneRoomHalfSize);
+
+            // Only the local keeper's own queued-job icons are drawn (the
+            // debug player switcher moves this — see LocalPlayerController).
+            grid.LocalViewerOwnerId = contexts[localPlayerIndex].OwnerId;
+
             // Pan margin: 22.5f for a freshly generated map (the +50%-scaled
             // gameplay grid — 15f base -> 22.5f — kept exactly as tuned), but
             // a loaded level can be any size up to the Level Designer's 256,
@@ -1029,7 +1048,7 @@ namespace KeepersDomain.Core
 
             var localPlayerController = CreateComponent<LocalPlayerController>("LocalPlayerController");
             var bottomMenuBar = CreateComponent<BottomMenuBar>("BottomMenuBar");
-            bottomMenuBar.Initialize(grid, contexts, interactionController, localPlayerController, localPlayerIndex);
+            bottomMenuBar.Initialize(grid, contexts, interactionController, localPlayerController, localPlayerIndex, fog: fogOfWar);
             localPlayerController.Initialize(camera, grid, contexts, interactionController, minionGrabController, bottomMenuBar, localPlayerIndex);
 
             // Lose-condition: a Throne beaten to 0 HP ends the match (see

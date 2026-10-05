@@ -233,9 +233,34 @@ namespace KeepersDomain.Grid
         // and cleared once the tile stops being Rock at all.
         private GameObject[,] _wallDecorations;
 
+        // Wall torches share the _wallDecorations slot (mutually exclusive
+        // in practice — a torch only ever considers a plain, undecorated
+        // Rock wall, see ConsiderWallTorch) so they get fog-hiding and
+        // reinforce/dig cleanup for free from the existing wallDecoration
+        // plumbing. This set just guards against re-scanning the same
+        // Floor tile's neighbors on every one of its own RefreshVisual
+        // calls (claim tint, fog dim/visible, ownership flips, ...) —
+        // torch placement itself only needs to happen once, the first
+        // time a given tile is seen as Floor.
+        private readonly HashSet<Vector2Int> _torchScannedFloors = new();
+
         public int Width => _width;
         public int Height => _height;
         public float CellSize => _cellSize;
+
+        /// Local-keeper fog of war, or null when there is none (the networked
+        /// client, the Level Designer). Set by FogOfWar.Initialize; when
+        /// non-null, RefreshVisual renders an Unseen tile as plain Rock and
+        /// dims an Explored one. See FogOfWar.
+        public FogOfWar Fog { get; set; }
+
+        /// Whose queued-job icons (Mine / Reinforce / Construct) this client
+        /// draws — a player only sees their own selections, not a rival's.
+        /// The local keeper's OwnerId offline / on the host, the replicated
+        /// keeper's on the networked client, and moved by the debug player
+        /// switcher. -1 shows every keeper's icons (the Level Designer, which
+        /// has none anyway). See UpdateQueuedActionIcon.
+        public int LocalViewerOwnerId { get; set; } = -1;
 
         /// Convenience single-owner setter for ordinary (non-Level-
         /// Designer) gameplay, where there's exactly one implicit player
@@ -464,6 +489,7 @@ namespace KeepersDomain.Grid
             _visualChildren = new GameObject[_width, _height];
             _currentWallPrefab = new GameObject[_width, _height];
             _wallDecorations = new GameObject[_width, _height];
+            _torchScannedFloors.Clear();
             _wallMeshStone = Resources.Load<GameObject>("Dungeon/Wall_Stone");
             _wallMeshGold = Resources.Load<GameObject>("Dungeon/Wall_Gold");
             _wallMeshGoldRegen = Resources.Load<GameObject>("Dungeon/Wall_GoldRegen");
@@ -1161,6 +1187,53 @@ namespace KeepersDomain.Grid
             return true;
         }
 
+        /// Drops any queued job whose tile turned out not to match it — a
+        /// Mine or Reinforce job on a tile that isn't Rock, or a Construct
+        /// job on a tile that isn't room-free Floor. Called by FogOfWar the
+        /// moment a fogged tile a player queued becomes visible: if the
+        /// wall they "selected" out in the dark was actually already dug
+        /// (a rival got there first, say), the selection and its board job
+        /// just disappear rather than lingering forever. The ordinary
+        /// Cancel* methods deliberately refuse a type-mismatched tile, so
+        /// this is its own path. Fires the same Canceled events the board
+        /// listens to.
+        public void ClearStaleQueuedJobs(Vector2Int coord)
+        {
+            if (!InBounds(coord))
+            {
+                return;
+            }
+
+            ref var tile = ref _tiles[coord.x, coord.y];
+            var changed = false;
+
+            if (tile.IsQueuedForDig && tile.Type != TileType.Rock)
+            {
+                tile.IsQueuedForDig = false;
+                DigCanceled?.Invoke(coord);
+                changed = true;
+            }
+
+            if (tile.IsQueuedForReinforce && tile.Type != TileType.Rock)
+            {
+                tile.IsQueuedForReinforce = false;
+                ReinforceCanceled?.Invoke(coord);
+                changed = true;
+            }
+
+            if (tile.IsQueuedForBuild && (tile.Type != TileType.Floor || tile.HasRoom))
+            {
+                tile.IsQueuedForBuild = false;
+                BuildCanceled?.Invoke(coord);
+                changed = true;
+            }
+
+            if (changed)
+            {
+                RefreshVisual(coord);
+            }
+        }
+
         /// Finishes a build job: the tile becomes ordinary Rock again at
         /// full HP. Ownership is left untouched (still Claimed, since
         /// RequestBuild only ever allowed queuing an already-Claimed tile)
@@ -1760,14 +1833,25 @@ namespace KeepersDomain.Grid
         /// player's color in the Level Designer must retint every already-
         /// placed Claimed tile of theirs immediately, not just tiles
         /// painted from then on).
-        public void RefreshAllVisuals()
+        public void RefreshAllVisuals(bool suppressNotify = false)
         {
             for (int x = 0; x < _width; x++)
             {
                 for (int y = 0; y < _height; y++)
                 {
-                    RefreshVisual(new Vector2Int(x, y));
+                    RefreshVisual(new Vector2Int(x, y), suppressNotify);
                 }
+            }
+        }
+
+        /// Re-renders one tile after its fog-of-war visibility changed (see
+        /// FogOfWar). suppressNotify: the tile's real state hasn't changed,
+        /// so listeners (NetGame's replication delta) must not fire.
+        public void NotifyFogChanged(Vector2Int coord)
+        {
+            if (InBounds(coord))
+            {
+                RefreshVisual(coord, suppressNotify: true);
             }
         }
 
@@ -1787,13 +1871,28 @@ namespace KeepersDomain.Grid
             }
         }
 
-        private void RefreshVisual(Vector2Int coord)
+        private void RefreshVisual(Vector2Int coord, bool suppressNotify = false)
         {
             var tile = _tiles[coord.x, coord.y];
+            var realTile = tile;
             var visual = _visuals[coord.x, coord.y];
             if (visual == null)
             {
                 return;
+            }
+
+            // Fog of war (Fog is null on every non-fogged path — see the
+            // property). An Unseen tile is drawn as plain unmined Rock so it
+            // gives nothing away; an Explored one keeps its real shape but is
+            // dimmed, and its moving parts / props / creatures are hidden via
+            // the decoration toggles below + FogObscurable + the health-ring
+            // hook.
+            var fogView = Fog != null ? Fog.ViewAt(coord) : FogView.Visible;
+            var fogHidden = fogView == FogView.Unseen;
+            var fogDim = fogView == FogView.Explored;
+            if (fogHidden)
+            {
+                tile = TileState.Rock;
             }
 
             Color color;
@@ -1886,6 +1985,13 @@ namespace KeepersDomain.Grid
                 color = _floorUnclaimedColor;
             }
 
+            // Explored-but-unwatched ground reads dimmer than live territory.
+            if (fogDim)
+            {
+                color = new Color(color.r * FogOfWar.ExploredDim, color.g * FogOfWar.ExploredDim,
+                    color.b * FogOfWar.ExploredDim, color.a);
+            }
+
             var wallPrefab = GetWallMeshPrefab(tile);
             GameObject terrainMeshPrefab = tile.Type switch
             {
@@ -1908,9 +2014,10 @@ namespace KeepersDomain.Grid
                 {
                     // Positioning/scaling (base flush with the floor, full
                     // cellSize on X/Z so neighbours butt together, optional
-                    // half-height squash) all live in ApplyWallChildTransform.
+                    // half-height squash) all live in ApplyWallChildTransform
+                    // — re-applied unconditionally below so a fog transition
+                    // or a half-wall toggle always corrects the height.
                     child = Instantiate(wallPrefab, visual.transform, false);
-                    ApplyWallChildTransform(child.transform);
                 }
                 else if (terrainMeshPrefab != null)
                 {
@@ -1923,6 +2030,15 @@ namespace KeepersDomain.Grid
                     child.transform.localPosition = new Vector3(0f, FloorSurfaceY, 0f);
                     child.transform.localRotation = Quaternion.identity;
                     child.transform.localScale = Vector3.one * _cellSize;
+
+                    if (meshPrefab == _lavaMesh)
+                    {
+                        LiquidParticles.AttachLavaBubbles(child.transform, _cellSize);
+                    }
+                    else if (meshPrefab == _waterMesh)
+                    {
+                        WaterWaveMesh.Attach(child);
+                    }
                 }
                 else
                 {
@@ -1942,10 +2058,18 @@ namespace KeepersDomain.Grid
                 // tinting with the old flat _waterColor/_lavaColor (still
                 // used by the cube fallback below) would just muddy them,
                 // same lesson as the wall meshes.
-                ApplyTint(visualChild, Color.white);
+                ApplyTint(visualChild, fogDim
+                    ? new Color(FogOfWar.ExploredDim, FogOfWar.ExploredDim, FogOfWar.ExploredDim)
+                    : Color.white);
             }
             else if (wallPrefab != null)
             {
+                // Height/scale every refresh, not just on rebuild — a fog
+                // Unseen wall stays FULL height even with "half walls" on, so
+                // squashing the dungeon to see over it can't also expose the
+                // fog by shrinking the rock that's standing in for it.
+                ApplyWallChildTransform(visualChild.transform, forceFullHeight: fogHidden);
+
                 // The Reinforced mesh's brick/cap/orb are one combined
                 // renderer (see PlayerColor's own comment) — a uniform
                 // property-block tint can't leave the orb's player color
@@ -1958,7 +2082,8 @@ namespace KeepersDomain.Grid
                 // exception rather than something worth losing the correct
                 // steady-state look over.
                 bool isPristineReinforced = wallPrefab == _wallMeshReinforced
-                    && !tile.IsQueuedForDig && !tile.IsQueuedForReinforce && tile.Hp >= tile.MaxHp;
+                    && !tile.IsQueuedForDig && !tile.IsQueuedForReinforce && tile.Hp >= tile.MaxHp
+                    && !fogDim;
                 if (isPristineReinforced)
                 {
                     ClearTint(visualChild);
@@ -2008,7 +2133,32 @@ namespace KeepersDomain.Grid
             }
 
             UpdateFloorGrout(coord, tile);
-            UpdateQueuedActionIcon(coord, tile);
+            // Real tile, not the fog-faked Rock — your own queued Mine /
+            // Reinforce / Construct marker stays visible through the fog so
+            // you can see what you've already selected out in the dark.
+            UpdateQueuedActionIcon(coord, realTile);
+
+            // Fog: the separate decoration child (gold nuggets / chasm spikes
+            // / holy-ground star — see _wallDecorations) would otherwise
+            // float on an Unseen tile's rock face. Grout and the queued-action
+            // icon self-clear above, since `tile` is plain Rock when hidden.
+            var wallDecoration = _wallDecorations[coord.x, coord.y];
+            if (wallDecoration != null && wallDecoration.activeSelf == fogHidden)
+            {
+                wallDecoration.SetActive(!fogHidden);
+            }
+
+            // Every path that turns a tile into Floor (CarveRoom/Rect,
+            // CompleteDig, the dev terrain tool, ...) already ends up here
+            // via RefreshVisual(coord) for that tile — piggybacking the
+            // torch-neighbor scan on that single choke point covers all of
+            // them without touching each call site. realTile (not the
+            // fog-faked one) so a currently-fogged tile still resolves —
+            // torch placement is gameplay state, not a visual concern.
+            if (realTile.Type == TileType.Floor)
+            {
+                ConsiderTorchesOnNeighbors(coord);
+            }
 
             // Selection outline is a duplicate of the wall's own current
             // visual (see SetSelectedWall) — if this tile is the selected
@@ -2022,7 +2172,12 @@ namespace KeepersDomain.Grid
                 SetSelectedWall(coord);
             }
 
-            TileChanged?.Invoke(coord);
+            // A fog-only refresh hasn't changed the tile's real state — don't
+            // fire a replication delta (NetGame) for a purely visual change.
+            if (!suppressNotify)
+            {
+                TileChanged?.Invoke(coord);
+            }
         }
 
         /// Ensures/clears the dark-gray grout slab under a plain Claimed
@@ -2071,8 +2226,17 @@ namespace KeepersDomain.Grid
         /// (RefreshVisual fires per dig-damage hit).
         private void UpdateQueuedActionIcon(Vector2Int coord, TileState tile)
         {
+            // A player only sees their own selections. QueuedByOwnerId is
+            // set alongside every IsQueuedFor* flag (see RequestDig et al.),
+            // so a mismatch here means this is a rival keeper's job.
+            var mine = LocalViewerOwnerId < 0 || tile.QueuedByOwnerId == LocalViewerOwnerId;
+
             QueuedIcon icon;
-            if (tile.Type == TileType.Rock && tile.IsQueuedForDig)
+            if (!mine)
+            {
+                icon = QueuedIcon.None;
+            }
+            else if (tile.Type == TileType.Rock && tile.IsQueuedForDig)
             {
                 icon = QueuedIcon.Pickaxe;
             }
@@ -2412,9 +2576,13 @@ namespace KeepersDomain.Grid
         /// surface. In "half wall" mode (see SetHalfWalls) the mesh is
         /// squashed to half height on Y about its base — the bottom half
         /// stays put and the top is pressed down to the midpoint.
-        private void ApplyWallChildTransform(Transform child)
+        /// forceFullHeight overrides that for a fog-of-war Unseen tile: the
+        /// rock standing in for the fog must stay full height regardless, or
+        /// squashing the dungeon to see over your own walls would also let
+        /// you see over the fog.
+        private void ApplyWallChildTransform(Transform child, bool forceFullHeight = false)
         {
-            var heightScale = _halfWalls ? 0.5f : 1f;
+            var heightScale = _halfWalls && !forceFullHeight ? 0.5f : 1f;
             child.localPosition = new Vector3(0f, WallBaseLocalY, 0f);
             child.localRotation = Quaternion.identity;
             child.localScale = new Vector3(_cellSize, heightScale, _cellSize);
@@ -2438,10 +2606,16 @@ namespace KeepersDomain.Grid
             {
                 for (int y = 0; y < _height; y++)
                 {
+                    var coord = new Vector2Int(x, y);
                     var child = _visualChildren[x, y];
+                    // GetWallMeshPrefab(real tile) misses a fogged wall over
+                    // real Floor — but that child is a fog rock mesh and must
+                    // stay full height, which is what it already is, so
+                    // skipping it is correct.
                     if (child != null && GetWallMeshPrefab(_tiles[x, y]) != null)
                     {
-                        ApplyWallChildTransform(child.transform);
+                        var fogHidden = Fog != null && Fog.ViewAt(coord) == FogView.Unseen;
+                        ApplyWallChildTransform(child.transform, forceFullHeight: fogHidden);
                     }
 
                     // Re-seat any dig/reinforce icon on this tile at the new
@@ -2451,7 +2625,7 @@ namespace KeepersDomain.Grid
                     var iconKind = _queuedActionIconKind[x, y];
                     if (iconRoot != null && (iconKind == QueuedIcon.Pickaxe || iconKind == QueuedIcon.Shield))
                     {
-                        iconRoot.transform.localPosition = new Vector3(0f, WallFaceIconLocalY(new Vector2Int(x, y)), 0f);
+                        iconRoot.transform.localPosition = new Vector3(0f, WallFaceIconLocalY(coord), 0f);
                     }
                 }
             }
@@ -2606,6 +2780,59 @@ namespace KeepersDomain.Grid
                 nugget.transform.localScale = Vector3.one * scale;
                 Prims.Tint(nugget, nuggetColor);
                 Destroy(nugget.GetComponent<Collider>());
+            }
+        }
+
+        /// Called once per Floor tile (see the RefreshVisual call site) —
+        /// checks its 4 cardinal Rock neighbors for a wall torch. Runs from
+        /// the Floor side rather than hooking every place a tile becomes
+        /// Rock-adjacent-to-Floor, since every one of those already funnels
+        /// through this same tile's own RefreshVisual for free.
+        private void ConsiderTorchesOnNeighbors(Vector2Int floorCoord)
+        {
+            if (!_torchScannedFloors.Add(floorCoord))
+            {
+                return;
+            }
+
+            foreach (var dir in GridDirections.Cardinal)
+            {
+                var wallCoord = floorCoord + dir;
+                if (InBounds(wallCoord))
+                {
+                    ConsiderWallTorch(wallCoord, -dir);
+                }
+            }
+        }
+
+        /// wallCoord: the candidate Rock tile. outwardDir: cardinal step
+        /// from the wall toward the floorCoord that exposed it — WallTorches
+        /// uses this both to sit the torch against that face and to seed
+        /// its own sparseness roll, so a wall bordering multiple floor
+        /// tiles resolves the same way regardless of scan order. Plain Rock
+        /// only (no room, no reinforced/bedrock, no resource vein) — those
+        /// already have their own dedicated look, and _wallDecorations is
+        /// a single slot shared with gold nuggets/chasm spikes/etc., so a
+        /// wall that already has a decoration (torch included, since this
+        /// runs at most once — see below) is skipped.
+        private void ConsiderWallTorch(Vector2Int wallCoord, Vector2Int outwardDir)
+        {
+            if (_wallDecorations[wallCoord.x, wallCoord.y] != null)
+            {
+                return;
+            }
+
+            var tile = _tiles[wallCoord.x, wallCoord.y];
+            if (tile.Type != TileType.Rock || tile.HasRoom || tile.IsReinforced || tile.IsBedrock
+                || tile.WallResourceType != WallResourceType.None)
+            {
+                return;
+            }
+
+            var torch = WallTorches.TryPlace(_visuals[wallCoord.x, wallCoord.y].transform, wallCoord, outwardDir, _cellSize);
+            if (torch != null)
+            {
+                _wallDecorations[wallCoord.x, wallCoord.y] = torch;
             }
         }
 
