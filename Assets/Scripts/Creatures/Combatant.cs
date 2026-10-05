@@ -78,6 +78,8 @@ namespace KeepersDomain.Creatures
 
         private readonly List<Vector2Int> _pathBuffer = new List<Vector2Int>();
         private readonly List<Vector2Int> _scratchPath = new List<Vector2Int>();
+        private float _anchorCheckTimer = float.MaxValue;
+        private bool _anchorReachable;
         private readonly List<Vector3> _waypoints = new List<Vector3>();
         private int _waypointIndex;
         private Vector2Int _pathGoal;
@@ -463,8 +465,11 @@ namespace KeepersDomain.Creatures
 
         private bool IsTargetAlive(ICombatant t)
         {
-            return t != null && t.Combat != null && !t.Combat.IsDowned && t.Creature != null
-                && t.transform != null;
+            // Unity-null check first: a creature that left through the
+            // Portal (or was otherwise Destroyed) without fainting keeps a
+            // live C# reference here, and touching its .transform throws.
+            return t is UnityEngine.Object o && o != null
+                && t.Combat != null && !t.Combat.IsDowned && t.Creature != null;
         }
 
         private void TickFight(float dt, Vector2Int myCoord)
@@ -814,10 +819,21 @@ namespace KeepersDomain.Creatures
             _wasActive = false;
         }
 
+        /// Throttled to ScanInterval — it runs a full A* every call, and an
+        /// unreachable Lair means a whole-map search, so per-frame calls
+        /// from every unhappy fighter added up fast.
         private bool CanReachAnchor()
         {
+            _anchorCheckTimer += Time.deltaTime;
+            if (_anchorCheckTimer < ScanInterval)
+            {
+                return _anchorReachable;
+            }
+
+            _anchorCheckTimer = 0f;
             var anchor = _getLairCoord?.Invoke() ?? _throneCoord;
-            return AStarPathfinder.TryFindPath(_grid, _grid.WorldToGrid(_tf.position), anchor, _scratchPath, _isImp);
+            _anchorReachable = AStarPathfinder.TryFindPath(_grid, _grid.WorldToGrid(_tf.position), anchor, _scratchPath, _isImp);
+            return _anchorReachable;
         }
 
         private void AddExp(float amount)

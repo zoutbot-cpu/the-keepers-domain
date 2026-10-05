@@ -21,24 +21,47 @@ namespace KeepersDomain.LevelDesigner
 
         public static string LevelsDirectory => Path.Combine(Application.persistentDataPath, LevelsFolderName);
 
+        /// Written to a .tmp file first and then swapped in, so a crash or
+        /// a full disk mid-write leaves the previous save intact instead of
+        /// a truncated JSON file.
         public static void Save(string levelName, LevelData data)
         {
             Directory.CreateDirectory(LevelsDirectory);
             var json = JsonUtility.ToJson(data, prettyPrint: true);
-            File.WriteAllText(GetPath(levelName), json);
+            var path = GetPath(levelName);
+            var tmpPath = path + ".tmp";
+            File.WriteAllText(tmpPath, json);
+            if (File.Exists(path))
+            {
+                File.Replace(tmpPath, path, null);
+            }
+            else
+            {
+                File.Move(tmpPath, path);
+            }
         }
 
         /// The player's own save under persistentDataPath if it exists,
         /// otherwise a copy bundled in the build under Resources/Levels
         /// (cached out to persistentDataPath on first use so the Level
-        /// Designer can load and re-save it). Null only if neither exists —
-        /// the caller is expected to handle that rather than crash.
+        /// Designer can load and re-save it). Null if neither exists, or if
+        /// the player's save can't be read/parsed (logged as an error, file
+        /// left untouched) — the caller is expected to handle that rather
+        /// than crash.
         public static LevelData Load(string levelName)
         {
             var path = GetPath(levelName);
             if (File.Exists(path))
             {
-                return JsonUtility.FromJson<LevelData>(File.ReadAllText(path));
+                try
+                {
+                    return JsonUtility.FromJson<LevelData>(File.ReadAllText(path));
+                }
+                catch (Exception e)
+                {
+                    Debug.LogError($"LevelFileIO: save '{levelName}' at {path} is unreadable: {e.Message}");
+                    return null;
+                }
             }
 
             var bundled = Resources.Load<TextAsset>(ResourcesLevelsPath + levelName);

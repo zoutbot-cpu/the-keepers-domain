@@ -13,21 +13,45 @@ namespace KeepersDomain.DebugUI
     /// Timestamps are Time.time (seconds since this Play session started),
     /// which is what actually matters for ordering events relative to each
     /// other — wall-clock time is only in the session-start header.
+    ///
+    /// In a built player the project's Logs folder doesn't exist and
+    /// Application.dataPath is read-only (inside the APK on Android), so the
+    /// log goes to Application.persistentDataPath instead. One writer is
+    /// kept open for the session (AutoFlush, so a crash still leaves the
+    /// tail on disk) rather than reopening the file for every line.
     public static class GameplayLog
     {
-        private static readonly string FilePath = Path.Combine(Application.dataPath, "..", "Logs", "gameplay-debug.log");
+        private const string FileName = "gameplay-debug.log";
+
+        private static StreamWriter _writer;
         private static bool _startedThisSession;
+        private static bool _disabled;
+
+        private static string FilePath =>
+            Application.isEditor
+                ? Path.Combine(Application.dataPath, "..", "Logs", FileName)
+                : Path.Combine(Application.persistentDataPath, FileName);
 
         public static void Write(string message)
         {
+            if (_disabled)
+            {
+                return;
+            }
+
             try
             {
                 EnsureFreshFileForThisSession();
-                File.AppendAllText(FilePath, $"[{Time.time:0.000}] {message}{Environment.NewLine}");
+                _writer.WriteLine($"[{Time.time:0.000}] {message}");
             }
-            catch (IOException)
+            catch (Exception)
             {
-                // Debug convenience only — a locked or missing file shouldn't affect gameplay.
+                // Debug convenience only — a locked, missing, or read-only
+                // file must never throw into gameplay code. Give up for the
+                // rest of the session instead of retrying every line.
+                _disabled = true;
+                _writer?.Dispose();
+                _writer = null;
             }
         }
 
@@ -56,13 +80,22 @@ namespace KeepersDomain.DebugUI
 
             _startedThisSession = true;
 
-            var directory = Path.GetDirectoryName(FilePath);
+            var filePath = FilePath;
+            var directory = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrEmpty(directory))
             {
                 Directory.CreateDirectory(directory);
             }
 
-            File.WriteAllText(FilePath, $"=== Session started {DateTime.Now:yyyy-MM-dd HH:mm:ss} ==={Environment.NewLine}");
+            _writer = new StreamWriter(filePath, append: false) { AutoFlush = true };
+            _writer.WriteLine($"=== Session started {DateTime.Now:yyyy-MM-dd HH:mm:ss} ===");
+            Application.quitting += CloseWriter;
+        }
+
+        private static void CloseWriter()
+        {
+            _writer?.Dispose();
+            _writer = null;
         }
     }
 }

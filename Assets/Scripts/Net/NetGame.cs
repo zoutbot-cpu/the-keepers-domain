@@ -915,15 +915,20 @@ namespace KeepersDomain.Net
             }
         }
 
+        // The two [Dev] terrain painters let the client rewrite any tile on
+        // the map, so the host only honours them in the Editor / a
+        // development build — a release host ignores them outright.
         [Rpc(SendTo.Server)]
         public void RequestSetTerrainRpc(NetCoord coord, byte tileType)
         {
+            if (!Debug.isDebugBuild || !System.Enum.IsDefined(typeof(TileType), (int)tileType)) return;
             if (_grid != null) _grid.DevPaintTerrain(coord.ToVector2Int(), (TileType)tileType);
         }
 
         [Rpc(SendTo.Server)]
         public void RequestSetBedrockRpc(NetCoord coord)
         {
+            if (!Debug.isDebugBuild) return;
             if (_grid != null) _grid.SetBedrock(coord.ToVector2Int());
         }
 

@@ -493,20 +493,24 @@ namespace KeepersDomain.UI
                     : "Tap a minion to grab it");
             }
 
-            GUILayout.Space(8f);
-            // Placeholder terrain painters standing in for the map
-            // generator that doesn't exist yet (see DungeonGrid.
-            // DevPaintTerrain) — not a real player-facing tool. Repaint any
-            // non-room tile freely, including back to plain Floor/Rock.
-            GUILayout.Label("[Dev] Terrain");
-            DrawBuildModeOption(BuildMode.PlaceWater, "[Dev] Place Water");
-            DrawBuildModeOption(BuildMode.PlaceLava, "[Dev] Place Lava");
-            DrawBuildModeOption(BuildMode.PlaceChasm, "[Dev] Place Chasm");
-            DrawBuildModeOption(BuildMode.PlaceHolyGround, "[Dev] Place Holy Ground");
-            DrawBuildModeOption(BuildMode.PlaceUnholyGround, "[Dev] Place Unholy Ground");
-            DrawBuildModeOption(BuildMode.PlaceFloor, "[Dev] Place Floor");
-            DrawBuildModeOption(BuildMode.PlaceRock, "[Dev] Place Rock");
-            DrawBuildModeOption(BuildMode.PlaceBedrock, "[Dev] Place Bedrock");
+            // Placeholder terrain painters (see DungeonGrid.DevPaintTerrain)
+            // — not a real player-facing tool. Repaint any non-room tile
+            // freely, including back to plain Floor/Rock. Editor /
+            // development builds only; a release host also ignores the
+            // client's RPCs for these (NetGame.RequestSetTerrainRpc).
+            if (Debug.isDebugBuild)
+            {
+                GUILayout.Space(8f);
+                GUILayout.Label("[Dev] Terrain");
+                DrawBuildModeOption(BuildMode.PlaceWater, "[Dev] Place Water");
+                DrawBuildModeOption(BuildMode.PlaceLava, "[Dev] Place Lava");
+                DrawBuildModeOption(BuildMode.PlaceChasm, "[Dev] Place Chasm");
+                DrawBuildModeOption(BuildMode.PlaceHolyGround, "[Dev] Place Holy Ground");
+                DrawBuildModeOption(BuildMode.PlaceUnholyGround, "[Dev] Place Unholy Ground");
+                DrawBuildModeOption(BuildMode.PlaceFloor, "[Dev] Place Floor");
+                DrawBuildModeOption(BuildMode.PlaceRock, "[Dev] Place Rock");
+                DrawBuildModeOption(BuildMode.PlaceBedrock, "[Dev] Place Bedrock");
+            }
 
             GUILayout.Space(8f);
             var pauseOn = GUILayout.Toggle(_digQueuePaused, "Pause dig queue");
