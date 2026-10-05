@@ -1,96 +1,27 @@
-using System;
-using System.Collections.Generic;
 using UnityEngine;
 using KeepersDomain.Grid;
 using KeepersDomain.Rooms;
 using KeepersDomain.Creatures;
-using KeepersDomain.DebugUI;
 
 namespace KeepersDomain.Monsters
 {
-    /// What a Bean Counter is currently doing — decided every frame by
-    /// priority (see EvaluateAndAct). Same Happiness-gated shape every
-    /// other creature uses: 100 no personal Lair -> claim/create one, 80
-    /// hungry -> eat Bacon, 40 a Conversion Class exists -> "teach" (walk
-    /// to a bench-adjacent tile, lecture, and — if any Jail is currently
-    /// holding a prisoner — process one), otherwise -> roam.
-    public enum BeanCounterTask
-    {
-        Idle,
-        MovingToLairSpot,
-        MovingToFood,
-        MovingToTeaching,
-        Teaching,
-        MovingToRoam,
-        RoamPausing,
-        MovingToAttackTarget,
-        Attacking,
-        MovingToPortal
-    }
-
-    /// Copied from MazeRattlerAgent (see its own header for the shared
-    /// shape) — same stats/Hunger/Pay/Happiness/attack behavior, differing
-    /// only in its join requirement (a placed Conversion Class rather than
-    /// a placed Jail) and its idle-tier behavior: below Hunger, a Bean
-    /// Counter with a placed Conversion Class walks to a bench-adjacent
-    /// tile and lectures there, periodically pulling a random prisoner out
-    /// of whichever Jail is holding one and tormenting it (see
-    /// ConversionClassManager.TryTormentRandomPrisoner) instead of Maze
-    /// Rattler's purely-flavor pit-tile haunting. Visual is a placeholder
-    /// sickly yellow-green capsule until a real model exists — see
-    /// BeanCounterSpawner.
-    public class BeanCounterAgent : MonoBehaviour, ICombatant
+    /// A preacher, not a brawler. Shared behavior lives in MonsterAgent;
+    /// differs in its join requirement (a placed Conversion Class — see
+    /// BeanCounterSpawner) and its productive tier: with a Conversion Class
+    /// placed, it walks to a bench-adjacent tile and lectures there,
+    /// periodically pulling a random prisoner out of whichever Jail is
+    /// holding one and tormenting it (see
+    /// ConversionClassManager.TryTormentRandomPrisoner); otherwise it roams.
+    /// Visual is a placeholder sickly yellow-green capsule until a real
+    /// model exists — see BeanCounterSpawner.
+    public class BeanCounterAgent : MonsterAgent<BeanCounterAgent>
     {
         /// Key used to look this creature type up in a Portal's recruitable
         /// pool (see Portal.SeedPool/TryTakeFromPool and
         /// BeanCounterSpawner.TryRecruitBeanCounter).
         public const string CreatureKind = "BeanCounter";
 
-        private static int _nextId;
-        private static readonly List<BeanCounterAgent> _all = new List<BeanCounterAgent>();
-
-        /// Every currently-alive Bean Counter — for debug/inspection UI
-        /// only, same convention every other creature type's All uses.
-        public static IReadOnlyList<BeanCounterAgent> All => _all;
-
-        /// How many currently-alive Bean Counters belong to ownerId —
-        /// spawner population caps are per-keeper now (see
-        /// BeanCounterSpawner.MeetsJoinRequirements).
-        public static int CountForOwner(int ownerId)
-        {
-            var count = 0;
-            foreach (var agent in _all)
-            {
-                if (agent.Creature.OwnerId == ownerId)
-                {
-                    count++;
-                }
-            }
-            return count;
-        }
-
-        public int Id { get; private set; }
-        public Vector3 Position => transform.position;
-
-        /// A random name from CreatureNames.BeanCounterNames, picked once at
-        /// spawn (see Awake) and kept for life.
-        public string Name => _name;
-        private string _name;
-
-        public BeanCounterTask Task => _task;
-
-        public Creature Creature => _creature;
-        public Hunger Hunger => _hunger;
-        public Pay Pay => _pay;
-        public Happiness Happiness => _happiness;
-
-        /// Creature-vs-creature combat — see design-doc.md's Combat section
-        /// and GremlinAgent for the shared wiring.
-        public Combatant Combat => _combat;
-        public bool IsImp => false;
-        public string Species => CreatureKind;
-        public string TaskLabel => _task.ToString();
-        private readonly Combatant _combat = new Combatant();
+        public override string Species => CreatureKind;
 
         // A preacher, not a brawler — low HP/Strength/Attackspeed, no
         // design-brief values exist yet, same placeholder-numbers spirit
@@ -120,10 +51,6 @@ namespace KeepersDomain.Monsters
             Armor = 1f / 9f
         };
 
-        [SerializeField] private int _expPerLevelStep = 100;
-
-        [SerializeField] private float _roamPauseDuration = 2f;
-
         [SerializeField] private float _minTeachPauseSeconds = 3f;
         [SerializeField] private float _maxTeachPauseSeconds = 5f;
 
@@ -140,525 +67,64 @@ namespace KeepersDomain.Monsters
         // arrives.
         [SerializeField] private float _tormentDelaySeconds = 4f;
 
-        [SerializeField] private float _attackCheckIntervalSeconds = 8f;
-        [SerializeField] private float _unhappyAttackChance = 0.25f;
-        [SerializeField] private float _angryAttackChance = 0.6f;
-
-        private Creature _creature;
-        private readonly Hunger _hunger = new Hunger();
-        private readonly Pay _pay = new Pay();
-        private readonly Happiness _happiness = new Happiness();
-
-        private DungeonGrid _grid;
-        private LairManager _lairManager;
-        private TavernManager _tavernManager;
         private ConversionClassManager _conversionClassManager;
         private JailManager _jailManager;
-        private TreasuryManager _treasuryManager;
-        private Portal _portal;
-
-        private BeanCounterTask _task = BeanCounterTask.Idle;
-        private string _myLairRoomId;
-        private Vector2Int _myLairCoord;
-        private Vector2Int _lairTargetCoord;
-        private Vector2Int _foodTargetCoord;
         private Vector2Int _teachTargetCoord;
-        private Vector2Int _roamTargetCoord;
-        private Vector2Int _attackTargetCoord;
-        private bool _attackTargetIsRoom;
         private float _teachTimer;
         private float _teachPauseTimer;
         private float _teachPauseDuration;
         private bool _hasTormentedThisSession;
-        private float _roamPauseTimer;
-        private float _attackCheckTimer;
-        private float _attackHitTimer;
 
-        // A*-planned route walking (PlanPathTo / MoveAlongPathThen /
-        // Replan) — shared with every other creature agent, see GridMover.
-        private readonly GridMover _mover = new GridMover();
-
-        private void Awake()
-        {
-            Id = _nextId++;
-            _all.Add(this);
-            _name = $"{CreatureNames.GetRandom(CreatureNames.BeanCounterNames)} #{Id}";
-
-            _creature = new Creature(_baseStats, _growthPerLevel, _expPerLevelStep);
-        }
+        protected override CreatureStatBlock BaseStats => _baseStats;
+        protected override CreatureStatBlock GrowthPerLevel => _growthPerLevel;
+        protected override string[] NamePool => CreatureNames.BeanCounterNames;
+        protected override bool IsDoingPreferredRoomJob => Task == MonsterTask.Teaching;
 
         public void Initialize(DungeonGrid grid, LairManager lairManager, TavernManager tavernManager, ConversionClassManager conversionClassManager, JailManager jailManager, TreasuryManager treasuryManager, Portal portal, int ownerId)
         {
-            _grid = grid;
-            _mover.Initialize(grid, transform, () => _creature.Stats.Movespeed);
-            _lairManager = lairManager;
-            _tavernManager = tavernManager;
             _conversionClassManager = conversionClassManager;
             _jailManager = jailManager;
-            _treasuryManager = treasuryManager;
-            _portal = portal;
-            _creature.SetOwner(ownerId);
-            CreatureHealthRing.Attach(gameObject, _creature, grid);
-            _lairManager.RoomSold += OnLairSold;
-
-            _combat.Initialize(this, this, grid, _creature, _hunger, _happiness,
-                KeepersDomain.Core.KeeperContext.ForOwner(ownerId)?.ThroneCoord ?? grid.WorldToGrid(transform.position),
-                () => _myLairRoomId != null ? _myLairCoord : (Vector2Int?)null,
-                () => SetTask(BeanCounterTask.Idle),
-                isImp: false);
+            InitializeCore(grid, lairManager, tavernManager, treasuryManager, portal, ownerId);
         }
 
-        private void Update()
-        {
-            _creature.Tick(Time.deltaTime);
-            _hunger.Tick(Time.deltaTime);
-            _happiness.Tick(Time.deltaTime, _hunger.IsHungry, _task == BeanCounterTask.Teaching && !_combat.InCombat);
-            if (_pay.Tick(Time.deltaTime))
-            {
-                TryGetPaid();
-            }
-
-            if (_grid == null)
-            {
-                return;
-            }
-
-            // Combat overrides the normal priority list while engaged —
-            // see GremlinAgent / design-doc.md's Combat section.
-            if (_combat.Tick(Time.deltaTime))
-            {
-                return;
-            }
-
-            EvaluateAndAct();
-        }
-
-        private void TryGetPaid()
-        {
-            var wage = Pay.WageFor(_creature.Level);
-            if (_treasuryManager != null && _treasuryManager.TrySpendGold(wage))
-            {
-                _pay.MarkPaid();
-                _happiness.ApplyPaidBonus();
-                GameplayLog.Write(_creature.OwnerId, $"{Name} was paid {wage} gold (Lv{_creature.Level})");
-            }
-            else
-            {
-                _pay.MarkUnpaid();
-                _happiness.ApplyUnpaidPenalty();
-                GameplayLog.Write(_creature.OwnerId, $"{Name} went unpaid ({wage} gold owed) — unhappy");
-            }
-        }
-
-        private void OnDestroy()
-        {
-            _all.Remove(this);
-            _combat.Dispose();
-
-            if (_lairManager != null)
-            {
-                _lairManager.RoomSold -= OnLairSold;
-
-                if (_myLairRoomId != null)
-                {
-                    _lairManager.ReleaseLairTile(_myLairCoord);
-                }
-            }
-        }
-
-        private void OnLairSold(string roomId)
-        {
-            if (roomId == _myLairRoomId)
-            {
-                _myLairRoomId = null;
-            }
-        }
-
-        private void EvaluateAndAct()
-        {
-            if (TickInProgressAttack())
-            {
-                return;
-            }
-
-            var tier = _happiness.Tier;
-            if (tier == HappinessTier.Leaving)
-            {
-                TickLeaving();
-                return;
-            }
-
-            if (_task == BeanCounterTask.MovingToPortal)
-            {
-                SetTask(BeanCounterTask.Idle);
-            }
-
-            // Tier 100: no personal Lair claimed yet.
-            if (_myLairRoomId == null && _task != BeanCounterTask.MovingToLairSpot)
-            {
-                if (TryBeginPursueLair())
-                {
-                    return;
-                }
-            }
-
-            if (_task == BeanCounterTask.MovingToLairSpot)
-            {
-                MoveAlongPathThen(ArriveAtLairSpot);
-                return;
-            }
-
-            // Tier 80: hungry.
-            if (_hunger.IsHungry && _task != BeanCounterTask.MovingToFood)
-            {
-                if (TryBeginPursueFood())
-                {
-                    return;
-                }
-            }
-
-            if (_task == BeanCounterTask.MovingToFood)
-            {
-                MoveAlongPathThen(ArriveAtFood);
-                return;
-            }
-
-            if (Happiness.RefusesTasks(tier))
-            {
-                if (Happiness.IsHostile(tier))
-                {
-                    TickHostile(forced: false, tier);
-                }
-                else
-                {
-                    SetTask(BeanCounterTask.Idle);
-                }
-                return;
-            }
-
-            // Tier 40 (Teach), then plain roam as the last fallback.
-            if (_task == BeanCounterTask.Idle)
-            {
-                TryBeginTeachOrRoam();
-            }
-
-            switch (_task)
-            {
-                case BeanCounterTask.MovingToTeaching:
-                    MoveAlongPathThen(ArriveAtTeaching);
-                    break;
-                case BeanCounterTask.Teaching:
-                    TickTeaching();
-                    break;
-                case BeanCounterTask.MovingToRoam:
-                    MoveAlongPathThen(ArriveAtRoam);
-                    break;
-                case BeanCounterTask.RoamPausing:
-                    TickRoamPause();
-                    break;
-            }
-        }
-
-        private void TickLeaving()
-        {
-            if (_task == BeanCounterTask.MovingToPortal)
-            {
-                MoveAlongPathThen(ArriveAtPortal);
-                return;
-            }
-
-            if (TryBeginPursuePortal())
-            {
-                return;
-            }
-
-            TickHostile(forced: true, HappinessTier.Angry);
-        }
-
-        private bool TryBeginPursuePortal()
-        {
-            if (_portal == null || !PlanPathTo(_portal.Coord, _grid.GridToWorld(_portal.Coord)))
-            {
-                return false;
-            }
-
-            SetTask(BeanCounterTask.MovingToPortal);
-            return true;
-        }
-
-        private void ArriveAtPortal()
-        {
-            GameplayLog.Write(_creature.OwnerId, $"{Name} walked up the Portal stairs and left the domain for good");
-            Destroy(gameObject);
-        }
-
-        private bool TickInProgressAttack()
-        {
-            if (_task == BeanCounterTask.MovingToAttackTarget)
-            {
-                MoveAlongPathThen(ArriveAtAttackTarget);
-                return true;
-            }
-
-            if (_task == BeanCounterTask.Attacking)
-            {
-                TickAttacking();
-                return true;
-            }
-
-            return false;
-        }
-
-        private void TickHostile(bool forced, HappinessTier tier)
-        {
-            _attackCheckTimer += Time.deltaTime;
-            if (_attackCheckTimer < _attackCheckIntervalSeconds)
-            {
-                return;
-            }
-
-            _attackCheckTimer = 0f;
-
-            if (!forced && UnityEngine.Random.value > AttackChanceFor(tier))
-            {
-                return;
-            }
-
-            TryBeginAttack();
-        }
-
-        private float AttackChanceFor(HappinessTier tier)
-        {
-            return tier == HappinessTier.Angry ? _angryAttackChance : _unhappyAttackChance;
-        }
-
-        private bool TryBeginAttack()
-        {
-            var fromCoord = _grid.WorldToGrid(transform.position);
-            var tryWallFirst = UnityEngine.Random.value < 0.5f;
-
-            if (tryWallFirst)
-            {
-                return TryBeginAttackWall(fromCoord) || TryBeginAttackRoom(fromCoord);
-            }
-
-            return TryBeginAttackRoom(fromCoord) || TryBeginAttackWall(fromCoord);
-        }
-
-        private bool TryBeginAttackWall(Vector2Int fromCoord)
-        {
-            var distances = _grid.GetReachableFloorDistances(fromCoord);
-            var candidates = new List<Vector2Int>();
-            foreach (var floorCoord in distances.Keys)
-            {
-                foreach (var direction in GridDirections.Cardinal)
-                {
-                    var neighbor = floorCoord + direction;
-                    if (_grid.InBounds(neighbor) && _grid.GetTile(neighbor).Type == TileType.Rock)
-                    {
-                        candidates.Add(neighbor);
-                    }
-                }
-            }
-
-            if (!TryPickRandomCoord(candidates, out var wallCoord) || !TryFindApproachCoord(wallCoord, distances, out var approachCoord) || !PlanPathTo(approachCoord, _grid.GridToWorld(approachCoord)))
-            {
-                return false;
-            }
-
-            _attackTargetCoord = wallCoord;
-            _attackTargetIsRoom = false;
-            SetTask(BeanCounterTask.MovingToAttackTarget);
-            return true;
-        }
-
-        private bool TryBeginAttackRoom(Vector2Int fromCoord)
-        {
-            var distances = _grid.GetReachableFloorDistances(fromCoord);
-            var candidates = new List<Vector2Int>();
-            foreach (var coord in distances.Keys)
-            {
-                if (_grid.GetTile(coord).HasRoom)
-                {
-                    candidates.Add(coord);
-                }
-            }
-
-            if (!TryPickRandomCoord(candidates, out var roomCoord) || !PlanPathTo(roomCoord, _grid.GridToWorld(roomCoord)))
-            {
-                return false;
-            }
-
-            _attackTargetCoord = roomCoord;
-            _attackTargetIsRoom = true;
-            SetTask(BeanCounterTask.MovingToAttackTarget);
-            return true;
-        }
-
-        private static bool TryFindApproachCoord(Vector2Int wallCoord, Dictionary<Vector2Int, int> reachableFloor, out Vector2Int approachCoord)
-        {
-            foreach (var direction in GridDirections.Cardinal)
-            {
-                var neighbor = wallCoord + direction;
-                if (reachableFloor.ContainsKey(neighbor))
-                {
-                    approachCoord = neighbor;
-                    return true;
-                }
-            }
-
-            approachCoord = default;
-            return false;
-        }
-
-        private void ArriveAtAttackTarget()
-        {
-            SetTask(BeanCounterTask.Attacking);
-            _attackHitTimer = 0f;
-        }
-
-        private float AttackHitInterval => 1f / _creature.Stats.Attackspeed;
-        private int AttackHitDamage => Mathf.RoundToInt(_creature.Stats.Strength);
-
-        private void TickAttacking()
-        {
-            if (_attackTargetIsRoom)
-            {
-                TickAttackingRoom();
-            }
-            else
-            {
-                TickAttackingWall();
-            }
-        }
-
-        private void TickAttackingRoom()
-        {
-            if (!_grid.GetTile(_attackTargetCoord).HasRoom)
-            {
-                SetTask(BeanCounterTask.Idle);
-                return;
-            }
-
-            _attackHitTimer += Time.deltaTime;
-            if (_attackHitTimer < AttackHitInterval)
-            {
-                return;
-            }
-
-            _attackHitTimer -= AttackHitInterval;
-            var destroyed = _grid.ApplyRoomDamage(_attackTargetCoord, AttackHitDamage);
-            if (destroyed)
-            {
-                KeepersDomain.Core.KeeperContext.TrySellRoomAt(_grid, _attackTargetCoord);
-                GameplayLog.Write(_creature.OwnerId, $"{Name} ({_happiness.Tier}) destroyed a room at ({_attackTargetCoord.x},{_attackTargetCoord.y})");
-                SetTask(BeanCounterTask.Idle);
-            }
-        }
-
-        private void TickAttackingWall()
-        {
-            if (_grid.GetTile(_attackTargetCoord).Type != TileType.Rock)
-            {
-                SetTask(BeanCounterTask.Idle);
-                return;
-            }
-
-            _attackHitTimer += Time.deltaTime;
-            if (_attackHitTimer < AttackHitInterval)
-            {
-                return;
-            }
-
-            _attackHitTimer -= AttackHitInterval;
-            var destroyed = _grid.ApplyDigDamage(_attackTargetCoord, AttackHitDamage, out _, out _, _creature.OwnerId);
-            if (destroyed)
-            {
-                GameplayLog.Write(_creature.OwnerId, $"{Name} ({_happiness.Tier}) smashed a wall at ({_attackTargetCoord.x},{_attackTargetCoord.y})");
-                SetTask(BeanCounterTask.Idle);
-            }
-        }
-
-        private bool TryBeginPursueLair()
-        {
-            var fromCoord = _grid.WorldToGrid(transform.position);
-
-            if (_lairManager.TryFindNearestUnclaimedLairTile(fromCoord, out var existingCoord) && PlanPathTo(existingCoord, _grid.GridToWorld(existingCoord)))
-            {
-                _lairTargetCoord = existingCoord;
-                SetTask(BeanCounterTask.MovingToLairSpot);
-                return true;
-            }
-
-            if (TryFindRandomLairSpot(out var newCoord) && PlanPathTo(newCoord, _grid.GridToWorld(newCoord)))
-            {
-                _lairTargetCoord = newCoord;
-                SetTask(BeanCounterTask.MovingToLairSpot);
-                return true;
-            }
-
-            return false;
-        }
-
-        private void ArriveAtLairSpot()
-        {
-            if (!_grid.GetTile(_lairTargetCoord).HasRoom)
-            {
-                _lairManager.TryPlaceLair(_lairTargetCoord, _lairTargetCoord);
-            }
-
-            if (_lairManager.TryClaimLairTile(_lairTargetCoord))
-            {
-                _myLairRoomId = _grid.GetTile(_lairTargetCoord).RoomId;
-                _myLairCoord = _lairTargetCoord;
-                GameplayLog.Write(_creature.OwnerId, $"{Name} claimed a Lair tile at ({_lairTargetCoord.x},{_lairTargetCoord.y})");
-            }
-
-            SetTask(BeanCounterTask.Idle);
-        }
-
-        private bool TryBeginPursueFood()
-        {
-            if (_tavernManager == null || !_tavernManager.TryFindNearestTileWithBacon(_grid.WorldToGrid(transform.position), out var coord) || !PlanPathTo(coord, _grid.GridToWorld(coord)))
-            {
-                return false;
-            }
-
-            _foodTargetCoord = coord;
-            SetTask(BeanCounterTask.MovingToFood);
-            return true;
-        }
-
-        private void ArriveAtFood()
-        {
-            if (_tavernManager.TryEatBacon(_foodTargetCoord, TavernManager.MealBaconAmount))
-            {
-                _hunger.Eat();
-            }
-
-            SetTask(BeanCounterTask.Idle);
-        }
-
-        private void TryBeginTeachOrRoam()
+        /// Teach at a Conversion Class bench if one is reachable, otherwise
+        /// roam.
+        protected override void BeginProductiveTask()
         {
             if (_conversionClassManager != null
                 && _conversionClassManager.TryFindNearestBenchTile(_grid.WorldToGrid(transform.position), out var benchCoord)
                 && PlanPathTo(benchCoord, _grid.GridToWorld(benchCoord)))
             {
                 _teachTargetCoord = benchCoord;
-                SetTask(BeanCounterTask.MovingToTeaching);
+                SetTask(MonsterTask.MovingToTeaching);
                 return;
             }
 
             TryBeginRoam();
         }
 
+        protected override void TickTask(MonsterTask task)
+        {
+            switch (task)
+            {
+                case MonsterTask.MovingToTeaching:
+                    MoveAlongPathThen(ArriveAtTeaching);
+                    break;
+                case MonsterTask.Teaching:
+                    TickTeaching();
+                    break;
+                default:
+                    base.TickTask(task);
+                    break;
+            }
+        }
+
         private void ArriveAtTeaching()
         {
-            SetTask(BeanCounterTask.Teaching);
+            SetTask(MonsterTask.Teaching);
             _teachTimer = 0f;
             _teachPauseTimer = 0f;
-            _teachPauseDuration = UnityEngine.Random.Range(_minTeachPauseSeconds, _maxTeachPauseSeconds);
+            _teachPauseDuration = Random.Range(_minTeachPauseSeconds, _maxTeachPauseSeconds);
             _hasTormentedThisSession = false;
         }
 
@@ -696,123 +162,11 @@ namespace KeepersDomain.Monsters
                 && PlanPathTo(coord, _grid.GridToWorld(coord)))
             {
                 _teachTargetCoord = coord;
-                SetTask(BeanCounterTask.MovingToTeaching);
+                SetTask(MonsterTask.MovingToTeaching);
                 return;
             }
 
-            SetTask(BeanCounterTask.Idle);
-        }
-
-        private void TryBeginRoam()
-        {
-            var fromCoord = _grid.WorldToGrid(transform.position);
-            var distances = _grid.GetReachableFloorDistances(fromCoord);
-            if (!TryPickRandomCoord(distances.Keys, out var coord) || !PlanPathTo(coord, _grid.GridToWorld(coord)))
-            {
-                return;
-            }
-
-            _roamTargetCoord = coord;
-            SetTask(BeanCounterTask.MovingToRoam);
-        }
-
-        private void ArriveAtRoam()
-        {
-            SetTask(BeanCounterTask.RoamPausing);
-            _roamPauseTimer = 0f;
-        }
-
-        private void TickRoamPause()
-        {
-            _roamPauseTimer += Time.deltaTime;
-            if (_roamPauseTimer >= _roamPauseDuration)
-            {
-                SetTask(BeanCounterTask.Idle);
-            }
-        }
-
-        private bool TryFindRandomLairSpot(out Vector2Int coord)
-        {
-            var fromCoord = _grid.WorldToGrid(transform.position);
-            var distances = _grid.GetReachableFloorDistances(fromCoord);
-
-            var candidates = new List<Vector2Int>();
-            foreach (var candidate in distances.Keys)
-            {
-                if (_grid.CanBuildRoomOn(candidate, _creature.OwnerId))
-                {
-                    candidates.Add(candidate);
-                }
-            }
-
-            return TryPickRandomCoord(candidates, out coord);
-        }
-
-        private static bool TryPickRandomCoord(ICollection<Vector2Int> candidates, out Vector2Int coord)
-        {
-            if (candidates.Count == 0)
-            {
-                coord = default;
-                return false;
-            }
-
-            var index = UnityEngine.Random.Range(0, candidates.Count);
-            var i = 0;
-            foreach (var candidate in candidates)
-            {
-                if (i == index)
-                {
-                    coord = candidate;
-                    return true;
-                }
-                i++;
-            }
-
-            coord = default;
-            return false;
-        }
-
-        private void SetTask(BeanCounterTask newTask)
-        {
-            _task = newTask;
-        }
-
-        /// Re-plans this Bean Counter's route to whatever it was last
-        /// walking toward, from wherever it is right now — called by
-        /// MinionGrabController after the player's Grab hand drops it
-        /// somewhere else mid-walk. Same shape as every other creature
-        /// type's own ReplanPathFromCurrentPosition.
-        public void ReplanPathFromCurrentPosition()
-        {
-            _combat.OnExternalReposition();
-
-            if (!IsMovingTask(_task))
-            {
-                return;
-            }
-
-            if (_mover.Replan())
-            {
-                return;
-            }
-
-            SetTask(BeanCounterTask.Idle);
-        }
-
-        private static bool IsMovingTask(BeanCounterTask task)
-        {
-            return task is BeanCounterTask.MovingToLairSpot or BeanCounterTask.MovingToFood or BeanCounterTask.MovingToTeaching
-                or BeanCounterTask.MovingToRoam or BeanCounterTask.MovingToAttackTarget or BeanCounterTask.MovingToPortal;
-        }
-
-        private bool PlanPathTo(Vector2Int goalCoord, Vector3 finalWorldPos)
-        {
-            return _mover.PlanPathTo(goalCoord, finalWorldPos);
-        }
-
-        private void MoveAlongPathThen(Action onArrive)
-        {
-            _mover.MoveAlongPathThen(onArrive);
+            SetTask(MonsterTask.Idle);
         }
     }
 }

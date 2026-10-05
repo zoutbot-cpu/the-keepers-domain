@@ -1,7 +1,7 @@
 namespace KeepersDomain.Creatures
 {
-    /// A coarse "what is this creature doing" bucket — the per-species task
-    /// enums (GremlinTask, ImplingState, ...) all collapse into this so a
+    /// A coarse "what is this creature doing" bucket — the task
+    /// enums (MonsterTask, ImplingState, ...) all collapse into this so a
     /// networked client's roster can show *something* without replicating
     /// six different enums. See CreatureActivityMap / CreatureNetView.
     public enum CreatureActivity : byte
