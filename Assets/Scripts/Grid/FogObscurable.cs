@@ -18,7 +18,7 @@ namespace KeepersDomain.Grid
     /// Marks a non-grid object that must be hidden while the tile under it
     /// has no vision — FogOfWar toggles every one of these each recompute
     /// (see FogOfWar.RefreshObscurables). Completely inert when no FogOfWar
-    /// exists (the networked client, the Level Designer): nothing ever
+    /// exists (the Level Designer): nothing ever
     /// iterates the list, so the renderers are simply left on.
     ///
     /// The grid's own tile visuals and its per-tile decoration children are
@@ -54,6 +54,16 @@ namespace KeepersDomain.Grid
         public void Refresh()
         {
             _renderers = GetComponentsInChildren<Renderer>(includeInactive: true);
+
+            // A look rebuilt while hidden (e.g. a client ghost's species
+            // replicating in) must come back hidden too.
+            if (!_shown)
+            {
+                for (int i = 0; i < _renderers.Length; i++)
+                {
+                    _renderers[i].enabled = false;
+                }
+            }
         }
 
         public void SetShown(bool shown)

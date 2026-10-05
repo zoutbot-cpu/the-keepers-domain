@@ -49,8 +49,7 @@ namespace KeepersDomain.UI
         private TileInteractionController _interactionController;
         private LocalPlayerController _localPlayer;
 
-        // Local-keeper fog of war (offline / host); null on the networked
-        // client, where the Settings toggle for it is hidden.
+        // Local-keeper fog of war (offline, host, and networked client).
         private FogOfWar _fog;
 
         // Every mutating button press routes through here -- LocalKeeperActions
@@ -952,7 +951,10 @@ namespace KeepersDomain.UI
             }
             GUILayout.Label("Squashes every wall to half height — bottom half kept, top pressed down. Also lowers Jail pit rims.");
 
-            if (_fog != null)
+            // Turning fog off in an online match would be a free map hack,
+            // so the toggle is offline-only outside the Editor / dev builds.
+            var onlineMatch = _networked || CreatureNetView.HostActive;
+            if (_fog != null && (!onlineMatch || Debug.isDebugBuild))
             {
                 GUILayout.Space(6f);
 

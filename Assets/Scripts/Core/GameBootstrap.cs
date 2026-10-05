@@ -746,13 +746,33 @@ namespace KeepersDomain.Core
             var clientContexts = new[] { clientCtx };
             var netActions = new NetworkedKeeperActions();
 
+            // Fog of war for the client's keeper. The client runs no
+            // simulation, so vision comes from its replicated creature
+            // ghosts rather than the (host-only) agent rosters, and it never
+            // clears queued-job flags itself — those are the host's state.
+            // Throne coord isn't known yet (KeeperNetState replicates it
+            // later); claimed-territory vision covers the Throne Room anyway.
+            var fogOfWar = CreateComponent<FogOfWar>("FogOfWar");
+            fogOfWar.Initialize(grid, clientCtx.OwnerId, throneCoord: null, 0,
+                gatherVision: (ownerId, positions) =>
+                {
+                    foreach (var view in CreatureNetView.All)
+                    {
+                        if (view != null && view.OwnerId == ownerId)
+                        {
+                            positions.Add(view.Position);
+                        }
+                    }
+                },
+                clearStaleQueuedJobs: false);
+
             // Grab isn't wired for netcode yet -- pass null (every
             // _minionGrabController call in the controller is null-safe).
             var interactionController = CreateComponent<TileInteractionController>("TileInteractionController");
             interactionController.Initialize(camera, grid, clientContexts, null, 0, netActions);
 
             var bottomMenuBar = CreateComponent<BottomMenuBar>("BottomMenuBar");
-            bottomMenuBar.Initialize(grid, clientContexts, interactionController, null, 0, netActions, networked: true);
+            bottomMenuBar.Initialize(grid, clientContexts, interactionController, null, 0, netActions, networked: true, fog: fogOfWar);
         }
 
         private static void BuildWorld(LevelData data = null)
@@ -1014,9 +1034,9 @@ namespace KeepersDomain.Core
             // Local-keeper fog of war. Every path through BuildWorld gets one
             // — offline "Start Game", "Skirmish (generated)", "Continue", and
             // the multiplayer host (BuildHostGame calls BuildWorld). The
-            // networked client (BuildClientWorld) and the Level Designer
-            // never create one, so their DungeonGrid.Fog stays null and the
-            // whole map renders live. Seeds the local Throne Room's footprint
+            // networked client builds its own in BuildClientWorld; the Level
+            // Designer never creates one, so its DungeonGrid.Fog stays null
+            // and the whole map renders live. Seeds the local Throne Room's footprint
             // as explored so it shows on the map from the start.
             var fogOfWar = CreateComponent<FogOfWar>("FogOfWar");
             fogOfWar.Initialize(grid, localPlayerIndex, contexts[localPlayerIndex].ThroneCoord, ThroneRoomHalfSize);

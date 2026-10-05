@@ -132,7 +132,7 @@ namespace KeepersDomain.Rooms
             // until its tile has been seen (Explored/Visible). The local
             // keeper's own Throne Room is seeded Explored, so theirs shows
             // from the start; a rival's stays hidden until scouted. Inert
-            // when no FogOfWar exists (client / Level Designer). The health
+            // when no FogOfWar exists (the Level Designer). The health
             // ring is parented to the grid, not here — it's fogged via
             // CreatureHealthRing.IsWorldPointVisibleForRing instead.
             FogObscurable.Attach(gameObject, FogObscurableKind.Structure);

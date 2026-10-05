@@ -897,12 +897,9 @@ namespace KeepersDomain.Input
             }
         }
 
-        /// Populates InspectedDescription with whatever's at coord — an
-        /// impling if one's standing there, otherwise the tile itself. The
-        /// wall selection outline (see DungeonGrid.SetSelectedWall) is
-        /// driven independently now, straight from hover — see
-        /// UpdateWallHoverOutline — so this no longer touches it at all.
-        private void Inspect(Vector2Int coord)
+        /// Fills _inspectedDescription for a creature standing on coord, if
+        /// any — false if the tile holds none.
+        private bool TryInspectCreature(Vector2Int coord)
         {
             foreach (var impling in ImplingAgent.All)
             {
@@ -912,7 +909,7 @@ namespace KeepersDomain.Input
                         + $"Owner: Player {impling.Creature.OwnerId + 1}\n"
                         + $"{impling.Creature.DescribeStats()}\n"
                         + $"Carrying — Gold: {impling.Inventory.Gold}  Mana Crystals: {impling.Inventory.ManaCrystals}  Slimes: {impling.Inventory.Slimes}";
-                    return;
+                    return true;
                 }
             }
 
@@ -921,7 +918,7 @@ namespace KeepersDomain.Input
                 if (_grid.WorldToGrid(gremlin.Position) == coord)
                 {
                     _inspectedDescription = DescribeMonster(gremlin.Name, gremlin.Task.ToString(), coord, gremlin.Creature, gremlin.Hunger, gremlin.Pay, gremlin.Happiness);
-                    return;
+                    return true;
                 }
             }
 
@@ -930,7 +927,7 @@ namespace KeepersDomain.Input
                 if (_grid.WorldToGrid(warlock.Position) == coord)
                 {
                     _inspectedDescription = DescribeMonster(warlock.Name, warlock.Task.ToString(), coord, warlock.Creature, warlock.Hunger, warlock.Pay, warlock.Happiness);
-                    return;
+                    return true;
                 }
             }
 
@@ -939,7 +936,7 @@ namespace KeepersDomain.Input
                 if (_grid.WorldToGrid(mazeRattler.Position) == coord)
                 {
                     _inspectedDescription = DescribeMonster(mazeRattler.Name, mazeRattler.Task.ToString(), coord, mazeRattler.Creature, mazeRattler.Hunger, mazeRattler.Pay, mazeRattler.Happiness);
-                    return;
+                    return true;
                 }
             }
 
@@ -948,7 +945,7 @@ namespace KeepersDomain.Input
                 if (_grid.WorldToGrid(beanCounter.Position) == coord)
                 {
                     _inspectedDescription = DescribeMonster(beanCounter.Name, beanCounter.Task.ToString(), coord, beanCounter.Creature, beanCounter.Hunger, beanCounter.Pay, beanCounter.Happiness);
-                    return;
+                    return true;
                 }
             }
 
@@ -957,7 +954,7 @@ namespace KeepersDomain.Input
                 if (_grid.WorldToGrid(elf.Position) == coord)
                 {
                     _inspectedDescription = DescribeMonster(elf.Name, elf.Task.ToString(), coord, elf.Creature, elf.Hunger, elf.Pay, elf.Happiness);
-                    return;
+                    return true;
                 }
             }
 
@@ -974,8 +971,33 @@ namespace KeepersDomain.Input
                         + $"Level {view.Level}\n"
                         + $"HP: {view.Hp:0}/{view.MaxHp:0}"
                         + (view.IsDowned ? "\nKnocked out" : "");
-                    return;
+                    return true;
                 }
+            }
+
+            return false;
+        }
+
+        /// Populates InspectedDescription with whatever's at coord — an
+        /// impling if one's standing there, otherwise the tile itself. The
+        /// wall selection outline (see DungeonGrid.SetSelectedWall) is
+        /// driven independently now, straight from hover — see
+        /// UpdateWallHoverOutline — so this no longer touches it at all.
+        private void Inspect(Vector2Int coord)
+        {
+            // Fog of war: an unexplored tile reads as plain rock, and a
+            // creature is only inspectable where a minion can see it right
+            // now — otherwise inspecting would reveal what the fog hides.
+            var fogView = _grid.Fog != null ? _grid.Fog.ViewAt(coord) : FogView.Visible;
+            if (fogView == FogView.Unseen)
+            {
+                _inspectedDescription = $"Unexplored rock ({coord.x},{coord.y})";
+                return;
+            }
+
+            if (fogView == FogView.Visible && TryInspectCreature(coord))
+            {
+                return;
             }
 
             var tile = _grid.GetTile(coord);

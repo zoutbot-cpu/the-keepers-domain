@@ -68,10 +68,11 @@ namespace KeepersDomain.Creatures
             body.transform.position = groundPos + Vector3.up * LookFor(kind).Height;
 
             // Fog of war — hide this creature while its tile has no live
-            // vision (offline + host only; inert when no FogOfWar exists).
-            // Covers the offline spawn path and the host's CreatureNetView
-            // body, both of which route through here; the client ghost
-            // (ApplyLook only) and Level Designer markers do not.
+            // vision (inert when no FogOfWar exists). Covers the offline
+            // spawn path and the host's CreatureNetView body, both of which
+            // route through here; the client ghost (ApplyLook only) attaches
+            // its own in CreatureNetView.ClientInit, and Level Designer
+            // markers get none.
             FogObscurable.Attach(body, FogObscurableKind.Creature);
         }
 

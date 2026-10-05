@@ -21,17 +21,21 @@ namespace KeepersDomain.Grid
         Visible
     }
 
-    /// Per-tile fog of war for the local keeper (owner 0). Created by
-    /// GameBootstrap.BuildWorld, so it covers offline play, skirmish,
-    /// Continue and the multiplayer host — every path that routes through
-    /// BuildWorld. The networked client (BuildClientWorld) and the Level
-    /// Designer never create one, so DungeonGrid.Fog stays null there and
-    /// every tile reads as Visible.
+    /// Per-tile fog of war for the local keeper. Created by
+    /// GameBootstrap.BuildWorld (offline play, skirmish, Continue and the
+    /// multiplayer host, all for owner 0) and by BuildClientWorld for the
+    /// networked client (owner 1). The Level Designer never creates one, so
+    /// DungeonGrid.Fog stays null there and every tile reads as Visible.
     ///
-    /// Vision comes only from the keeper's own live minions (a vision spell
-    /// is a later feature). The local Throne Room is seeded Explored so it
-    /// shows on the map from the start, but it never self-grants Visible —
-    /// it "stays static" until a minion walks up to it.
+    /// Vision comes from the keeper's own minions (a vision spell is a later
+    /// feature) and its claimed territory. On the host/offline the minions
+    /// are the live species agents; the client has none of those (the sim
+    /// runs host-side), so it passes a gatherer that reads its replicated
+    /// CreatureNetView ghosts instead. The client's fog is visual only —
+    /// the host still replicates the whole map, so a modified client could
+    /// see through it. The local Throne Room is seeded Explored when its
+    /// coord is known up front (host/offline), but it never self-grants
+    /// Visible — it "stays static" until a minion walks up to it.
     ///
     /// All grid-tile rendering is done inside DungeonGrid.RefreshVisual,
     /// which calls ViewAt; objects outside the grid (creatures, the Throne /
@@ -61,8 +65,18 @@ namespace KeepersDomain.Grid
         private FogView[,] _view;
         private bool[,] _visibleScratch;
 
-        private Vector2Int _throneCoord;
+        private Vector2Int? _throneCoord;
         private int _throneHalfSize;
+
+        // Fills the given list with the world positions of ownerId's
+        // minions. Null = read the live species agent rosters (host/offline).
+        private Action<int, List<Vector3>> _gatherVision;
+        private readonly List<Vector3> _visionPositions = new List<Vector3>();
+
+        // Off on the client: its queued-job flags are the host's replicated
+        // state, so clearing one locally would only desync the display (the
+        // host already validates every dig/build request against real tiles).
+        private bool _clearStaleQueuedJobs = true;
 
         private float _timer;
         private bool _enabled = true;
@@ -108,11 +122,18 @@ namespace KeepersDomain.Grid
             }
         }
 
-        public void Initialize(DungeonGrid grid, int localOwnerId, Vector2Int throneCoord, int throneRoomHalfSize)
+        /// throneCoord: the local Throne Room to seed as Explored, or null if
+        /// it isn't known yet (the client — claimed-territory vision covers
+        /// it once the grid replicates). gatherVision / clearStaleQueuedJobs:
+        /// see their fields; defaults are the host/offline behavior.
+        public void Initialize(DungeonGrid grid, int localOwnerId, Vector2Int? throneCoord, int throneRoomHalfSize,
+            Action<int, List<Vector3>> gatherVision = null, bool clearStaleQueuedJobs = true)
         {
             _grid = grid;
             _localOwnerId = localOwnerId;
             _throneCoord = throneCoord;
+            _gatherVision = gatherVision;
+            _clearStaleQueuedJobs = clearStaleQueuedJobs;
             _throneHalfSize = Mathf.Max(0, throneRoomHalfSize);
             _width = grid.Width;
             _height = grid.Height;
@@ -164,11 +185,16 @@ namespace KeepersDomain.Grid
 
         private void SeedThroneRoom()
         {
+            if (_throneCoord is not Vector2Int throneCoord)
+            {
+                return;
+            }
+
             for (int dx = -_throneHalfSize; dx <= _throneHalfSize; dx++)
             {
                 for (int dy = -_throneHalfSize; dy <= _throneHalfSize; dy++)
                 {
-                    var coord = _throneCoord + new Vector2Int(dx, dy);
+                    var coord = throneCoord + new Vector2Int(dx, dy);
                     if (InBounds(coord) && _view[coord.x, coord.y] == FogView.Unseen)
                     {
                         _view[coord.x, coord.y] = FogView.Explored;
@@ -232,7 +258,7 @@ namespace KeepersDomain.Grid
                     // a dig / reinforce / build on it while it was fogged and
                     // it turns out not to be the right tile type (already dug,
                     // now a room, ...), drop that stale job now.
-                    if (next == FogView.Visible)
+                    if (next == FogView.Visible && _clearStaleQueuedJobs)
                     {
                         _grid.ClearStaleQueuedJobs(coord);
                     }
@@ -312,6 +338,18 @@ namespace KeepersDomain.Grid
         private void GatherMinionTiles()
         {
             _minionTiles.Clear();
+
+            if (_gatherVision != null)
+            {
+                _visionPositions.Clear();
+                _gatherVision(_localOwnerId, _visionPositions);
+                for (int i = 0; i < _visionPositions.Count; i++)
+                {
+                    AddMinionTile(_grid.WorldToGrid(_visionPositions[i]));
+                }
+                return;
+            }
+
             AddAgents(ImplingAgent.All);
             AddAgents(GremlinAgent.All);
             AddAgents(WarlockAgent.All);
@@ -330,11 +368,15 @@ namespace KeepersDomain.Grid
                     continue;
                 }
 
-                var coord = _grid.WorldToGrid(agent.transform.position);
-                if (InBounds(coord) && !_minionTiles.Contains(coord))
-                {
-                    _minionTiles.Add(coord);
-                }
+                AddMinionTile(_grid.WorldToGrid(agent.transform.position));
+            }
+        }
+
+        private void AddMinionTile(Vector2Int coord)
+        {
+            if (InBounds(coord) && !_minionTiles.Contains(coord))
+            {
+                _minionTiles.Add(coord);
             }
         }
 

@@ -248,8 +248,8 @@ namespace KeepersDomain.Grid
         public int Height => _height;
         public float CellSize => _cellSize;
 
-        /// Local-keeper fog of war, or null when there is none (the networked
-        /// client, the Level Designer). Set by FogOfWar.Initialize; when
+        /// Local-keeper fog of war, or null when there is none (the Level
+        /// Designer). Set by FogOfWar.Initialize; when
         /// non-null, RefreshVisual renders an Unseen tile as plain Rock and
         /// dims an Explored one. See FogOfWar.
         public FogOfWar Fog { get; set; }

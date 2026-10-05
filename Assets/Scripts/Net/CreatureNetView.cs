@@ -166,7 +166,16 @@ namespace KeepersDomain.Net
 
             _clientReady = true;
             CreatureFactory.ApplyLook(gameObject, _species.Value);
-            _species.OnValueChanged += (_, kind) => CreatureFactory.ApplyLook(gameObject, kind);
+
+            // Fog of war — hide this ghost while its tile has no live vision
+            // for the client's keeper (the host body gets the same component
+            // in CreatureFactory.ShapeBody, which the client never runs).
+            var obscurable = FogObscurable.Attach(gameObject, FogObscurableKind.Creature);
+            _species.OnValueChanged += (_, kind) =>
+            {
+                CreatureFactory.ApplyLook(gameObject, kind);
+                obscurable.Refresh();
+            };
 
             CreatureHealthRing.Attach(gameObject,
                 () => _maxHp.Value > 0f ? Mathf.Clamp01(_hp.Value / _maxHp.Value) : 0f,
