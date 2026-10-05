@@ -78,13 +78,6 @@ namespace KeepersDomain.Rooms
         private const float BroccoliFloretSpread = 0.16f;
         private const float BroccoliReliefOffset = 0.05f;
 
-        [SerializeField] private Color _previewValidColor = new Color(0.35f, 0.95f, 0.4f);
-        [SerializeField] private Color _previewInvalidColor = new Color(0.95f, 0.25f, 0.25f);
-        private const float PreviewClearance = 0.02f;
-        private const float PreviewHeight = 0.08f;
-        private const float PreviewFootprintScale = 0.8f;
-        private const float RockTopY = 0.5f;
-
         // Torment outcome tuning — all placeholder, unbalanced, per the
         // brief's own examples ("gremlins hate it and join to end their
         // suffering" -> high; an intelligent Warlock resists -> low).
@@ -119,7 +112,7 @@ namespace KeepersDomain.Rooms
         private readonly Dictionary<string, GameObject> _wallBoardVisuals = new Dictionary<string, GameObject>();
         private readonly Dictionary<string, List<Vector2Int>> _blockedTiles = new Dictionary<string, List<Vector2Int>>();
         private readonly Dictionary<string, List<Vector2Int>> _benchAdjacentTiles = new Dictionary<string, List<Vector2Int>>();
-        private readonly List<GameObject> _previewMarkers = new List<GameObject>();
+        private readonly RoomPlacementPreview _preview = new RoomPlacementPreview("ConversionClass");
 
         public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager, JailManager jailManager, GremlinSpawner gremlinSpawner, WarlockSpawner warlockSpawner, MazeRattlerSpawner mazeRattlerSpawner, ElfSpawner elfSpawner, int ownerId = 0)
         {
@@ -180,8 +173,8 @@ namespace KeepersDomain.Rooms
 
         private bool TryPlaceConversionClassInternal(Vector2Int startCoord, Vector2Int endCoord, bool chargeGold)
         {
-            var footprint = GetFootprint(startCoord, endCoord, out var newWidth, out var newHeight, out var newOrigin);
-            if (!MeetsMinimumSize(newWidth, newHeight) || !CanPlaceFootprint(footprint))
+            var footprint = RoomFootprint.Rect(startCoord, endCoord, out var newWidth, out var newHeight, out var newOrigin);
+            if (!MeetsMinimumSize(newWidth, newHeight) || !RoomFootprint.CanPlace(_grid, footprint, _ownerId))
             {
                 return false;
             }
@@ -196,7 +189,7 @@ namespace KeepersDomain.Rooms
             var width = newWidth;
             var height = newHeight;
 
-            if (TryFindMergeableRoom(footprint, out var existingRoomId, out var mergedOrigin, out var mergedWidth, out var mergedHeight))
+            if (RoomFootprint.TryFindMergeableRoom(_roomTiles, footprint, out var existingRoomId, out var mergedOrigin, out var mergedWidth, out var mergedHeight))
             {
                 roomId = existingRoomId;
                 origin = mergedOrigin;
@@ -236,55 +229,6 @@ namespace KeepersDomain.Rooms
         {
             return (width >= MinFootprintShort && height >= MinFootprintLong)
                 || (width >= MinFootprintLong && height >= MinFootprintShort);
-        }
-
-        /// Same shape as every other room manager's TryFindMergeableRoom —
-        /// only ever merges with one existing room at a time, false if
-        /// footprint doesn't cleanly complete a rectangle with any single
-        /// existing Conversion Class.
-        private bool TryFindMergeableRoom(List<Vector2Int> footprint, out string roomId, out Vector2Int mergedOrigin, out int mergedWidth, out int mergedHeight)
-        {
-            foreach (var entry in _roomTiles)
-            {
-                var minX = int.MaxValue;
-                var maxX = int.MinValue;
-                var minY = int.MaxValue;
-                var maxY = int.MinValue;
-
-                foreach (var coord in entry.Value)
-                {
-                    minX = Mathf.Min(minX, coord.x);
-                    maxX = Mathf.Max(maxX, coord.x);
-                    minY = Mathf.Min(minY, coord.y);
-                    maxY = Mathf.Max(maxY, coord.y);
-                }
-
-                foreach (var coord in footprint)
-                {
-                    minX = Mathf.Min(minX, coord.x);
-                    maxX = Mathf.Max(maxX, coord.x);
-                    minY = Mathf.Min(minY, coord.y);
-                    maxY = Mathf.Max(maxY, coord.y);
-                }
-
-                var width = maxX - minX + 1;
-                var height = maxY - minY + 1;
-
-                if (width * height == entry.Value.Count + footprint.Count)
-                {
-                    roomId = entry.Key;
-                    mergedOrigin = new Vector2Int(minX, minY);
-                    mergedWidth = width;
-                    mergedHeight = height;
-                    return true;
-                }
-            }
-
-            roomId = null;
-            mergedOrigin = default;
-            mergedWidth = 0;
-            mergedHeight = 0;
-            return false;
         }
 
         /// Tears down this room's current bench/wall-board visuals and
@@ -620,33 +564,15 @@ namespace KeepersDomain.Rooms
 
         public void UpdatePlacementPreview(Vector2Int startCoord, Vector2Int endCoord)
         {
-            ClearPlacementPreview();
-
-            var footprint = GetFootprint(startCoord, endCoord, out var width, out var height, out _);
+            var footprint = RoomFootprint.Rect(startCoord, endCoord, out var width, out var height, out _);
             var isValidSize = MeetsMinimumSize(width, height);
-            var color = isValidSize && CanPlaceFootprint(footprint) ? _previewValidColor : _previewInvalidColor;
-
-            foreach (var coord in footprint)
-            {
-                if (!_grid.InBounds(coord))
-                {
-                    continue;
-                }
-
-                _previewMarkers.Add(CreatePreviewMarker(coord, color));
-            }
+            var valid = isValidSize && RoomFootprint.CanPlace(_grid, footprint, _ownerId);
+            _preview.Show(transform, _grid, footprint, valid);
         }
 
         public void ClearPlacementPreview()
         {
-            foreach (var marker in _previewMarkers)
-            {
-                if (marker != null)
-                {
-                    Destroy(marker);
-                }
-            }
-            _previewMarkers.Clear();
+            _preview.Clear();
         }
 
         /// LairManager.RoomSold fires for every sold room — only react to
@@ -671,63 +597,6 @@ namespace KeepersDomain.Rooms
 
             ClearStructures(roomId);
             _benchAdjacentTiles.Remove(roomId);
-        }
-
-        private List<Vector2Int> GetFootprint(Vector2Int startCoord, Vector2Int endCoord, out int width, out int height, out Vector2Int origin)
-        {
-            var minX = Mathf.Min(startCoord.x, endCoord.x);
-            var maxX = Mathf.Max(startCoord.x, endCoord.x);
-            var minY = Mathf.Min(startCoord.y, endCoord.y);
-            var maxY = Mathf.Max(startCoord.y, endCoord.y);
-
-            width = maxX - minX + 1;
-            height = maxY - minY + 1;
-            origin = new Vector2Int(minX, minY);
-
-            var footprint = new List<Vector2Int>(width * height);
-            for (int x = minX; x <= maxX; x++)
-            {
-                for (int y = minY; y <= maxY; y++)
-                {
-                    footprint.Add(new Vector2Int(x, y));
-                }
-            }
-
-            return footprint;
-        }
-
-        private bool CanPlaceFootprint(List<Vector2Int> footprint)
-        {
-            foreach (var coord in footprint)
-            {
-                if (!_grid.CanBuildRoomOn(coord, _ownerId))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private GameObject CreatePreviewMarker(Vector2Int coord, Color color)
-        {
-            var cellSize = _grid.CellSize;
-            var worldPos = _grid.GridToWorld(coord);
-            var centerY = GetGroundTopY(coord) + PreviewClearance + PreviewHeight * 0.5f;
-
-            var marker = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            marker.name = $"ConversionClassPreview_{coord.x}_{coord.y}";
-            marker.transform.SetParent(transform, false);
-            marker.transform.localPosition = new Vector3(worldPos.x, centerY, worldPos.z);
-            marker.transform.localScale = new Vector3(cellSize * PreviewFootprintScale, PreviewHeight, cellSize * PreviewFootprintScale);
-            Prims.Tint(marker, color);
-            Destroy(marker.GetComponent<Collider>());
-            return marker;
-        }
-
-        private float GetGroundTopY(Vector2Int coord)
-        {
-            return _grid.GetTile(coord).Type == TileType.Rock ? RockTopY : _grid.FloorSurfaceY;
         }
 
         /// Thin olive border with a lighter khaki fill in the middle — same

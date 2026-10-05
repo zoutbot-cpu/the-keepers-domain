@@ -11,8 +11,8 @@ namespace KeepersDomain.Rooms
     ///
     /// start/end is the rectangle corners exactly like every manager's own
     /// TryPlaceX/PlaceStartingX pair already takes — every rectangular room
-    /// in this game, merged or not, is always a filled rectangle (see any
-    /// manager's TryFindMergeableRoom, which only ever merges when doing so
+    /// in this game, merged or not, is always a filled rectangle (see
+    /// RoomFootprint.TryFindMergeableRoom, which only ever merges when doing so
     /// exactly fills a rectangle), so a saved room's footprint can always
     /// be recovered as a single bounding rectangle. BridgeManager is the
     /// odd one out — a bridge isn't a rectangle, so each of its tiles is

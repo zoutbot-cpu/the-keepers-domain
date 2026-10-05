@@ -105,13 +105,6 @@ namespace KeepersDomain.Rooms
         private const float BookcaseLengthScale = 0.92f;
         private const float BookcaseDepthScale = 0.55f;
 
-        [SerializeField] private Color _previewValidColor = new Color(0.35f, 0.95f, 0.4f);
-        [SerializeField] private Color _previewInvalidColor = new Color(0.95f, 0.25f, 0.25f);
-        private const float PreviewClearance = 0.02f;
-        private const float PreviewHeight = 0.08f;
-        private const float PreviewFootprintScale = 0.8f;
-        private const float RockTopY = 0.5f;
-
         private DungeonGrid _grid;
         private TreasuryManager _treasuryManager;
         private int _ownerId;
@@ -122,7 +115,7 @@ namespace KeepersDomain.Rooms
         private readonly Dictionary<string, GameObject> _bookcaseVisuals = new Dictionary<string, GameObject>();
         private readonly Dictionary<string, List<Vector2Int>> _blockedTiles = new Dictionary<string, List<Vector2Int>>();
         private readonly Dictionary<string, List<Vector2Int>> _bookcaseAdjacentTiles = new Dictionary<string, List<Vector2Int>>();
-        private readonly List<GameObject> _previewMarkers = new List<GameObject>();
+        private readonly RoomPlacementPreview _preview = new RoomPlacementPreview("Library");
 
         public void Initialize(DungeonGrid grid, LairManager lairManager, TreasuryManager treasuryManager, int ownerId = 0)
         {
@@ -197,8 +190,8 @@ namespace KeepersDomain.Rooms
 
         private bool TryPlaceLibraryInternal(Vector2Int startCoord, Vector2Int endCoord, bool chargeGold)
         {
-            var footprint = GetFootprint(startCoord, endCoord, out var newWidth, out var newHeight, out var newOrigin);
-            if (!CanPlaceFootprint(footprint))
+            var footprint = RoomFootprint.Rect(startCoord, endCoord, out var newWidth, out var newHeight, out var newOrigin);
+            if (!RoomFootprint.CanPlace(_grid, footprint, _ownerId))
             {
                 return false;
             }
@@ -216,11 +209,11 @@ namespace KeepersDomain.Rooms
             // Extends an existing Library instead of starting a separate
             // one if footprint exactly completes a rectangle together with
             // it (e.g. dragging one more row onto the side of an existing
-            // room) — see TryFindMergeableRoom. The old bookcase layout is
+            // room) — see RoomFootprint.TryFindMergeableRoom. The old bookcase layout is
             // torn down and rebuilt below for the room's new overall shape,
             // same as a fresh placement, since bookcase rows depend on the
             // whole footprint, not just the newly-dragged tiles.
-            if (TryFindMergeableRoom(footprint, out var existingRoomId, out var mergedOrigin, out var mergedWidth, out var mergedHeight))
+            if (RoomFootprint.TryFindMergeableRoom(_roomTiles, footprint, out var existingRoomId, out var mergedOrigin, out var mergedWidth, out var mergedHeight))
             {
                 roomId = existingRoomId;
                 origin = mergedOrigin;
@@ -255,59 +248,6 @@ namespace KeepersDomain.Rooms
             _bookcaseAdjacentTiles[roomId] = FindBookcaseAdjacentTiles(_roomTiles[roomId], blockedTiles);
 
             return true;
-        }
-
-        /// Whether footprint, combined with some single already-placed room
-        /// of this type, would exactly fill a rectangle — i.e. footprint
-        /// extends an existing room rather than starting a fresh one. Only
-        /// ever merges with one existing room at a time; if footprint
-        /// doesn't cleanly complete a rectangle with any single existing
-        /// room (including the common case of not being adjacent to one at
-        /// all), this returns false and the caller places footprint as its
-        /// own new room instead.
-        private bool TryFindMergeableRoom(List<Vector2Int> footprint, out string roomId, out Vector2Int mergedOrigin, out int mergedWidth, out int mergedHeight)
-        {
-            foreach (var entry in _roomTiles)
-            {
-                var minX = int.MaxValue;
-                var maxX = int.MinValue;
-                var minY = int.MaxValue;
-                var maxY = int.MinValue;
-
-                foreach (var coord in entry.Value)
-                {
-                    minX = Mathf.Min(minX, coord.x);
-                    maxX = Mathf.Max(maxX, coord.x);
-                    minY = Mathf.Min(minY, coord.y);
-                    maxY = Mathf.Max(maxY, coord.y);
-                }
-
-                foreach (var coord in footprint)
-                {
-                    minX = Mathf.Min(minX, coord.x);
-                    maxX = Mathf.Max(maxX, coord.x);
-                    minY = Mathf.Min(minY, coord.y);
-                    maxY = Mathf.Max(maxY, coord.y);
-                }
-
-                var width = maxX - minX + 1;
-                var height = maxY - minY + 1;
-
-                if (width * height == entry.Value.Count + footprint.Count)
-                {
-                    roomId = entry.Key;
-                    mergedOrigin = new Vector2Int(minX, minY);
-                    mergedWidth = width;
-                    mergedHeight = height;
-                    return true;
-                }
-            }
-
-            roomId = null;
-            mergedOrigin = default;
-            mergedWidth = 0;
-            mergedHeight = 0;
-            return false;
         }
 
         /// Tears down this room's current bookcase visual and unblocks its
@@ -553,32 +493,14 @@ namespace KeepersDomain.Rooms
 
         public void UpdatePlacementPreview(Vector2Int startCoord, Vector2Int endCoord)
         {
-            ClearPlacementPreview();
-
-            var footprint = GetFootprint(startCoord, endCoord, out _, out _, out _);
-            var color = CanPlaceFootprint(footprint) ? _previewValidColor : _previewInvalidColor;
-
-            foreach (var coord in footprint)
-            {
-                if (!_grid.InBounds(coord))
-                {
-                    continue;
-                }
-
-                _previewMarkers.Add(CreatePreviewMarker(coord, color));
-            }
+            var footprint = RoomFootprint.Rect(startCoord, endCoord, out _, out _, out _);
+            var valid = RoomFootprint.CanPlace(_grid, footprint, _ownerId);
+            _preview.Show(transform, _grid, footprint, valid);
         }
 
         public void ClearPlacementPreview()
         {
-            foreach (var marker in _previewMarkers)
-            {
-                if (marker != null)
-                {
-                    Destroy(marker);
-                }
-            }
-            _previewMarkers.Clear();
+            _preview.Clear();
         }
 
         /// LairManager.RoomSold fires for every sold room — only react to
@@ -617,63 +539,6 @@ namespace KeepersDomain.Rooms
             }
 
             _bookcaseAdjacentTiles.Remove(roomId);
-        }
-
-        private List<Vector2Int> GetFootprint(Vector2Int startCoord, Vector2Int endCoord, out int width, out int height, out Vector2Int origin)
-        {
-            var minX = Mathf.Min(startCoord.x, endCoord.x);
-            var maxX = Mathf.Max(startCoord.x, endCoord.x);
-            var minY = Mathf.Min(startCoord.y, endCoord.y);
-            var maxY = Mathf.Max(startCoord.y, endCoord.y);
-
-            width = maxX - minX + 1;
-            height = maxY - minY + 1;
-            origin = new Vector2Int(minX, minY);
-
-            var footprint = new List<Vector2Int>(width * height);
-            for (int x = minX; x <= maxX; x++)
-            {
-                for (int y = minY; y <= maxY; y++)
-                {
-                    footprint.Add(new Vector2Int(x, y));
-                }
-            }
-
-            return footprint;
-        }
-
-        private bool CanPlaceFootprint(List<Vector2Int> footprint)
-        {
-            foreach (var coord in footprint)
-            {
-                if (!_grid.CanBuildRoomOn(coord, _ownerId))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private GameObject CreatePreviewMarker(Vector2Int coord, Color color)
-        {
-            var cellSize = _grid.CellSize;
-            var worldPos = _grid.GridToWorld(coord);
-            var centerY = GetGroundTopY(coord) + PreviewClearance + PreviewHeight * 0.5f;
-
-            var marker = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            marker.name = $"LibraryPreview_{coord.x}_{coord.y}";
-            marker.transform.SetParent(transform, false);
-            marker.transform.localPosition = new Vector3(worldPos.x, centerY, worldPos.z);
-            marker.transform.localScale = new Vector3(cellSize * PreviewFootprintScale, PreviewHeight, cellSize * PreviewFootprintScale);
-            Prims.Tint(marker, color);
-            Destroy(marker.GetComponent<Collider>());
-            return marker;
-        }
-
-        private float GetGroundTopY(Vector2Int coord)
-        {
-            return _grid.GetTile(coord).Type == TileType.Rock ? RockTopY : _grid.FloorSurfaceY;
         }
 
         /// A real dungeon_pack-textured parquet border (see

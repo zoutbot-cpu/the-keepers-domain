@@ -110,13 +110,6 @@ namespace KeepersDomain.Rooms
         private const float SeamFootprintScale = 1.0f;
         private const float SeamHeight = 0.16f;
 
-        [SerializeField] private Color _previewValidColor = new Color(0.35f, 0.95f, 0.4f);
-        [SerializeField] private Color _previewInvalidColor = new Color(0.95f, 0.25f, 0.25f);
-        private const float PreviewClearance = 0.02f;
-        private const float PreviewHeight = 0.08f;
-        private const float PreviewFootprintScale = 0.8f;
-        private const float RockTopY = 0.5f;
-
         private DungeonGrid _grid;
         private TreasuryManager _treasuryManager;
         private int _ownerId;
@@ -140,7 +133,7 @@ namespace KeepersDomain.Rooms
         private readonly Dictionary<string, int> _roomCapacity = new Dictionary<string, int>();
         private readonly Dictionary<string, TextMesh> _tankLabels = new Dictionary<string, TextMesh>();
 
-        private readonly List<GameObject> _previewMarkers = new List<GameObject>();
+        private readonly RoomPlacementPreview _preview = new RoomPlacementPreview("Tavern");
 
         /// Bacon in reserves — summed across every room's own tank, same
         /// shape as TreasuryManager.TotalGold. Read by BottomMenuBar's
@@ -237,8 +230,8 @@ namespace KeepersDomain.Rooms
 
         private bool TryPlaceTavernInternal(Vector2Int startCoord, Vector2Int endCoord, bool chargeGold)
         {
-            var footprint = GetFootprint(startCoord, endCoord, out var newWidth, out var newHeight, out var newOrigin);
-            if (newWidth < MinFootprintSize || newHeight < MinFootprintSize || !CanPlaceFootprint(footprint))
+            var footprint = RoomFootprint.Rect(startCoord, endCoord, out var newWidth, out var newHeight, out var newOrigin);
+            if (newWidth < MinFootprintSize || newHeight < MinFootprintSize || !RoomFootprint.CanPlace(_grid, footprint, _ownerId))
             {
                 return false;
             }
@@ -255,13 +248,13 @@ namespace KeepersDomain.Rooms
 
             // Extends an existing Tavern instead of starting a
             // separate one if footprint exactly completes a rectangle
-            // together with it — see TryFindMergeableRoom. The shrine
+            // together with it — see RoomFootprint.TryFindMergeableRoom. The shrine
             // recenters for the room's new overall shape, which can change
             // which tiles even count as storage (adjacent to the shrine) —
             // see ClearShrineAndStorage — so every storage tile (old and
             // new) is recomputed from scratch below rather than only
             // registering the newly-dragged ones.
-            if (TryFindMergeableRoom(footprint, out var existingRoomId, out var mergedOrigin, out var mergedWidth, out var mergedHeight))
+            if (RoomFootprint.TryFindMergeableRoom(_roomTiles, footprint, out var existingRoomId, out var mergedOrigin, out var mergedWidth, out var mergedHeight))
             {
                 roomId = existingRoomId;
                 origin = mergedOrigin;
@@ -307,59 +300,6 @@ namespace KeepersDomain.Rooms
             _tankLabels[roomId] = CreateTankLabel(roomId, shrineTiles);
 
             return true;
-        }
-
-        /// Whether footprint, combined with some single already-placed room
-        /// of this type, would exactly fill a rectangle — i.e. footprint
-        /// extends an existing room rather than starting a fresh one. Only
-        /// ever merges with one existing room at a time; if footprint
-        /// doesn't cleanly complete a rectangle with any single existing
-        /// room (including the common case of not being adjacent to one at
-        /// all), this returns false and the caller places footprint as its
-        /// own new room instead.
-        private bool TryFindMergeableRoom(List<Vector2Int> footprint, out string roomId, out Vector2Int mergedOrigin, out int mergedWidth, out int mergedHeight)
-        {
-            foreach (var entry in _roomTiles)
-            {
-                var minX = int.MaxValue;
-                var maxX = int.MinValue;
-                var minY = int.MaxValue;
-                var maxY = int.MinValue;
-
-                foreach (var coord in entry.Value)
-                {
-                    minX = Mathf.Min(minX, coord.x);
-                    maxX = Mathf.Max(maxX, coord.x);
-                    minY = Mathf.Min(minY, coord.y);
-                    maxY = Mathf.Max(maxY, coord.y);
-                }
-
-                foreach (var coord in footprint)
-                {
-                    minX = Mathf.Min(minX, coord.x);
-                    maxX = Mathf.Max(maxX, coord.x);
-                    minY = Mathf.Min(minY, coord.y);
-                    maxY = Mathf.Max(maxY, coord.y);
-                }
-
-                var width = maxX - minX + 1;
-                var height = maxY - minY + 1;
-
-                if (width * height == entry.Value.Count + footprint.Count)
-                {
-                    roomId = entry.Key;
-                    mergedOrigin = new Vector2Int(minX, minY);
-                    mergedWidth = width;
-                    mergedHeight = height;
-                    return true;
-                }
-            }
-
-            roomId = null;
-            mergedOrigin = default;
-            mergedWidth = 0;
-            mergedHeight = 0;
-            return false;
         }
 
         /// Tears down this room's current shrine, tank label, and every
@@ -592,33 +532,15 @@ namespace KeepersDomain.Rooms
 
         public void UpdatePlacementPreview(Vector2Int startCoord, Vector2Int endCoord)
         {
-            ClearPlacementPreview();
-
-            var footprint = GetFootprint(startCoord, endCoord, out var width, out var height, out _);
+            var footprint = RoomFootprint.Rect(startCoord, endCoord, out var width, out var height, out _);
             var isValidSize = width >= MinFootprintSize && height >= MinFootprintSize;
-            var color = isValidSize && CanPlaceFootprint(footprint) ? _previewValidColor : _previewInvalidColor;
-
-            foreach (var coord in footprint)
-            {
-                if (!_grid.InBounds(coord))
-                {
-                    continue;
-                }
-
-                _previewMarkers.Add(CreatePreviewMarker(coord, color));
-            }
+            var valid = isValidSize && RoomFootprint.CanPlace(_grid, footprint, _ownerId);
+            _preview.Show(transform, _grid, footprint, valid);
         }
 
         public void ClearPlacementPreview()
         {
-            foreach (var marker in _previewMarkers)
-            {
-                if (marker != null)
-                {
-                    Destroy(marker);
-                }
-            }
-            _previewMarkers.Clear();
+            _preview.Clear();
         }
 
         /// LairManager.RoomSold fires for every sold room — only react to
@@ -664,63 +586,6 @@ namespace KeepersDomain.Rooms
             _roomCapacity.Remove(roomId);
 
             _roomTiles.Remove(roomId);
-        }
-
-        private List<Vector2Int> GetFootprint(Vector2Int startCoord, Vector2Int endCoord, out int width, out int height, out Vector2Int origin)
-        {
-            var minX = Mathf.Min(startCoord.x, endCoord.x);
-            var maxX = Mathf.Max(startCoord.x, endCoord.x);
-            var minY = Mathf.Min(startCoord.y, endCoord.y);
-            var maxY = Mathf.Max(startCoord.y, endCoord.y);
-
-            width = maxX - minX + 1;
-            height = maxY - minY + 1;
-            origin = new Vector2Int(minX, minY);
-
-            var footprint = new List<Vector2Int>(width * height);
-            for (int x = minX; x <= maxX; x++)
-            {
-                for (int y = minY; y <= maxY; y++)
-                {
-                    footprint.Add(new Vector2Int(x, y));
-                }
-            }
-
-            return footprint;
-        }
-
-        private bool CanPlaceFootprint(List<Vector2Int> footprint)
-        {
-            foreach (var coord in footprint)
-            {
-                if (!_grid.CanBuildRoomOn(coord, _ownerId))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private GameObject CreatePreviewMarker(Vector2Int coord, Color color)
-        {
-            var cellSize = _grid.CellSize;
-            var worldPos = _grid.GridToWorld(coord);
-            var centerY = GetGroundTopY(coord) + PreviewClearance + PreviewHeight * 0.5f;
-
-            var marker = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            marker.name = $"TavernPreview_{coord.x}_{coord.y}";
-            marker.transform.SetParent(transform, false);
-            marker.transform.localPosition = new Vector3(worldPos.x, centerY, worldPos.z);
-            marker.transform.localScale = new Vector3(cellSize * PreviewFootprintScale, PreviewHeight, cellSize * PreviewFootprintScale);
-            Prims.Tint(marker, color);
-            Destroy(marker.GetComponent<Collider>());
-            return marker;
-        }
-
-        private float GetGroundTopY(Vector2Int coord)
-        {
-            return _grid.GetTile(coord).Type == TileType.Rock ? RockTopY : _grid.FloorSurfaceY;
         }
 
         /// The real bacon_beacon_machine prop centered over the shrine's

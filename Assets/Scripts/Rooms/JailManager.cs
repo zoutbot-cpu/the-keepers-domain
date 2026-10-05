@@ -28,7 +28,7 @@ namespace KeepersDomain.Rooms
     /// ConversionClassManager. Placement/visuals otherwise follow the same
     /// "player-placed, subscribes to RoomSold" shape TrainingRoomManager/
     /// LibraryManager use, including their adjacent-placement merge rule
-    /// (see TryFindMergeableRoom): a
+    /// (see RoomFootprint.TryFindMergeableRoom): a
     /// footprint that exactly completes a rectangle together with an
     /// existing Jail extends that Jail instead of starting a separate
     /// one. A merge can only ever grow the room, which can only ever grow
@@ -210,13 +210,6 @@ namespace KeepersDomain.Rooms
         private const float SeamFootprintScale = 1.0f;
         private const float SeamHeight = 0.16f;
 
-        [SerializeField] private Color _previewValidColor = new Color(0.35f, 0.95f, 0.4f);
-        [SerializeField] private Color _previewInvalidColor = new Color(0.95f, 0.25f, 0.25f);
-        private const float PreviewClearance = 0.02f;
-        private const float PreviewHeight = 0.08f;
-        private const float PreviewFootprintScale = 0.8f;
-        private const float RockTopY = 0.5f;
-
         private DungeonGrid _grid;
         private TreasuryManager _treasuryManager;
         private int _ownerId;
@@ -275,7 +268,7 @@ namespace KeepersDomain.Rooms
         // re-deriving it from scratch on every call.
         private readonly Dictionary<string, HashSet<Vector2Int>> _pitTilesByRoom = new Dictionary<string, HashSet<Vector2Int>>();
 
-        private readonly List<GameObject> _previewMarkers = new List<GameObject>();
+        private readonly RoomPlacementPreview _preview = new RoomPlacementPreview("Jail");
 
         // Prisoner color/size — a small bound gray blob sitting on its own
         // pit tile, distinct from the "haunting" Maze Rattler capsules that
@@ -575,7 +568,7 @@ namespace KeepersDomain.Rooms
 
         /// Places a Jail spanning the rectangle between startCoord and
         /// endCoord inclusive, on pre-dug Claimed Floor — see
-        /// CanPlaceFootprint. Fails atomically, same as every other room
+        /// RoomFootprint.CanPlace. Fails atomically, same as every other room
         /// manager's Try* method.
         public bool TryPlaceJail(Vector2Int startCoord, Vector2Int endCoord)
         {
@@ -602,8 +595,8 @@ namespace KeepersDomain.Rooms
 
         private bool TryPlaceJailInternal(Vector2Int startCoord, Vector2Int endCoord, bool chargeGold)
         {
-            var footprint = GetFootprint(startCoord, endCoord, out var newWidth, out var newHeight, out var newOrigin);
-            if (newWidth < MinFootprintSize || newHeight < MinFootprintSize || !CanPlaceFootprint(footprint))
+            var footprint = RoomFootprint.Rect(startCoord, endCoord, out var newWidth, out var newHeight, out var newOrigin);
+            if (newWidth < MinFootprintSize || newHeight < MinFootprintSize || !RoomFootprint.CanPlace(_grid, footprint, _ownerId))
             {
                 return false;
             }
@@ -620,10 +613,10 @@ namespace KeepersDomain.Rooms
 
             // Extends an existing Jail instead of starting a separate one
             // if footprint exactly completes a rectangle together with
-            // it — see TryFindMergeableRoom. Only the fence/wall/gate need
+            // it — see RoomFootprint.TryFindMergeableRoom. Only the fence/wall/gate need
             // rebuilding for the new shape; each tile's own pit sink,
             // once applied, is never undone by a merge (see IsPitTile).
-            if (TryFindMergeableRoom(footprint, out var existingRoomId, out var mergedOrigin, out var mergedWidth, out var mergedHeight))
+            if (RoomFootprint.TryFindMergeableRoom(_roomTiles, footprint, out var existingRoomId, out var mergedOrigin, out var mergedWidth, out var mergedHeight))
             {
                 roomId = existingRoomId;
                 origin = mergedOrigin;
@@ -714,59 +707,6 @@ namespace KeepersDomain.Rooms
         {
             return coord.x > origin.x && coord.x < origin.x + width - 1
                 && coord.y > origin.y && coord.y < origin.y + height - 1;
-        }
-
-        /// Whether footprint, combined with some single already-placed
-        /// Jail, would exactly fill a rectangle — i.e. footprint extends
-        /// an existing Jail rather than starting a fresh one. Same shape
-        /// as TrainingRoomManager.TryFindMergeableRoom: only ever merges
-        /// with one existing room at a time, and returns false (footprint
-        /// becomes its own new room) if it doesn't cleanly complete a
-        /// rectangle with any single one — including simply not being
-        /// adjacent to one at all.
-        private bool TryFindMergeableRoom(List<Vector2Int> footprint, out string roomId, out Vector2Int mergedOrigin, out int mergedWidth, out int mergedHeight)
-        {
-            foreach (var entry in _roomTiles)
-            {
-                var minX = int.MaxValue;
-                var maxX = int.MinValue;
-                var minY = int.MaxValue;
-                var maxY = int.MinValue;
-
-                foreach (var coord in entry.Value)
-                {
-                    minX = Mathf.Min(minX, coord.x);
-                    maxX = Mathf.Max(maxX, coord.x);
-                    minY = Mathf.Min(minY, coord.y);
-                    maxY = Mathf.Max(maxY, coord.y);
-                }
-
-                foreach (var coord in footprint)
-                {
-                    minX = Mathf.Min(minX, coord.x);
-                    maxX = Mathf.Max(maxX, coord.x);
-                    minY = Mathf.Min(minY, coord.y);
-                    maxY = Mathf.Max(maxY, coord.y);
-                }
-
-                var width = maxX - minX + 1;
-                var height = maxY - minY + 1;
-
-                if (width * height == entry.Value.Count + footprint.Count)
-                {
-                    roomId = entry.Key;
-                    mergedOrigin = new Vector2Int(minX, minY);
-                    mergedWidth = width;
-                    mergedHeight = height;
-                    return true;
-                }
-            }
-
-            roomId = null;
-            mergedOrigin = default;
-            mergedWidth = 0;
-            mergedHeight = 0;
-            return false;
         }
 
         /// Tears down this room's current fence/wall/staircase/gate —
@@ -866,24 +806,6 @@ namespace KeepersDomain.Rooms
             pos.y = pitFloorY + (pos.y - pitFloorY) * HalfWallHeightScale;
             go.transform.position = pos;
             go.transform.localScale = new Vector3(full.Scale.x, full.Scale.y * HalfWallHeightScale, full.Scale.z);
-        }
-
-        /// Whether footprint could become a Jail right now — dug, Claimed,
-        /// room-free Floor this keeper owns, same rule every other room
-        /// funnels through DungeonGrid.CanBuildRoomOn. (A Jail used to
-        /// auto-dig undug Rock on placement; that quietly destroyed
-        /// dungeon walls, so it now needs pre-dug floor like the rest.)
-        private bool CanPlaceFootprint(List<Vector2Int> footprint)
-        {
-            foreach (var coord in footprint)
-            {
-                if (!_grid.CanBuildRoomOn(coord, _ownerId))
-                {
-                    return false;
-                }
-            }
-
-            return true;
         }
 
         /// LairManager.RoomSold fires for every sold room — only react to
@@ -1339,77 +1261,16 @@ namespace KeepersDomain.Rooms
 
         public void UpdatePlacementPreview(Vector2Int startCoord, Vector2Int endCoord)
         {
-            ClearPlacementPreview();
-
-            var footprint = GetFootprint(startCoord, endCoord, out var width, out var height, out _);
+            var footprint = RoomFootprint.Rect(startCoord, endCoord, out var width, out var height, out _);
             var isValidSize = width >= MinFootprintSize && height >= MinFootprintSize;
-            var color = isValidSize && CanPlaceFootprint(footprint) ? _previewValidColor : _previewInvalidColor;
-
-            foreach (var coord in footprint)
-            {
-                if (!_grid.InBounds(coord))
-                {
-                    continue;
-                }
-
-                _previewMarkers.Add(CreatePreviewMarker(coord, color));
-            }
+            var valid = isValidSize && RoomFootprint.CanPlace(_grid, footprint, _ownerId);
+            _preview.Show(transform, _grid, footprint, valid);
         }
 
         public void ClearPlacementPreview()
         {
-            foreach (var marker in _previewMarkers)
-            {
-                if (marker != null)
-                {
-                    Destroy(marker);
-                }
-            }
-            _previewMarkers.Clear();
+            _preview.Clear();
         }
 
-        private GameObject CreatePreviewMarker(Vector2Int coord, Color color)
-        {
-            var cellSize = _grid.CellSize;
-            var worldPos = _grid.GridToWorld(coord);
-            var centerY = GetGroundTopY(coord) + PreviewClearance + PreviewHeight * 0.5f;
-
-            var marker = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            marker.name = $"JailPreview_{coord.x}_{coord.y}";
-            marker.transform.SetParent(transform, false);
-            marker.transform.localPosition = new Vector3(worldPos.x, centerY, worldPos.z);
-            marker.transform.localScale = new Vector3(cellSize * PreviewFootprintScale, PreviewHeight, cellSize * PreviewFootprintScale);
-            Prims.Tint(marker, color);
-            Destroy(marker.GetComponent<Collider>());
-            return marker;
-        }
-
-        private float GetGroundTopY(Vector2Int coord)
-        {
-            return _grid.GetTile(coord).Type == TileType.Rock ? RockTopY : _grid.FloorSurfaceY;
-        }
-
-        private List<Vector2Int> GetFootprint(Vector2Int startCoord, Vector2Int endCoord, out int width, out int height, out Vector2Int origin)
-        {
-            var minX = Mathf.Min(startCoord.x, endCoord.x);
-            var maxX = Mathf.Max(startCoord.x, endCoord.x);
-            var minY = Mathf.Min(startCoord.y, endCoord.y);
-            var maxY = Mathf.Max(startCoord.y, endCoord.y);
-
-            width = maxX - minX + 1;
-            height = maxY - minY + 1;
-            origin = new Vector2Int(minX, minY);
-
-            var footprint = new List<Vector2Int>(width * height);
-            for (int x = minX; x <= maxX; x++)
-            {
-                for (int y = minY; y <= maxY; y++)
-                {
-                    footprint.Add(new Vector2Int(x, y));
-                }
-            }
-
-            return footprint;
-        }
     }
 }

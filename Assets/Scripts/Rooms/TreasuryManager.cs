@@ -62,26 +62,6 @@ namespace KeepersDomain.Rooms
         // bare floor. See RefreshGoldPileVisual.
         private readonly GameObject[] _goldPilePrefabs = new GameObject[5];
 
-        // Placement-preview markers while a Treasury drag is in progress —
-        // same green/red valid/invalid ghost-square idea LairManager's
-        // UpdatePlacementPreview uses, kept as this class's own copy rather
-        // than routed through LairManager, since the marker visuals
-        // themselves aren't Lair-specific but the bookkeeping (colors,
-        // _previewMarkers list) is cheapest kept local to whichever manager
-        // owns the room type being previewed.
-        [SerializeField] private Color _previewValidColor = new Color(0.35f, 0.95f, 0.4f);
-        [SerializeField] private Color _previewInvalidColor = new Color(0.95f, 0.25f, 0.25f);
-        private const float PreviewClearance = 0.02f;
-        private const float PreviewHeight = 0.08f;
-        private const float PreviewFootprintScale = 0.8f;
-
-        // Rock's own visual is a full-height cube centered at y=0 (see
-        // DungeonGrid.RefreshVisual), so its top face sits at 0.5 — Floor's
-        // top is DungeonGrid.FloorSurfaceY instead. Needed for the preview
-        // marker, which can hover over undug Rock mid-drag same as a Lair
-        // preview can.
-        private const float RockTopY = 0.5f;
-
         private DungeonGrid _grid;
         private int _ownerId;
         private int _nextRoomId;
@@ -97,7 +77,7 @@ namespace KeepersDomain.Rooms
         private readonly Dictionary<Vector2Int, GameObject> _goldPileVisuals = new Dictionary<Vector2Int, GameObject>();
         private readonly Dictionary<Vector2Int, int> _goldPileTiers = new Dictionary<Vector2Int, int>();
 
-        private readonly List<GameObject> _previewMarkers = new List<GameObject>();
+        private readonly RoomPlacementPreview _preview = new RoomPlacementPreview("Treasury");
 
         /// Fired whenever a tile's stored gold actually changes (Deposit,
         /// TrySpendGold, AddGold — all funnel through RefreshGoldPileVisual)
@@ -165,8 +145,8 @@ namespace KeepersDomain.Rooms
         /// ComputeCost) or nothing is placed/charged.
         public bool TryPlaceTreasury(Vector2Int startCoord, Vector2Int endCoord)
         {
-            var footprint = GetFootprint(startCoord, endCoord);
-            if (!CanPlaceFootprint(footprint))
+            var footprint = RoomFootprint.Rect(startCoord, endCoord);
+            if (!RoomFootprint.CanPlace(_grid, footprint, _ownerId))
             {
                 return false;
             }
@@ -186,8 +166,8 @@ namespace KeepersDomain.Rooms
         /// generation, not a player purchase.
         public bool PlaceStartingTreasury(Vector2Int startCoord, Vector2Int endCoord)
         {
-            var footprint = GetFootprint(startCoord, endCoord);
-            if (!CanPlaceFootprint(footprint))
+            var footprint = RoomFootprint.Rect(startCoord, endCoord);
+            if (!RoomFootprint.CanPlace(_grid, footprint, _ownerId))
             {
                 return false;
             }
@@ -387,20 +367,9 @@ namespace KeepersDomain.Rooms
         /// down and rebuilds rather than trying to diff against last frame).
         public void UpdatePlacementPreview(Vector2Int startCoord, Vector2Int endCoord)
         {
-            ClearPlacementPreview();
-
-            var footprint = GetFootprint(startCoord, endCoord);
-            var color = CanPlaceFootprint(footprint) ? _previewValidColor : _previewInvalidColor;
-
-            foreach (var coord in footprint)
-            {
-                if (!_grid.InBounds(coord))
-                {
-                    continue;
-                }
-
-                _previewMarkers.Add(CreatePreviewMarker(coord, color));
-            }
+            var footprint = RoomFootprint.Rect(startCoord, endCoord);
+            var valid = RoomFootprint.CanPlace(_grid, footprint, _ownerId);
+            _preview.Show(transform, _grid, footprint, valid);
         }
 
         /// Tears down whatever ghost footprint UpdatePlacementPreview last
@@ -408,14 +377,7 @@ namespace KeepersDomain.Rooms
         /// marker survives after TileInteractionController.EndGesture.
         public void ClearPlacementPreview()
         {
-            foreach (var marker in _previewMarkers)
-            {
-                if (marker != null)
-                {
-                    Destroy(marker);
-                }
-            }
-            _previewMarkers.Clear();
+            _preview.Clear();
         }
 
         /// LairManager.RoomSold fires for every sold room regardless of
@@ -451,59 +413,6 @@ namespace KeepersDomain.Rooms
             }
 
             _roomTiles.Remove(roomId);
-        }
-
-        private List<Vector2Int> GetFootprint(Vector2Int startCoord, Vector2Int endCoord)
-        {
-            var minX = Mathf.Min(startCoord.x, endCoord.x);
-            var maxX = Mathf.Max(startCoord.x, endCoord.x);
-            var minY = Mathf.Min(startCoord.y, endCoord.y);
-            var maxY = Mathf.Max(startCoord.y, endCoord.y);
-
-            var footprint = new List<Vector2Int>((maxX - minX + 1) * (maxY - minY + 1));
-            for (int x = minX; x <= maxX; x++)
-            {
-                for (int y = minY; y <= maxY; y++)
-                {
-                    footprint.Add(new Vector2Int(x, y));
-                }
-            }
-
-            return footprint;
-        }
-
-        private bool CanPlaceFootprint(List<Vector2Int> footprint)
-        {
-            foreach (var coord in footprint)
-            {
-                if (!_grid.CanBuildRoomOn(coord, _ownerId))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private GameObject CreatePreviewMarker(Vector2Int coord, Color color)
-        {
-            var cellSize = _grid.CellSize;
-            var worldPos = _grid.GridToWorld(coord);
-            var centerY = GetGroundTopY(coord) + PreviewClearance + PreviewHeight * 0.5f;
-
-            var marker = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            marker.name = $"TreasuryPreview_{coord.x}_{coord.y}";
-            marker.transform.SetParent(transform, false);
-            marker.transform.localPosition = new Vector3(worldPos.x, centerY, worldPos.z);
-            marker.transform.localScale = new Vector3(cellSize * PreviewFootprintScale, PreviewHeight, cellSize * PreviewFootprintScale);
-            Prims.Tint(marker, color);
-            Destroy(marker.GetComponent<Collider>());
-            return marker;
-        }
-
-        private float GetGroundTopY(Vector2Int coord)
-        {
-            return _grid.GetTile(coord).Type == TileType.Rock ? RockTopY : _grid.FloorSurfaceY;
         }
 
         /// Real dungeon_pack treasury floor (falls back to a flat gold-
