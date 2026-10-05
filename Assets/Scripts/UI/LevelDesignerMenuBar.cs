@@ -75,7 +75,7 @@ namespace KeepersDomain.UI
 
         /// initialLevelName pre-fills the Save field with whatever level
         /// was just loaded (null on a brand-new map — see
-        /// GameBootstrap.BuildLevelDesignerWorld/LoadLevelDesignerWorld),
+        /// LevelDesignerBootstrap.BuildLevelDesignerWorld/LoadLevelDesignerWorld),
         /// so re-saving defaults to overwriting the same file rather than
         /// making the player retype the name.
         public void Initialize(LevelDesignerSession session, LevelDesignerInteractionController interactionController, DungeonGrid grid, JailManager jailManager, Action<string, LevelData> onLoadRequested, string initialLevelName)
@@ -92,7 +92,7 @@ namespace KeepersDomain.UI
 
             // Push the default-on half-wall state straight through — the
             // grid and every placed Jail already exist by the time the menu
-            // bar is wired (see GameBootstrap.SetUpLevelDesignerWorld).
+            // bar is wired (see LevelDesignerBootstrap.SetUpLevelDesignerWorld).
             ApplyHalfWalls();
         }
 

@@ -9,7 +9,7 @@ namespace KeepersDomain.Core
     /// One keeper's entire gameplay stack — job board (task lists), Portal
     /// (recruit pool), Throne Room (mana), the nine room managers (Treasury
     /// also holds this keeper's gold), and the six creature spawners.
-    /// GameBootstrap.BuildWorld builds one per player in the loaded roster
+    /// WorldBuilder.BuildWorld builds one per player in the loaded roster
     /// (exactly one for a freshly generated map) via BuildKeeperContext, and
     /// hands the local player's context to the input controller / HUD /
     /// camera. The DungeonGrid itself stays shared — it owns the tiles,
@@ -48,7 +48,7 @@ namespace KeepersDomain.Core
         public ElfSpawner ElfSpawner;
 
         /// Every context this session, indexed by OwnerId. Set by
-        /// GameBootstrap.BuildWorld once all contexts are built, and reset
+        /// WorldBuilder.BuildWorld once all contexts are built, and reset
         /// to null on BuildWorld entry and in ReturnToMainMenu so a
         /// "Main Menu -> Start Game" bounce never sees stale references.
         public static KeeperContext[] All;

@@ -67,7 +67,7 @@ namespace KeepersDomain.Rooms
         // Currently only feeds the fallback BuildOrb (see BuildThrone) —
         // DungeonGrid.PlayerColor is the one actually visible in normal
         // play (the Reinforced wall orb), set alongside this one by
-        // GameBootstrap.BuildWorld so both stay in sync.
+        // WorldBuilder.BuildWorld so both stay in sync.
         [SerializeField] private Color _playerColor = new Color(0.25f, 0.55f, 0.95f);
 
         public Color PlayerColor { get => _playerColor; set => _playerColor = value; }

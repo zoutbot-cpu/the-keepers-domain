@@ -18,7 +18,7 @@ namespace KeepersDomain.UI
     /// Reached from the main menu's "Level Designer" button — collects the
     /// level's up-front properties before the level-designer canvas itself
     /// (which doesn't exist yet) would open. See
-    /// GameBootstrap.ShowLevelDesignerProperties.
+    /// LevelDesignerBootstrap.ShowLevelDesignerProperties.
     public class LevelDesignerPropertiesMenu : MonoBehaviour
     {
         private const int MapDimensionStandard = 64;

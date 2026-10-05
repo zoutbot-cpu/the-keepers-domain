@@ -31,7 +31,7 @@ namespace KeepersDomain.LevelDesigner
         public int StartingMana;
 
         /// Bacon in the keeper's Taverns — 0 for a hand-authored level,
-        /// the live total for a mid-game save (see GameBootstrap.SaveGame).
+        /// the live total for a mid-game save (see GameSave.SaveGame).
         public int StartingBacon;
     }
 
@@ -63,7 +63,7 @@ namespace KeepersDomain.LevelDesigner
 
         /// Level / carried-over exp — 0 for a hand-authored level (spawn
         /// fresh at level 1), the creature's live progress for a mid-game
-        /// save. See GameBootstrap.RestoreWorldCreatures / Creature.SetProgress.
+        /// save. See WorldBuilder.RestoreWorldCreatures / Creature.SetProgress.
         public int Level;
         public int Exp;
     }

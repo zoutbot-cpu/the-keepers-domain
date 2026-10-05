@@ -11,7 +11,7 @@ using KeepersDomain.Rooms;
 namespace KeepersDomain.Net
 {
     /// The one session-lifetime networked object (prefab
-    /// Resources/Net/NetGame, spawned by the host in GameBootstrap.BuildWorld
+    /// Resources/Net/NetGame, spawned by the host in WorldBuilder.BuildWorld
     /// once it's hosting). Milestone 1a: replicates the grid — a one-shot
     /// tile snapshot to each joining client, then per-tile deltas off
     /// DungeonGrid.TileChanged. Its client-side OnNetworkSpawn is the
@@ -53,7 +53,7 @@ namespace KeepersDomain.Net
         // it drives Time.timeScale on both sides so the host simulation and
         // the client render both freeze. While paused, each player can cast
         // (and retract) a Save & Quit vote; once every connected player has
-        // voted, the host writes a mid-game save (GameBootstrap.SaveGame)
+        // voted, the host writes a mid-game save (GameSave.SaveGame)
         // and everyone drops back to the main menu.
         public readonly NetworkVariable<bool> Paused = new NetworkVariable<bool>();
         public readonly NetworkVariable<int> PlayerCount = new NetworkVariable<int>(1);
@@ -119,7 +119,7 @@ namespace KeepersDomain.Net
         private readonly Dictionary<string, List<Vector2Int>> _clientRoomScratch = new Dictionary<string, List<Vector2Int>>();
         private readonly Dictionary<string, int> _clientRoomOwnerScratch = new Dictionary<string, int>();
 
-        /// Host only — called from GameBootstrap.BuildHostGame BEFORE the
+        /// Host only — called from WorldBuilder.BuildHostGame BEFORE the
         /// NetGame is spawned, once the grid exists. The map-dimension
         /// netvars are written in OnNetworkSpawn (below) so they ride the
         /// spawn message; setting them here, pre-spawn, would be a no-op /
@@ -250,7 +250,7 @@ namespace KeepersDomain.Net
             RequestSnapshotRpc();
         }
 
-        /// Client — GameBootstrap.BuildClientWorld hands over the grid and
+        /// Client — ClientWorldBuilder.BuildClientWorld hands over the grid and
         /// the gold-free room managers.
         public void ClientBindRooms(DungeonGrid grid, Dictionary<RoomDesignTool, IRestorableRoomManager> roomManagers)
         {
@@ -523,7 +523,7 @@ namespace KeepersDomain.Net
         }
 
         /// Host -> client: a keeper's Throne Room has fallen, the match is
-        /// over. Called by GameBootstrap.HandleThroneDefeated on the host;
+        /// over. Called by WorldBuilder.HandleThroneDefeated on the host;
         /// the client turns it into its own EndScreen. The client "is"
         /// ClientOwnerId, so it lost iff that's the defeated keeper.
         [Rpc(SendTo.NotServer)]
@@ -1073,7 +1073,7 @@ namespace KeepersDomain.Net
             }
 
             // Unanimous — write the mid-game save, tell the client, tear down.
-            GameBootstrap.SaveGame();
+            GameSave.SaveGame();
             MatchSavedAndQuitRpc();
             Time.timeScale = 1f;
             GameBootstrap.ReturnToMainMenu();

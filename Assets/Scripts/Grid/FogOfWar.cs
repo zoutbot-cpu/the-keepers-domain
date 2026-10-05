@@ -22,7 +22,7 @@ namespace KeepersDomain.Grid
     }
 
     /// Per-tile fog of war for the local keeper. Created by
-    /// GameBootstrap.BuildWorld (offline play, skirmish, Continue and the
+    /// WorldBuilder.BuildWorld (offline play, skirmish, Continue and the
     /// multiplayer host, all for owner 0) and by BuildClientWorld for the
     /// networked client (owner 1). The Level Designer never creates one, so
     /// DungeonGrid.Fog stays null there and every tile reads as Visible.

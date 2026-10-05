@@ -210,7 +210,7 @@ namespace KeepersDomain.UI
                 return "Fresh procedural map";
             }
 
-            return id == GameBootstrap.SaveGameSlot ? "Resume saved game" : id;
+            return id == GameSave.SaveGameSlot ? "Resume saved game" : id;
         }
 
         private void DrawLeave(float x, float y, float w)

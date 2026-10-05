@@ -66,7 +66,7 @@ namespace KeepersDomain.Creatures
         }
 
         /// Restores a creature's level + carried exp directly (a mid-game
-        /// save reload — see GameBootstrap.RestoreWorldCreatures). Stats are
+        /// save reload — see WorldBuilder.RestoreWorldCreatures). Stats are
         /// recalculated for the level and HP/Mana set to full, same as a
         /// fresh spawn at that level. No-ops on a level ≤ 1 with no exp
         /// (the hand-authored-level case, where a creature just spawns

@@ -37,7 +37,7 @@ namespace KeepersDomain.Core
         /// TileState.OwnerId's own "-1 means no owner" convention.
         public const int WildOwnerId = -1;
 
-        /// Set by GameBootstrap.BuildWorld, cleared (null) on
+        /// Set by WorldBuilder.BuildWorld, cleared (null) on
         /// ReturnToMainMenu, same lifecycle as KeeperContext.All. A
         /// Combatant with no registry (e.g. a stale agent ticking once
         /// during teardown) treats everyone as non-hostile.

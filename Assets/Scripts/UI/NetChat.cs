@@ -4,7 +4,7 @@ using KeepersDomain.Net;
 namespace KeepersDomain.UI
 {
     /// The in-match chat overlay — created for host and client alongside
-    /// NetHud / NetPauseScreen (GameBootstrap.BuildHostGame /
+    /// NetHud / NetPauseScreen (WorldBuilder.BuildHostGame /
     /// BuildClientWorld). Bottom-left, just above the menu bar: a short
     /// rolling transcript that fades out when idle, plus a one-line input
     /// box that opens on Enter (or the bottom bar's Chat button) and sends

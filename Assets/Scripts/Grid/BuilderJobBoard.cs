@@ -380,7 +380,7 @@ namespace KeepersDomain.Grid
         /// Queues a claim job for an Unclaimed Floor tile that never went
         /// through CompleteDig — floor authored as Unclaimed in the Level
         /// Designer and loaded straight into gameplay (see
-        /// GameBootstrap.QueuePreplacedClaimJobs). Unlike OnFloorNeedsClaim
+        /// WorldBuilder.QueuePreplacedClaimJobs). Unlike OnFloorNeedsClaim
         /// there's no owner filter: the caller queues the tile on every
         /// keeper's board, and each board's own frontier rule
         /// (TryClaimClaimJob's BordersClaimedTile(coord, _ownerId) check)

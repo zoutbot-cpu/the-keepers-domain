@@ -5,7 +5,7 @@ using KeepersDomain.LevelDesigner;
 namespace KeepersDomain.UI
 {
     /// The match-over overlay — shown when a Throne Room hits 0 HP (see
-    /// ThroneRoom.Defeated / GameBootstrap.HandleThroneDefeated, and
+    /// ThroneRoom.Defeated / WorldBuilder.HandleThroneDefeated, and
     /// NetGame.MatchOverRpc on a networked client). A dimmed full-screen
     /// panel with a VICTORY / DEFEAT banner and a single "Main Menu" button
     /// that tears the game down through GameBootstrap.ReturnToMainMenu.
@@ -24,7 +24,7 @@ namespace KeepersDomain.UI
         {
             // The run is over — a mid-game save of it would just reload
             // straight back into a lost/won match.
-            LevelFileIO.Delete(GameBootstrap.SaveGameSlot);
+            LevelFileIO.Delete(GameSave.SaveGameSlot);
 
             if (_current != null)
             {

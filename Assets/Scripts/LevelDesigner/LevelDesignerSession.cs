@@ -74,7 +74,7 @@ namespace KeepersDomain.LevelDesigner
 
     /// Owns the level currently being authored: map size, the player
     /// roster, and every creature placed on it so far. One instance per
-    /// Level Designer session — see GameBootstrap.BuildLevelDesignerWorld.
+    /// Level Designer session — see LevelDesignerBootstrap.BuildLevelDesignerWorld.
     public class LevelDesignerSession : MonoBehaviour
     {
         // Same ranges LevelDesignerPropertiesMenu seeds its own starting
@@ -149,7 +149,7 @@ namespace KeepersDomain.LevelDesigner
 
         /// Same idea as Initialize, but seeded from a previously saved
         /// LevelData instead of fresh LevelDesignerPropertiesMenu input —
-        /// see GameBootstrap.LoadLevelDesignerWorld. Only sets up the
+        /// see LevelDesignerBootstrap.LoadLevelDesignerWorld. Only sets up the
         /// player roster/map info; restoring the grid's actual tiles and
         /// placed creatures is ApplyLevelData's job, called separately
         /// once this session exists.
@@ -358,7 +358,7 @@ namespace KeepersDomain.LevelDesigner
         /// species' own static All registry — ImplingAgent.All,
         /// GremlinAgent.All, ...) and adds one PlaceCreature marker per
         /// instance, so a snapshot taken via BuildLevelData (see
-        /// GameBootstrap.SaveStartingLevelAsLevel1) actually captures
+        /// WorldBuilder.SaveStartingLevelAsLevel1) actually captures
         /// what's alive on the map instead of only whatever was placed
         /// through this session's own interactive tool. Each agent's owning
         /// player is read straight off its Creature.OwnerId (see

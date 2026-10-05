@@ -998,7 +998,7 @@ namespace KeepersDomain.UI
             GUILayout.Space(8f);
             if (GUILayout.Button("Save game"))
             {
-                _saveStatus = GameBootstrap.SaveGame()
+                _saveStatus = GameSave.SaveGame()
                     ? $"Saved. \"Continue\" from the Main Menu to resume."
                     : "Save failed — no live world to snapshot.";
             }
