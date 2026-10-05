@@ -87,8 +87,11 @@ namespace KeepersDomain.UI
         private BeanCounterSpawner _beanCounterSpawner;
 
         private MenuTab _openTab = MenuTab.None;
-        private bool _squareModeOn;
-        private bool _halfWallsOn;
+        // Both default ON — rectangle painting is the common case, and
+        // half-height walls keep the dungeon readable from the iso camera.
+        // Applied to the interaction controller / grid in Initialize.
+        private bool _squareModeOn = true;
+        private bool _halfWallsOn = true;
         private bool _finishOffEnemiesOn;
         private bool _fogOfWarOn = true;
         private bool _digQueuePaused;
@@ -120,6 +123,21 @@ namespace KeepersDomain.UI
             _fog = fog;
             _fogOfWarOn = fog != null && fog.Enabled;
             SetActiveContext(contexts[activeIndex]);
+
+            _interactionController.SetSquareModeToggle(_squareModeOn);
+            ApplyHalfWalls();
+        }
+
+        /// Half-wall mode is a view setting, so it applies to every keeper's
+        /// Jail, not just the active one's — otherwise switching players (or
+        /// looking at a rival's Jail) shows full-height pit walls.
+        private void ApplyHalfWalls()
+        {
+            _grid.SetHalfWalls(_halfWallsOn);
+            foreach (var ctx in _contexts)
+            {
+                ctx?.Jail?.SetHalfWalls(_halfWallsOn);
+            }
         }
 
         /// Repoints every cached manager/spawner field at ctx and re-seeds
@@ -946,8 +964,7 @@ namespace KeepersDomain.UI
             if (halfWallsOn != _halfWallsOn)
             {
                 _halfWallsOn = halfWallsOn;
-                _grid.SetHalfWalls(_halfWallsOn);
-                _jailManager.SetHalfWalls(_halfWallsOn);
+                ApplyHalfWalls();
             }
             GUILayout.Label("Squashes every wall to half height — bottom half kept, top pressed down. Also lowers Jail pit rims.");
 

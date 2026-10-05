@@ -103,56 +103,69 @@ namespace KeepersDomain.Grid
             }
         }
 
-        /// Called once per Floor tile (see the RefreshVisual call site) —
-        /// checks its 4 cardinal Rock neighbors for a wall torch. Runs from
-        /// the Floor side rather than hooking every place a tile becomes
-        /// Rock-adjacent-to-Floor, since every one of those already funnels
-        /// through this same tile's own RefreshVisual for free.
-        private void ConsiderTorchesOnNeighbors(Vector2Int floorCoord)
+        /// Torches stand only on Reinforced walls — a keeper's fortified
+        /// frontier, not every bit of rock — against a face that borders a
+        /// Floor tile. Called from RefreshVisual (and ApplyReplicatedTile
+        /// on the client) for every tile it touches: a Floor tile checks its
+        /// 4 neighbors, a wall checks itself. That covers both orders a
+        /// torch can become possible in — a wall reinforced next to floor
+        /// that's already dug (the usual case), or floor dug out next to an
+        /// already-reinforced wall (pre-placed level walls). Idempotent and
+        /// cheap: a wall that already has a decoration is skipped, and
+        /// WallTorches' sparseness roll is a deterministic per-face hash.
+        private void SyncTorchesAround(Vector2Int coord)
         {
-            if (!_torchScannedFloors.Add(floorCoord))
+            if (_tiles[coord.x, coord.y].Type == TileType.Floor)
+            {
+                foreach (var dir in GridDirections.Cardinal)
+                {
+                    var wallCoord = coord + dir;
+                    if (InBounds(wallCoord))
+                    {
+                        ConsiderWallTorch(wallCoord);
+                    }
+                }
+            }
+            else
+            {
+                ConsiderWallTorch(coord);
+            }
+        }
+
+        private bool IsTorchWall(TileState tile)
+        {
+            return tile.Type == TileType.Rock && tile.IsReinforced && !tile.HasRoom && !tile.IsBedrock
+                && tile.WallResourceType == WallResourceType.None;
+        }
+
+        /// Places a torch on wallCoord's first eligible floor-facing side
+        /// (each face rolls its own deterministic WallTorches sparseness
+        /// check, so the result doesn't depend on refresh order).
+        /// _wallDecorations is a single slot shared with gold nuggets /
+        /// chasm spikes, so a wall that already has any decoration —
+        /// including its torch — is skipped; digging the wall out clears
+        /// the slot (CompleteDig).
+        private void ConsiderWallTorch(Vector2Int wallCoord)
+        {
+            if (_wallDecorations[wallCoord.x, wallCoord.y] != null || !IsTorchWall(_tiles[wallCoord.x, wallCoord.y]))
             {
                 return;
             }
 
             foreach (var dir in GridDirections.Cardinal)
             {
-                var wallCoord = floorCoord + dir;
-                if (InBounds(wallCoord))
+                var floorCoord = wallCoord + dir;
+                if (!InBounds(floorCoord) || _tiles[floorCoord.x, floorCoord.y].Type != TileType.Floor)
                 {
-                    ConsiderWallTorch(wallCoord, -dir);
+                    continue;
                 }
-            }
-        }
 
-        /// wallCoord: the candidate Rock tile. outwardDir: cardinal step
-        /// from the wall toward the floorCoord that exposed it — WallTorches
-        /// uses this both to sit the torch against that face and to seed
-        /// its own sparseness roll, so a wall bordering multiple floor
-        /// tiles resolves the same way regardless of scan order. Plain Rock
-        /// only (no room, no reinforced/bedrock, no resource vein) — those
-        /// already have their own dedicated look, and _wallDecorations is
-        /// a single slot shared with gold nuggets/chasm spikes/etc., so a
-        /// wall that already has a decoration (torch included, since this
-        /// runs at most once — see below) is skipped.
-        private void ConsiderWallTorch(Vector2Int wallCoord, Vector2Int outwardDir)
-        {
-            if (_wallDecorations[wallCoord.x, wallCoord.y] != null)
-            {
-                return;
-            }
-
-            var tile = _tiles[wallCoord.x, wallCoord.y];
-            if (tile.Type != TileType.Rock || tile.HasRoom || tile.IsReinforced || tile.IsBedrock
-                || tile.WallResourceType != WallResourceType.None)
-            {
-                return;
-            }
-
-            var torch = WallTorches.TryPlace(_visuals[wallCoord.x, wallCoord.y].transform, wallCoord, outwardDir, _cellSize);
-            if (torch != null)
-            {
-                _wallDecorations[wallCoord.x, wallCoord.y] = torch;
+                var torch = WallTorches.TryPlace(_visuals[wallCoord.x, wallCoord.y].transform, wallCoord, dir, _cellSize, _halfWalls);
+                if (torch != null)
+                {
+                    _wallDecorations[wallCoord.x, wallCoord.y] = torch;
+                    return;
+                }
             }
         }
 

@@ -313,11 +313,11 @@ namespace KeepersDomain.Grid
             }
             else if (wallPrefab != null)
             {
-                // Height/scale every refresh, not just on rebuild — a fog
-                // Unseen wall stays FULL height even with "half walls" on, so
-                // squashing the dungeon to see over it can't also expose the
-                // fog by shrinking the rock that's standing in for it.
-                ApplyWallChildTransform(visualChild.transform, forceFullHeight: fogHidden);
+                // Height/scale every refresh, not just on rebuild. Half-wall
+                // mode squashes every wall, fogged ones included — an Unseen
+                // tile renders as plain Rock and fogged creatures / props are
+                // hidden, so a half-height fog rock exposes nothing.
+                ApplyWallChildTransform(visualChild.transform);
 
                 // The Reinforced mesh's brick/cap/orb are one combined
                 // renderer (see PlayerColor's own comment) — a uniform
@@ -397,17 +397,14 @@ namespace KeepersDomain.Grid
                 wallDecoration.SetActive(!fogHidden);
             }
 
-            // Every path that turns a tile into Floor (CarveRoom/Rect,
-            // CompleteDig, the dev terrain tool, ...) already ends up here
-            // via RefreshVisual(coord) for that tile — piggybacking the
-            // torch-neighbor scan on that single choke point covers all of
-            // them without touching each call site. realTile (not the
-            // fog-faked one) so a currently-fogged tile still resolves —
-            // torch placement is gameplay state, not a visual concern.
-            if (realTile.Type == TileType.Floor)
-            {
-                ConsiderTorchesOnNeighbors(coord);
-            }
+            // Every path that digs a tile out or reinforces a wall
+            // (CompleteDig, CompleteReinforce, CarveRoom/Rect, the editor
+            // painters, ...) ends up here via RefreshVisual(coord) —
+            // piggybacking the torch check on that single choke point
+            // covers all of them without touching each call site. Reads the
+            // real tile state (not the fog fake), so a fogged tile still
+            // resolves — the torch itself is fog-hidden like any decoration.
+            SyncTorchesAround(coord);
 
             // Selection outline is a duplicate of the wall's own current
             // visual (see SetSelectedWall) — if this tile is the selected
@@ -535,13 +532,9 @@ namespace KeepersDomain.Grid
         /// surface. In "half wall" mode (see SetHalfWalls) the mesh is
         /// squashed to half height on Y about its base — the bottom half
         /// stays put and the top is pressed down to the midpoint.
-        /// forceFullHeight overrides that for a fog-of-war Unseen tile: the
-        /// rock standing in for the fog must stay full height regardless, or
-        /// squashing the dungeon to see over your own walls would also let
-        /// you see over the fog.
-        private void ApplyWallChildTransform(Transform child, bool forceFullHeight = false)
+        private void ApplyWallChildTransform(Transform child)
         {
-            var heightScale = _halfWalls && !forceFullHeight ? 0.5f : 1f;
+            var heightScale = _halfWalls ? 0.5f : 1f;
             child.localPosition = new Vector3(0f, WallBaseLocalY, 0f);
             child.localRotation = Quaternion.identity;
             child.localScale = new Vector3(_cellSize, heightScale, _cellSize);
@@ -567,14 +560,18 @@ namespace KeepersDomain.Grid
                 {
                     var coord = new Vector2Int(x, y);
                     var child = _visualChildren[x, y];
-                    // GetWallMeshPrefab(real tile) misses a fogged wall over
-                    // real Floor — but that child is a fog rock mesh and must
-                    // stay full height, which is what it already is, so
-                    // skipping it is correct.
-                    if (child != null && GetWallMeshPrefab(_tiles[x, y]) != null)
+                    // Every wall mesh currently on screen — including a fog
+                    // rock standing in for real Floor, which is why this keys
+                    // off the instantiated prefab rather than the real tile.
+                    if (child != null && _currentWallPrefab[x, y] != null)
                     {
-                        var fogHidden = Fog != null && Fog.ViewAt(coord) == FogView.Unseen;
-                        ApplyWallChildTransform(child.transform, forceFullHeight: fogHidden);
+                        ApplyWallChildTransform(child.transform);
+                    }
+
+                    var decoration = _wallDecorations[x, y];
+                    if (decoration != null && decoration.name == WallTorches.TorchName)
+                    {
+                        WallTorches.ApplyWallHeight(decoration, _halfWalls);
                     }
 
                     // Re-seat any dig/reinforce icon on this tile at the new

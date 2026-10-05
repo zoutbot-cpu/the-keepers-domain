@@ -30,6 +30,13 @@ namespace KeepersDomain.Grid
         private const float TiltXDegrees = -25f;
         private static readonly Vector3 PositionAdjust = new(0f, 0.5f, -0.25f);
 
+        // Half-wall mode squashes a wall to half height about its base
+        // (DungeonGrid.ApplyWallChildTransform: a 1-unit wall becomes
+        // 0.5), so its torch drops by the same amount to stay on the face.
+        private const float HalfWallDrop = 0.5f;
+
+        public const string TorchName = "Torch";
+
         // Roughly 1 in 3 eligible wall faces — enough for atmosphere
         // along a corridor without a torch on every single tile.
         private const uint Sparseness = 3;
@@ -45,7 +52,7 @@ namespace KeepersDomain.Grid
         /// hash, so the same wall face always resolves the same way.
         /// Returns the torch instance, or null if this tile didn't roll
         /// one (caller decides what "null" means for its own bookkeeping).
-        public static GameObject TryPlace(Transform tileRoot, Vector2Int coord, Vector2Int outwardDir, float cellSize)
+        public static GameObject TryPlace(Transform tileRoot, Vector2Int coord, Vector2Int outwardDir, float cellSize, bool halfWalls)
         {
             EnsureLoaded();
             if (_mesh == null)
@@ -60,12 +67,13 @@ namespace KeepersDomain.Grid
             }
 
             var torch = Object.Instantiate(_mesh, tileRoot, false);
-            torch.name = "Torch";
+            torch.name = TorchName;
             torch.transform.localPosition = new Vector3(outwardDir.x, 0f, outwardDir.y) * (cellSize * OutwardOffsetFraction)
                 + Vector3.up * Height
                 + PositionAdjust;
             torch.transform.localRotation = Quaternion.Euler(TiltXDegrees, 0f, 0f);
             torch.transform.localScale = Vector3.one * Scale;
+            ApplyWallHeight(torch, halfWalls);
 
             var renderer = torch.GetComponentInChildren<Renderer>();
             if (renderer != null && _material != null)
@@ -75,6 +83,15 @@ namespace KeepersDomain.Grid
 
             FogObscurable.Attach(torch, FogObscurableKind.Structure);
             return torch;
+        }
+
+        /// Re-seats a placed torch for the current half-wall setting —
+        /// called on placement and by DungeonGrid.SetHalfWalls.
+        public static void ApplyWallHeight(GameObject torch, bool halfWalls)
+        {
+            var pos = torch.transform.localPosition;
+            pos.y = Height + PositionAdjust.y - (halfWalls ? HalfWallDrop : 0f);
+            torch.transform.localPosition = pos;
         }
 
         private static void EnsureLoaded()

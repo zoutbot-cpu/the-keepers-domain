@@ -123,23 +123,13 @@ namespace KeepersDomain.Grid
         private static readonly int BaseColorId = Shader.PropertyToID("_BaseColor");
         private static readonly int EmissionColorId = Shader.PropertyToID("_EmissionColor");
 
-        // Parallel to _visuals — small decorative child objects (currently
-        // just gold nuggets) parented to a tile's cube, built once when a
-        // wall becomes a resource type (not on every RefreshVisual, which
+        // Parallel to _visuals — one decorative child per tile, parented to
+        // its anchor: gold nuggets on a resource wall, a torch on a
+        // reinforced wall (see SyncTorchesAround), Chasm spikes or a ground
+        // star on terrain. Built once (not on every RefreshVisual, which
         // fires every hit and would otherwise re-randomize/flicker them)
         // and cleared once the tile stops being Rock at all.
         private GameObject[,] _wallDecorations;
-
-        // Wall torches share the _wallDecorations slot (mutually exclusive
-        // in practice — a torch only ever considers a plain, undecorated
-        // Rock wall, see ConsiderWallTorch) so they get fog-hiding and
-        // reinforce/dig cleanup for free from the existing wallDecoration
-        // plumbing. This set just guards against re-scanning the same
-        // Floor tile's neighbors on every one of its own RefreshVisual
-        // calls (claim tint, fog dim/visible, ownership flips, ...) —
-        // torch placement itself only needs to happen once, the first
-        // time a given tile is seen as Floor.
-        private readonly HashSet<Vector2Int> _torchScannedFloors = new();
 
         public int Width => _width;
         public int Height => _height;
@@ -386,7 +376,6 @@ namespace KeepersDomain.Grid
             _visualChildren = new GameObject[_width, _height];
             _currentWallPrefab = new GameObject[_width, _height];
             _wallDecorations = new GameObject[_width, _height];
-            _torchScannedFloors.Clear();
             _wallMeshStone = Resources.Load<GameObject>("Dungeon/Wall_Stone");
             _wallMeshGold = Resources.Load<GameObject>("Dungeon/Wall_Gold");
             _wallMeshGoldRegen = Resources.Load<GameObject>("Dungeon/Wall_GoldRegen");
@@ -636,6 +625,10 @@ namespace KeepersDomain.Grid
             {
                 BuildGroundStar(coord, "UnholyGroundStar", _unholyGroundStarColor);
             }
+
+            // RebuildWallDecoration above cleared this tile's decoration
+            // slot after RefreshVisual already ran — re-place its torch.
+            SyncTorchesAround(coord);
         }
 
         public Vector3 GridToWorld(Vector2Int coord)
