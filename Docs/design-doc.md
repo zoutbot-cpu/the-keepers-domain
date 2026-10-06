@@ -312,6 +312,25 @@ Shipped (compiles clean; **first playtested 2026-09-03** — the core fight loop
 
 Deferred: folding `Combatant`'s own path/move copy into `GridMover` (the 5 Monster agents + the Imp are done — see netcode prerequisite #1), the health-ring damage flash, and ScriptableObject stat blocks.
 
+## AI opponent (current implementation)
+
+Every keeper flagged AI (`KeeperContext.IsAI` — Skirmish's P2, the bundled `level1`'s P2, any Level Designer "AI" slot) is played by a `KeeperAI` (`Assets/Scripts/AI/KeeperAI.cs`), created by `WorldBuilder.BuildWorld` offline and on the multiplayer host. Never on the networked client, and never for the client's own keeper (owner 1) on a host, even if the level marks that slot AI.
+
+**It plays by the player's rules:** every command goes through `LocalKeeperActions` — the same `IKeeperActions` the player's clicks use — so it digs, places rooms, summons Imps, recruits and reinforces exactly as a human could, paying the same gold and mana. The one addition is `MonsterAgent.OrderAssault` (below).
+
+Every 1.5 s it runs, in order:
+
+1. **Imps** — summons one when below `MinImps + build steps done` (4–10) and the Throne has the 20 free mana.
+2. **Recruit** — any creature whose join requirements are met right now (`CanRecruit`).
+3. **Rooms** — works down a fixed build order: Slime Hatchery 3×3 → Tavern 4×4 → Training Room 3×3 → Lair 3×3 → Library 3×3 → Hatchery → Lair → Jail 5×5 → Hatchery → Conversion Class 4×5 → Treasury → Training Room → Lair → Hatchery, then loops. For each it searches a 16-tile radius around its Throne for the rectangle needing the least digging (both orientations) that touches its claimed territory and avoids rivals' ground, existing rooms, water/lava/chasm and bedrock. It then queues the site's rock for digging and places the room once every tile is its claimed floor and the Treasury can pay. A step that can't find a site is skipped; one that takes over 150 s is abandoned.
+4. **Expand** — keeps 8 frontier digs queued: rock bordering its claimed floor, resource veins first (any distance), otherwise within 11 tiles of the Throne. It never digs into a rival's frontier here.
+5. **Fortify** — after 4 build steps, reinforces up to 3 outer-shell walls per tick: frontier rock beyond the expansion radius, skipping veins, the planned room site and the attack tunnel. It doesn't use `BuilderJobBoard`'s auto-reinforce: that queues every frontier wall, and a wall queued for reinforcing can't be dug, which would freeze expansion. Reinforced walls are also where wall torches grow.
+6. **Attack** — after 3 build steps, once it has **6** standing non-Imp creatures, it targets the nearest rival it's Aggressive toward. If the army can already walk to a tile within 3 of that rival's Throne, every creature gets `OrderAssault(rally)`. Otherwise it plans a dig tunnel (Dijkstra/A*: floor 1, rock 4, rival-reinforced rock 12; water/lava/chasm/bedrock impassable) and queues its rock tiles, re-planning every 30 s. It calls the attack off (recalls everyone) when the army drops to **2**.
+
+**`MonsterAgent.OrderAssault(Vector2Int?)`** takes over a creature's *productive* tier only: Lair, hunger and mood still come first, a Leaving creature still leaves, and an Unhappy one still refuses. The creature walks to the rally point (`MovingToAssault`), pauses, and re-checks, walking back if it was pulled away. If the point is unreachable it falls back to its ordinary work and retries every 5 s. Fighting isn't part of the order: `Combatant` engages anything hostile in aggro range on the way and sieges the enemy Throne once within range, so the rally point only has to be near the Throne Room. `null` recalls. It's the hook a player attack-command can reuse.
+
+**Known limits / tuning:** every number above is a first guess. There's no defence logic beyond creatures' own aggro; it doesn't use the Grab hand, sell rooms, build Bridges, or manage happiness or pay; and it will happily attack before its economy is solid if the 6-creature threshold arrives early. Offline-compile-clean, **not yet Editor-verified**.
+
 ## Terrain (current implementation note)
 New tile types beyond Rock/Floor, each with its own walkability rule (`DungeonGrid.IsWalkable`/`TileType`):
 - **Water** — undeep: every creature can wade through it except Imps, who need a Bridge (see below) to cross.

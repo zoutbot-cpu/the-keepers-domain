@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using Unity.Netcode;
+using KeepersDomain.AI;
 using KeepersDomain.Grid;
 using KeepersDomain.Input;
 using KeepersDomain.CameraControl;
@@ -454,6 +455,10 @@ namespace KeepersDomain.Core
                     ctx.Throne.Defeated += HandleThroneDefeated;
                 }
             }
+
+            // Rival keepers flagged AI (Skirmish's P2, a Level Designer "AI"
+            // slot) get a KeeperAI to play them — see its header.
+            KeeperAI.CreateFor(contexts, grid, contexts[localPlayerIndex].OwnerId);
 
             SaveStartingLevelAsLevel1(grid, contexts[0].ThroneCoord, contexts[0].PortalCoord);
         }

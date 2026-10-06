@@ -36,7 +36,8 @@ namespace KeepersDomain.Monsters
         RoamPausing,
         MovingToAttackTarget,
         Attacking,
-        MovingToPortal
+        MovingToPortal,
+        MovingToAssault
     }
 
     /// Everything the five Portal-side creatures (Gremlin, Warlock, Maze
@@ -136,6 +137,13 @@ namespace KeepersDomain.Monsters
         private float _roamPauseTimer;
         private float _attackCheckTimer;
         private float _attackHitTimer;
+
+        // Set by OrderAssault — see its header. _assaultPausing marks a
+        // RoamPausing that belongs to the assault (vs. an ordinary roam).
+        private Vector2Int? _assaultTarget;
+        private bool _assaultPausing;
+        private float _assaultRetryTimer;
+        private const float AssaultRetrySeconds = 5f;
 
         // A*-planned route walking (PlanPathTo / MoveAlongPathThen /
         // Replan) — shared with every other creature agent, see GridMover.
@@ -347,6 +355,12 @@ namespace KeepersDomain.Monsters
                 return;
             }
 
+            // An assault order replaces the productive tier while it stands.
+            if (_assaultTarget is Vector2Int assaultTarget && TickAssault(assaultTarget))
+            {
+                return;
+            }
+
             // Productive tier — the species decides what that means.
             if (_task == MonsterTask.Idle)
             {
@@ -354,6 +368,104 @@ namespace KeepersDomain.Monsters
             }
 
             TickTask(_task);
+        }
+
+        /// Whether this creature is currently under an assault order.
+        public bool HasAssaultOrder => _assaultTarget.HasValue;
+
+        /// Sends this creature to target (or recalls it with null) — the
+        /// order behind an AI keeper's attack (KeeperAI), and the hook a
+        /// player attack-command can reuse later. It takes over the
+        /// productive tier only: Lair, hunger and mood still come first, a
+        /// Leaving creature still leaves, and an Unhappy one still refuses.
+        /// Fighting isn't part of it — Combatant engages anything hostile
+        /// that comes into aggro range on the way, and sieges an enemy
+        /// Throne once it's within range (Combatant.TryAttackStructure), so
+        /// target just has to be near the enemy's Throne Room.
+        public void OrderAssault(Vector2Int? target)
+        {
+            if (_assaultTarget == target)
+            {
+                return;
+            }
+
+            _assaultTarget = target;
+            _assaultPausing = false;
+
+            // Drop whatever productive task it was on (training, roaming,
+            // ...) so the new order — or the recall — takes effect now.
+            if (!IsProtectedTask(_task))
+            {
+                SetTask(MonsterTask.Idle);
+            }
+        }
+
+        // Tasks an assault order (or its recall) must not interrupt: the
+        // higher tiers EvaluateAndAct handles before the assault check.
+        private static bool IsProtectedTask(MonsterTask task)
+        {
+            return task is MonsterTask.MovingToLairSpot or MonsterTask.MovingToFood
+                or MonsterTask.MovingToAttackTarget or MonsterTask.Attacking or MonsterTask.MovingToPortal;
+        }
+
+        /// March to the target, pause there, re-check — the re-check walks
+        /// back if the creature was pulled away (chased something, got
+        /// dropped by the Grab hand). Returns false when there's no route
+        /// to the target right now, so EvaluateAndAct falls through to the
+        /// ordinary productive tier instead of standing idle; the order is
+        /// retried the next time the creature comes back to Idle.
+        private bool TickAssault(Vector2Int target)
+        {
+            if (_task == MonsterTask.MovingToAssault)
+            {
+                MoveAlongPathThen(ArriveAtAssault);
+                return true;
+            }
+
+            if (_assaultPausing)
+            {
+                if (_task == MonsterTask.RoamPausing)
+                {
+                    TickRoamPause();
+                    if (_task == MonsterTask.RoamPausing)
+                    {
+                        return true;
+                    }
+                }
+
+                _assaultPausing = false;
+            }
+
+            if (_task != MonsterTask.Idle)
+            {
+                // Fell back to ordinary work because the target was out of
+                // reach — some of that work (training, research) loops
+                // without ever going Idle, so break off every few seconds to
+                // retry the march.
+                _assaultRetryTimer += Time.deltaTime;
+                if (_assaultRetryTimer < AssaultRetrySeconds || IsProtectedTask(_task))
+                {
+                    return false;
+                }
+
+                _assaultRetryTimer = 0f;
+                SetTask(MonsterTask.Idle);
+            }
+
+            if (!PlanPathTo(target, _grid.GridToWorld(target)))
+            {
+                return false;
+            }
+
+            SetTask(MonsterTask.MovingToAssault);
+            return true;
+        }
+
+        private void ArriveAtAssault()
+        {
+            SetTask(MonsterTask.RoamPausing);
+            _roamPauseTimer = 0f;
+            _assaultPausing = true;
         }
 
         /// Ticks the current productive-tier task. Handles the shared
@@ -887,7 +999,8 @@ namespace KeepersDomain.Monsters
         {
             return task is MonsterTask.MovingToLairSpot or MonsterTask.MovingToFood or MonsterTask.MovingToTraining
                 or MonsterTask.MovingToResearch or MonsterTask.MovingToTeaching or MonsterTask.MovingToHaunt
-                or MonsterTask.MovingToRoam or MonsterTask.MovingToAttackTarget or MonsterTask.MovingToPortal;
+                or MonsterTask.MovingToRoam or MonsterTask.MovingToAttackTarget or MonsterTask.MovingToPortal
+                or MonsterTask.MovingToAssault;
         }
 
         // Thin forwarders to the shared GridMover (see its header).
