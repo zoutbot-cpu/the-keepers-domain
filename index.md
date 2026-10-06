@@ -6,9 +6,9 @@ title: Dev Status
 
 Mobile dig-and-build dungeon management prototype, original IP (inspired by, not derived from, Dungeon Keeper). This page is a hand-maintained snapshot of what's built, what's in progress, and what's next — edit it directly (`index.md` on the `gh-pages` branch) whenever status changes.
 
-**Latest update: "Multiplayer Lobby + online play" — v0.0008**
+**Latest update: AI opponent (2026-10-06)** · last numbered release: "Multiplayer Lobby + online play" — v0.0008
 
-*Last updated: 2026-10-05*
+*Last updated: 2026-10-06*
 
 For the full brief and system-by-system design detail, see [project-brief.md](https://github.com/zoutbot-cpu/the-keepers-domain/blob/main/Docs/project-brief.md) and [design-doc.md](https://github.com/zoutbot-cpu/the-keepers-domain/blob/main/Docs/design-doc.md). Engineering rationale (why things are built the way they are) lives in the [README's Architecture Notes](https://github.com/zoutbot-cpu/the-keepers-domain/blob/main/README.md#architecture-notes).
 
@@ -34,6 +34,8 @@ Phase 1's core loop is implemented and playable: **dig → claim → build → i
 
 **2026-10-05 (later) — view defaults & torches:** **Half wall** and **Square select** now default on; Half wall lowers every wall (fog rock included) and every keeper's Jail; **wall torches** only on Reinforced walls and drop with half-wall mode.
 
+**2026-10-06 — AI opponent.** Every AI-flagged rival — **Skirmish's P2 and Start Game's P2** — is now played by a `KeeperAI` (`Assets/Scripts/AI/`): it summons Imps, recruits, works a room build order (Hatchery → Tavern → Training Room → Lair → Library → …, each sited near its Throne, dug out and paid for), expands toward veins, reinforces its outer shell, and at 6 creatures digs a tunnel to your Throne and marches its army in (retreating at 2). It plays through the same command interface as the player — no cheats. A new `MonsterAgent.OrderAssault` march order is the hook a player attack-command can reuse. Compiles clean; not yet playtested.
+
 ---
 
 ## Phase 1 — Core Loop ✅ Done
@@ -53,7 +55,7 @@ Phase 1's core loop is implemented and playable: **dig → claim → build → i
 
 **Economy** — Gold + mana crystals, Treasury storage, Throne Room mana pool, per-impling carry weight cap. Gold and the mana pool are now per-keeper (see Multiplayer).
 
-**Multiplayer** — *Local split:* each player in a loaded roster gets a full **`KeeperContext`** (its own job board, Portal + recruit pools, Throne Room, nine room managers, six spawners) on the one shared grid; every live creature carries `Creature.OwnerId`; owner-tinted visuals on multi-keeper levels; a debug player switcher (bottom bar / number keys) repoints input, grab hand, HUD, and camera at any keeper's stack; per-keeper territory growth, auto-reinforce, room-placement eligibility, population caps; disjoint per-owner room-ID bands. *Online (v0.0008):* Host / Join over a **Unity Relay** session with a lobby + ready-up + host map-pick (Netcode for GameObjects 2.13.2). The host builds and runs the one authoritative simulation; the client runs the host's real UI over a render-only replicated world and sends actions (dig, summon, reinforce, sell, recruit, bridge) as server RPCs. The client's **View-mode inspect, Creatures roster, and Tasks list** all work now — mostly from state already on the wire (creature ghosts + queued-tile flags), plus a coarse per-creature activity byte and claim/repair job counts added to the replication. `Tools > Quick Build` produces zipped tester builds; `level1` is packaged so all clients share the same map. **Still 2-player capped, no opponent AI, and combat/full-sim networking (M3) hasn't started** — see In Progress.
+**Multiplayer** — *Local split:* each player in a loaded roster gets a full **`KeeperContext`** (its own job board, Portal + recruit pools, Throne Room, nine room managers, six spawners) on the one shared grid; every live creature carries `Creature.OwnerId`; owner-tinted visuals on multi-keeper levels; a debug player switcher (bottom bar / number keys) repoints input, grab hand, HUD, and camera at any keeper's stack; per-keeper territory growth, auto-reinforce, room-placement eligibility, population caps; disjoint per-owner room-ID bands. *Online (v0.0008):* Host / Join over a **Unity Relay** session with a lobby + ready-up + host map-pick (Netcode for GameObjects 2.13.2). The host builds and runs the one authoritative simulation; the client runs the host's real UI over a render-only replicated world and sends actions (dig, summon, reinforce, sell, recruit, bridge) as server RPCs. The client's **View-mode inspect, Creatures roster, and Tasks list** all work now — mostly from state already on the wire (creature ghosts + queued-tile flags), plus a coarse per-creature activity byte and claim/repair job counts added to the replication. `Tools > Quick Build` produces zipped tester builds; `level1` is packaged so all clients share the same map. **Still 2-player capped, and combat/full-sim networking (M3) hasn't started** — see In Progress.
 
 **Creatures** — Shared `Creature` base (HP, mana, stats, leveling 1–10, naming, owner). Six creatures live:
 - **Imp** — mana-conjured, no Lair/hunger/pay needed, mines for exp; flees all hostiles except enemy Imps; runs the rescue/capture carry jobs. Doesn't leave a body when it loses a fight — it just vanishes and its reserved upkeep mana returns to the Throne Room.
@@ -92,10 +94,10 @@ All six carry a composed **`Combatant`** (below) and a composed **`GridMover`** 
 
 - **Combat had its first playtest (2026-09-03) — the core loop works, the numbers don't yet.** Both keepers engage across any claimed floor and the fight/faint/haul chain runs; but time-to-kill, the 5-tile aggro radius, the 10%-MaxHP faint buffer, the 7-tile leash, the Throne's 1000 HP / 10-per-sec regen, and every per-creature stat block are still placeholders that need a real balance pass.
 - **Jailing needs polish** — flagged rough in the v0.0007 playtest. The 2026-09-08 pass fixed the parked prisoner lying on its side; still open: confirm a held prisoner actually gets *converted* by a Bean Counter / Conversion Class (that pipeline wasn't touched), and the capture flow generally.
-- **No opponent AI.** Non-local keepers' creatures act autonomously (claim a Lair, eat, train, roam) but nothing *directs* them — combat currently only happens by dropping creatures into contact, or default-Aggressive creatures wandering into aggro range of each other or an enemy Throne.
+- **AI opponent is a first pass (2026-10-06).** It builds, recruits, expands, tunnels to you and attacks — but it's unplaytested, every threshold is a guess, and it has no defence logic, difficulty setting, Grab hand, Bridges, or happiness/pay management.
 - **Netcode is partway in.** Online host/join over Relay, a lobby, client action-RPCs, and the client's read-only panels (inspect / roster / task list) work (v0.0008); the client renders a replicated world but simulates nothing. **Combat, faint/capture, and the rest of the sim still run host-only** — networking those (host-authoritative resolution of every HP/damage/RNG/transition) is the next milestone and hasn't started.
 - **Client fog of war is visual only.** The host still replicates hidden tiles and creatures to the client (no interest management yet), room decorations (bookcases, fences, gold piles) aren't individually fog-hidden, and fog doesn't follow the debug player switcher.
-- **Lose-condition is minimal.** A Throne at 0 HP ends the match with a VICTORY / DEFEAT screen — but there's no AI or networked combat to actually threaten a Throne yet, so it only fires from debug-switcher play or creatures wandering into an enemy Throne.
+- **Lose-condition is minimal.** A Throne at 0 HP ends the match with a VICTORY / DEFEAT screen — the AI opponent can now actually get there (and so can you), but there's no surrender, score, or networked combat yet.
 - **`GridMover` extraction — mostly done.** The 5 Monster agents + the Imp share one now; `Combatant` still holds its own copy (different waypoint shape) and is the remaining piece before the netcode simulation-tick work.
 - **Structure owner retint** — reassigning a Throne Room / Portal owner in the Level Designer's Edit mode updates the saved data but doesn't retint the throne visual live.
 - **Room durability** — every room tile tracks 50 HP and Unhappy/Angry creatures chip it down, with a repair job now, but no HP UI.
@@ -104,7 +106,6 @@ All six carry a composed **`Combatant`** (below) and a composed **`GridMover`** 
 ## Not Started
 
 - **PvE combat** — invading hero parties, waves, dungeon defense
-- **An AI opponent** to direct a rival keeper's roster (build, recruit, attack)
 - **Player attack-commands** — send creatures to a point / "defend here" / guard posts
 - **Networked combat & simulation** — host-authoritative resolution of HP/damage/RNG/faint/capture (M3); online connect + client commands already land (v0.0008)
 - Imp → full-size Imp growth (noted in brief, unimplemented)
@@ -143,7 +144,7 @@ All six carry a composed **`Combatant`** (below) and a composed **`GridMover`** 
 - [ ] **MP-verify client fog of war**, then **interest management** — stop replicating tiles/creatures the client can't see, so client fog can't be bypassed
 - [ ] **Balance combat** — TTK, aggro radius, faint-HP, leash, Throne HP/regen, and every per-creature stat + growth block (all hand-set placeholders)
 - [ ] **Polish jailing** — verify held prisoners actually convert (Bean Counter → Conversion Class pipeline), plus the capture flow generally
-- [ ] An **AI opponent** so a rival keeper's creatures actually do something (and can threaten a Throne for real)
+- [ ] **Playtest + tune the AI opponent** — build order, attack / retreat thresholds, tunnel behaviour; then defence logic and a difficulty setting
 - [ ] **Player attack-commands** (send creatures somewhere, defend a point)
 - [ ] **Network the simulation** (M3) — host-authoritative combat/HP/RNG/faint/capture and a host-gated simulation tick; fold `Combatant`'s path/move into `GridMover` first. Also: lift the 2-player cap, de-hardcode `ClientOwnerId = 1`
 - [ ] Decide what **Unholy Ground** actually *does* (currently a Holy Ground clone)
